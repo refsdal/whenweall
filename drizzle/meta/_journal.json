@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787272027317,
+      "tag": "0000_purple_genesis",
+      "breakpoints": true
+    }
+  ]
+}
