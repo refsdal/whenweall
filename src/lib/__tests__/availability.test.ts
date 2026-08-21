@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { generateSlots, isSlotAvailable, type PageRules } from '#/lib/availability'
+import { generateSlots, isSlotAvailable, type Interval, type PageRules } from '#/lib/availability'
 
 const atNoonUtc = (dateStr: string) => new Date(`${dateStr}T12:00:00Z`)
+
+/** Every slot must have exactly `durationMin`, end > start, and starts must be strictly increasing. */
+function assertSlotInvariants(slots: Interval[], durationMin: number) {
+  const durationMs = durationMin * 60_000
+  for (const slot of slots) {
+    const start = new Date(slot.start).getTime()
+    const end = new Date(slot.end).getTime()
+    expect(end).toBeGreaterThan(start)
+    expect(end - start).toBe(durationMs)
+  }
+  for (let i = 1; i < slots.length; i++) {
+    expect(new Date(slots[i]!.start).getTime()).toBeGreaterThan(
+      new Date(slots[i - 1]!.start).getTime(),
+    )
+  }
+}
 
 function baseRules(overrides: Partial<PageRules> = {}): PageRules {
   return {
@@ -180,6 +196,73 @@ describe('generateSlots', () => {
     ])
   })
 
+  it('lays slots on a UTC grid when a range spans the Europe/Oslo spring-forward gap (2026-03-29)', () => {
+    const rules = baseRules({
+      timezone: 'Europe/Oslo',
+      slotDurationMin: 30,
+      availability: { '0': [{ start: '01:00', end: '04:00' }] }, // Sunday 2026-03-29
+    })
+    const slots = generateSlots(rules, {
+      from: atNoonUtc('2026-03-29'),
+      to: atNoonUtc('2026-03-29'),
+      now: new Date('2026-01-01T00:00:00Z'),
+      busy: [],
+    })
+    assertSlotInvariants(slots, 30)
+    expect(slots[0]?.start).toBe('2026-03-29T00:00:00.000Z') // 01:00 CET
+    expect(slots.at(-1)?.end).toBe('2026-03-29T02:00:00.000Z') // 04:00 CEST
+    expect(new Date(slots.at(-1)!.end).getTime()).toBeLessThanOrEqual(
+      new Date('2026-03-29T02:00:00.000Z').getTime(),
+    )
+  })
+
+  it('lays slots on a UTC grid when a range spans the Europe/Oslo fall-back gap (2026-10-25)', () => {
+    const rules = baseRules({
+      timezone: 'Europe/Oslo',
+      slotDurationMin: 30,
+      availability: { '0': [{ start: '01:00', end: '04:00' }] }, // Sunday 2026-10-25
+    })
+    const slots = generateSlots(rules, {
+      from: atNoonUtc('2026-10-25'),
+      to: atNoonUtc('2026-10-25'),
+      now: new Date('2026-01-01T00:00:00Z'),
+      busy: [],
+    })
+    assertSlotInvariants(slots, 30)
+    expect(slots[0]?.start).toBe('2026-10-24T23:00:00.000Z') // 01:00 CEST
+    expect(new Date(slots.at(-1)!.end).getTime()).toBeLessThanOrEqual(
+      new Date('2026-10-25T03:00:00.000Z').getTime(), // 04:00 CET
+    )
+  })
+
+  it('never emits a malformed slot across a 10-day window spanning the spring-forward transition', () => {
+    const allDays: Record<string, { start: string; end: string }[]> = {}
+    for (let d = 0; d <= 6; d++) allDays[String(d)] = [{ start: '01:00', end: '04:00' }]
+    const rules = baseRules({ timezone: 'Europe/Oslo', slotDurationMin: 30, availability: allDays })
+    const slots = generateSlots(rules, {
+      from: atNoonUtc('2026-03-24'),
+      to: atNoonUtc('2026-04-02'),
+      now: new Date('2026-01-01T00:00:00Z'),
+      busy: [],
+    })
+    expect(slots.length).toBeGreaterThan(0)
+    assertSlotInvariants(slots, 30)
+  })
+
+  it('never emits a malformed slot across a 10-day window spanning the fall-back transition', () => {
+    const allDays: Record<string, { start: string; end: string }[]> = {}
+    for (let d = 0; d <= 6; d++) allDays[String(d)] = [{ start: '01:00', end: '04:00' }]
+    const rules = baseRules({ timezone: 'Europe/Oslo', slotDurationMin: 30, availability: allDays })
+    const slots = generateSlots(rules, {
+      from: atNoonUtc('2026-10-20'),
+      to: atNoonUtc('2026-10-29'),
+      now: new Date('2026-01-01T00:00:00Z'),
+      busy: [],
+    })
+    expect(slots.length).toBeGreaterThan(0)
+    assertSlotInvariants(slots, 30)
+  })
+
   it('supports a 15-minute duration', () => {
     const rules = baseRules({
       slotDurationMin: 15,
@@ -252,5 +335,21 @@ describe('isSlotAvailable', () => {
         busy: [],
       }),
     ).toBe(false)
+  })
+
+  it('is true for the slot right after the Europe/Oslo spring-forward gap', () => {
+    const dstRules = baseRules({
+      timezone: 'Europe/Oslo',
+      slotDurationMin: 30,
+      availability: { '0': [{ start: '01:00', end: '04:00' }] }, // Sunday 2026-03-29
+    })
+    // rangeStart 01:00 -> 2026-03-29T00:00:00.000Z; the 3rd 30-min slot starts at 01:00Z, i.e.
+    // right at/after the local 02:00->03:00 jump.
+    expect(
+      isSlotAvailable(dstRules, '2026-03-29T01:00:00.000Z', {
+        now: new Date('2026-01-01T00:00:00Z'),
+        busy: [],
+      }),
+    ).toBe(true)
   })
 })

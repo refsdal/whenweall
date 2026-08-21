@@ -1,5 +1,14 @@
 import { localToUtcIso } from '#/lib/time'
 
+// Policy: slots are laid on a UTC grid anchored at each local range start, not on a per-slot
+// local-time grid. Only the range's start and end local wall-clock times are converted to UTC
+// (once each, via TZDate through localToUtcIso); every slot within the range is then
+// `rangeStartUtc + k*durationMs .. +duration` in pure UTC arithmetic. Local wall-clock spacing
+// between consecutive slots may therefore shift by an hour on a DST transition date (e.g. a
+// range that reads "01:00-04:00" local may straddle a jump straight from 02:00 to 03:00) —
+// that's intentional: it keeps every emitted slot's duration exactly `slotDurationMin` and its
+// ordering strictly increasing, which a naive per-slot local-time conversion cannot guarantee
+// around a nonexistent (spring-forward) or ambiguous (fall-back) local hour.
 export type Interval = { start: string; end: string } // UTC ISO
 
 export type PageRules = {
@@ -37,17 +46,6 @@ function daysBetween(from: string, to: string): number {
 
 function weekdayKey(dateStr: string): string {
   return String(new Date(`${dateStr}T00:00:00Z`).getUTCDay())
-}
-
-function toMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map(Number)
-  return h * 60 + m
-}
-
-function fromMinutes(min: number): string {
-  const h = Math.floor(min / 60)
-  const m = min % 60
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
 function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
@@ -96,15 +94,21 @@ export function generateSlots(
     const dateStr = addDaysToDateStr(fromDateStr, i)
     const ranges = dateOverrides?.[dateStr] ?? availability[weekdayKey(dateStr)] ?? []
 
-    for (const range of ranges) {
-      const rangeStart = toMinutes(range.start)
-      const rangeEnd = toMinutes(range.end)
+    const durationMs = slotDurationMin * 60_000
 
-      for (let s = rangeStart; s + slotDurationMin <= rangeEnd; s += slotDurationMin) {
-        const startIso = localToUtcIso(dateStr, fromMinutes(s), timezone)
-        const endIso = localToUtcIso(dateStr, fromMinutes(s + slotDurationMin), timezone)
-        const startMs = new Date(startIso).getTime()
-        const endMs = new Date(endIso).getTime()
+    for (const range of ranges) {
+      // Convert only the range boundaries to UTC (once each) — see the file-header policy note.
+      const rangeStartMs = new Date(localToUtcIso(dateStr, range.start, timezone)).getTime()
+      const rangeEndMs = new Date(localToUtcIso(dateStr, range.end, timezone)).getTime()
+      // A range whose start/end both fall inside a spring-forward gap (or otherwise get mapped
+      // to a non-increasing UTC order) can't be laid out on a grid; skip it rather than emit
+      // nonsense.
+      if (!(rangeStartMs < rangeEndMs)) continue
+
+      for (let startMs = rangeStartMs; startMs + durationMs <= rangeEndMs; startMs += durationMs) {
+        const endMs = startMs + durationMs
+        // Safety net: every slot must have exactly the configured duration.
+        if (endMs - startMs !== durationMs) continue
 
         if (startMs < earliestStartMs) continue
         if (endMs > latestEndMs) continue
@@ -114,6 +118,8 @@ export function generateSlots(
         const conflicts = busy.some((b) => overlaps(bufStart, bufEnd, b.start, b.end))
         if (conflicts) continue
 
+        const startIso = new Date(startMs).toISOString()
+        const endIso = new Date(endMs).toISOString()
         const key = `${startIso}|${endIso}`
         if (seen.has(key)) continue
         seen.add(key)
