@@ -23,6 +23,7 @@ import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
 import { Route as PIdIndexRouteImport } from './routes/p/$id/index'
 import { Route as PIdCalendarDoticsRouteImport } from './routes/p/$id/calendar[.]ics'
 import { Route as PIdEditRouteImport } from './routes/p/$id/edit'
+import { Route as PIdRosterDotcsvRouteImport } from './routes/p/$id/roster[.]csv'
 import { Route as ApiPollsIdWsRouteImport } from './routes/api/polls/$id/ws'
 
 const IndexRoute = IndexRouteImport.update({
@@ -95,6 +96,11 @@ const PIdEditRoute = PIdEditRouteImport.update({
   path: '/p/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PIdRosterDotcsvRoute = PIdRosterDotcsvRouteImport.update({
+  id: '/p/$id/roster.csv',
+  path: '/p/$id/roster.csv',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPollsIdWsRoute = ApiPollsIdWsRouteImport.update({
   id: '/api/polls/$id/ws',
   path: '/api/polls/$id/ws',
@@ -115,6 +121,7 @@ export interface FileRoutesByFullPath {
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
+  '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
@@ -132,6 +139,7 @@ export interface FileRoutesByTo {
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
+  '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
   '/p/$id': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
@@ -150,6 +158,7 @@ export interface FileRoutesById {
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
+  '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
@@ -169,6 +178,7 @@ export interface FileRouteTypes {
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
+    | '/p/$id/roster.csv'
     | '/p/$id/'
     | '/api/polls/$id/ws'
   fileRoutesByTo: FileRoutesByTo
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
+    | '/p/$id/roster.csv'
     | '/p/$id'
     | '/api/polls/$id/ws'
   id:
@@ -203,6 +214,7 @@ export interface FileRouteTypes {
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
+    | '/p/$id/roster.csv'
     | '/p/$id/'
     | '/api/polls/$id/ws'
   fileRoutesById: FileRoutesById
@@ -221,6 +233,7 @@ export interface RootRouteChildren {
   ApiTestSeedRoute: typeof ApiTestSeedRoute
   PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
   PIdEditRoute: typeof PIdEditRoute
+  PIdRosterDotcsvRoute: typeof PIdRosterDotcsvRoute
   PIdIndexRoute: typeof PIdIndexRoute
   ApiPollsIdWsRoute: typeof ApiPollsIdWsRoute
 }
@@ -325,6 +338,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/p/$id/roster.csv': {
+      id: '/p/$id/roster.csv'
+      path: '/p/$id/roster.csv'
+      fullPath: '/p/$id/roster.csv'
+      preLoaderRoute: typeof PIdRosterDotcsvRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/polls/$id/ws': {
       id: '/api/polls/$id/ws'
       path: '/api/polls/$id/ws'
@@ -349,6 +369,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTestSeedRoute: ApiTestSeedRoute,
   PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
   PIdEditRoute: PIdEditRoute,
+  PIdRosterDotcsvRoute: PIdRosterDotcsvRoute,
   PIdIndexRoute: PIdIndexRoute,
   ApiPollsIdWsRoute: ApiPollsIdWsRoute,
 }

@@ -56,17 +56,16 @@ function foldLine(line: string): string {
   return chunks.join('\r\n ')
 }
 
-export function buildIcs(e: {
+export type IcsEvent = {
   uid: string
   title: string
   description?: string | null
   location?: string | null
   url: string
   start: { date: string } | { dateTime: string; endDateTime?: string | null }
-  now?: Date
-}): string {
-  const now = e.now ?? new Date()
+}
 
+function buildVevent(e: IcsEvent, now: Date): string[] {
   let dtstart: string
   let dtend: string
   if ('date' in e.start) {
@@ -82,11 +81,6 @@ export function buildIcs(e: {
   }
 
   const lines: string[] = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//samla//EN',
-    'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH',
     'BEGIN:VEVENT',
     `UID:${escapeText(e.uid)}`,
     `DTSTAMP:${formatUtcBasic(now)}`,
@@ -99,7 +93,41 @@ export function buildIcs(e: {
   if (e.location) lines.push(`LOCATION:${escapeText(e.location)}`)
   lines.push(`URL:${escapeText(e.url)}`)
   lines.push('END:VEVENT')
-  lines.push('END:VCALENDAR')
+
+  return lines
+}
+
+export function buildIcs(e: IcsEvent & { now?: Date }): string {
+  const now = e.now ?? new Date()
+  const lines: string[] = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//samla//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    ...buildVevent(e, now),
+    'END:VCALENDAR',
+  ]
+
+  return lines.map(foldLine).join('\r\n') + '\r\n'
+}
+
+/**
+ * Same wire format as `buildIcs`, but with one VEVENT per input event inside a single VCALENDAR —
+ * used for the sign-up claim confirmation email, where a participant may hold several slots at
+ * once and a mail client should be able to add all of them from one attachment.
+ */
+export function buildIcsMulti(events: IcsEvent[], opts: { now?: Date } = {}): string {
+  const now = opts.now ?? new Date()
+  const lines: string[] = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//samla//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    ...events.flatMap((e) => buildVevent(e, now)),
+    'END:VCALENDAR',
+  ]
 
   return lines.map(foldLine).join('\r\n') + '\r\n'
 }

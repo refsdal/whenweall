@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  renderClaimConfirmation,
   renderClosed,
   renderDigest,
   renderFinalized,
@@ -90,5 +91,38 @@ describe('renderClosed', () => {
 
     expect(subject).toContain('Team sync')
     expect(html).toContain('https://x/p/abc')
+  })
+})
+
+describe('renderClaimConfirmation', () => {
+  it('lists claimed slots and includes the poll title/url (english)', async () => {
+    const { subject, html, text } = await renderClaimConfirmation({
+      name: 'Ada',
+      pollTitle: 'Bake sale',
+      pollUrl: 'https://x/p/abc',
+      slots: ['Sat 12 Sep', 'Bring cookies'],
+      locale: 'en',
+    })
+
+    expect(subject).toContain('Bake sale')
+    expect(html).toContain('Ada')
+    expect(html).toContain('Sat 12 Sep')
+    expect(html).toContain('Bring cookies')
+    expect(html).toContain('https://x/p/abc')
+    expect(text).toContain('Sat 12 Sep')
+  })
+
+  it('renders norwegian', async () => {
+    const { subject, html } = await renderClaimConfirmation({
+      name: 'Ada',
+      pollTitle: 'Bake sale',
+      pollUrl: 'https://x/p/abc',
+      slots: ['Lørdag 12. sep'],
+      locale: 'nb',
+    })
+
+    expect(subject).toContain('Bake sale')
+    expect(html).toContain('påmeldt')
+    expect(html).toContain('Lørdag 12. sep')
   })
 })

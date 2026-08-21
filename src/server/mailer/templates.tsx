@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { render } from '@react-email/render'
+import ClaimConfirmation from '../../../emails/ClaimConfirmation'
 import Closed from '../../../emails/Closed'
 import Digest from '../../../emails/Digest'
 import Finalized from '../../../emails/Finalized'
@@ -62,4 +63,15 @@ export async function renderClosed(p: {
 }): Promise<Rendered> {
   const t = asLocaleOptions(p.locale)
   return renderEmail(m.email_closed_subject({ title: p.pollTitle }, t), <Closed {...p} />)
+}
+
+export async function renderClaimConfirmation(p: {
+  name: string
+  pollTitle: string
+  pollUrl: string
+  slots: string[]
+  locale: string
+}): Promise<Rendered> {
+  const t = asLocaleOptions(p.locale)
+  return renderEmail(m.email_claim_subject({ title: p.pollTitle }, t), <ClaimConfirmation {...p} />)
 }

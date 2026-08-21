@@ -4,6 +4,7 @@ import { createDb } from '#/server/db/client'
 import { polls } from '#/server/db/schema'
 import { sendMail } from '#/server/mailer/mailer'
 import { renderClosed, renderDigest } from '#/server/mailer/templates'
+import { applyClaim, removeClaim, type ClaimIdentity } from '#/server/polls/claims'
 import { closeExpiredPoll } from '#/server/polls/service'
 import type { DigestItem, PollEvent } from './protocol'
 
@@ -31,6 +32,28 @@ export class PollRoom extends DurableObject<Env> {
    * alarm. Production code never touches this — it always calls the real `sendMail`.
    */
   mailer: typeof sendMail = sendMail
+
+  /**
+   * Tail of an in-memory promise chain used to serialise `claim`/`unclaim` calls. A DO's "input
+   * gate" only guarantees ordering around `ctx.storage` operations — `claim`/`unclaim` instead
+   * write to D1 (an external service, awaited like any `fetch`), so two RPC calls that arrive
+   * back-to-back can otherwise interleave their reads/writes and both see the same pre-write
+   * capacity count (confirmed by a failing concurrency test before this field was added). Chaining
+   * every call onto this tail — synchronously, before either call's first `await` — forces them to
+   * run one at a time in arrival order, which is exactly what makes the capacity check atomic.
+   */
+  #claimQueue: Promise<unknown> = Promise.resolve()
+
+  #serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.#claimQueue.then(fn, fn)
+    // Keep the chain alive regardless of whether `fn` resolved or rejected — only the caller of
+    // this particular call should see its outcome; the next queued call must still proceed.
+    this.#claimQueue = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade') !== 'websocket') {
@@ -69,6 +92,40 @@ export class PollRoom extends DurableObject<Env> {
     }
 
     await this.#rearm()
+  }
+
+  /**
+   * Runs the claims service against this poll's own D1 rows from inside the DO — one poll's
+   * writes are handled by exactly one DO instance, so this call is serialised with every other
+   * claim/unclaim for the same `pollId` (no separate lock needed to make capacity checks atomic).
+   * Auth (owner/session/edit token) is the caller's job; this trusts whatever identity it's given.
+   */
+  claim(
+    pollId: string,
+    optionId: string,
+    identity: ClaimIdentity,
+  ): Promise<Awaited<ReturnType<typeof applyClaim>>> {
+    return this.#serialize(async () => {
+      await this.#setPollId(pollId)
+      const db = createDb(this.env.DB)
+      const result = await applyClaim(db, pollId, optionId, identity)
+      this.#send({ type: 'poll.changed', entity: 'vote' })
+      return result
+    })
+  }
+
+  unclaim(
+    pollId: string,
+    optionId: string,
+    participantId: string,
+  ): Promise<{ remainingOptionIds: string[] }> {
+    return this.#serialize(async () => {
+      await this.#setPollId(pollId)
+      const db = createDb(this.env.DB)
+      const result = await removeClaim(db, pollId, optionId, participantId)
+      this.#send({ type: 'poll.changed', entity: 'vote' })
+      return result
+    })
   }
 
   async syncDeadline(pollId: string, deadlineAt: string | null): Promise<void> {

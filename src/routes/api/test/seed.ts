@@ -4,7 +4,13 @@ import { getAuth } from '#/server/auth/auth'
 import { getDb } from '#/server/db/client'
 import * as pollService from '#/server/polls/service'
 
-type SeedBody = { email?: string; name?: string; password?: string; withPoll?: boolean }
+type SeedBody = {
+  email?: string
+  name?: string
+  password?: string
+  withPoll?: boolean
+  withSignup?: boolean
+}
 
 /** Two datetime options, a couple of days out, so the seeded poll looks like a real one. */
 function samplePollOptions(): { kind: 'datetime'; startAt: string; endAt: string }[] {
@@ -54,6 +60,21 @@ export const Route = createFileRoute('/api/test/seed')({
             allowComments: true,
             allowIfNeedBe: true,
             requireParticipantEmail: false,
+          })
+          pollId = created.id
+        }
+        // Two text slots — one capped at 1, one unlimited — enough for an e2e test to fill a slot,
+        // see it go "full", and still claim the other one.
+        if (body.withSignup) {
+          const created = await pollService.createPoll(getDb(), signUp.user.id, {
+            type: 'signup',
+            title: 'Seeded sign-up sheet',
+            description: 'Created by the test seed route.',
+            timezone: 'Europe/Oslo',
+            options: [
+              { kind: 'text', label: 'Slot 1', capacity: 1 },
+              { kind: 'text', label: 'Slot 2', capacity: null },
+            ],
           })
           pollId = created.id
         }
