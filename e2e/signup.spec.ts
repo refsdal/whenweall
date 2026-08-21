@@ -1,4 +1,4 @@
-import { expect, signIn, test, waitForTurnstile } from './fixtures'
+import { expect, signIn, test, waitForHydration, waitForTurnstile } from './fixtures'
 
 /**
  * Claims a slot for a fresh guest page: opens the identity sheet on first claim, fills the name,
@@ -41,6 +41,7 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   try {
     // --- guest A opens the sheet and claims Slot 1 (capacity 1) ---
     await pageA.goto(pollPath)
+    await waitForHydration(pageA)
     await expect(pageA.getByTestId('slot-board')).toBeVisible()
 
     await claimSlotAsNewGuest(pageA, 'Slot 1', 'Guest A')
@@ -51,6 +52,7 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
 
     // --- guest B, in a fresh context, sees Slot 1 full and claims Slot 2 (unlimited) instead ---
     await pageB.goto(pollPath)
+    await waitForHydration(pageB)
     await expect(pageB.getByTestId('slot-board')).toBeVisible()
 
     const slot1B = pageB.getByTestId('slot-card').filter({ hasText: 'Slot 1' })

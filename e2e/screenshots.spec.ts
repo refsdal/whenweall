@@ -5,6 +5,7 @@ import {
   pickTwoCalendarDays,
   signIn,
   test,
+  waitForHydration,
   waitForTurnstile,
 } from './fixtures'
 
@@ -42,6 +43,7 @@ async function shoot(page: Page, name: string): Promise<void> {
 test('landing page, light and dark', { tag: '@screenshots' }, async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
+  await waitForHydration(page)
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   await shoot(page, 'landing-light')
 
@@ -68,6 +70,7 @@ test('poll page with votes', { tag: '@screenshots' }, async ({ page, browser, us
     const guest = await context.newPage()
     try {
       await guest.goto(`/p/${pollId}`)
+      await waitForHydration(guest)
       await guest.getByTestId('add-yourself-row').getByLabel('Your name').fill(name)
       const cells = guest.locator('[data-testid="add-yourself-row"] button[data-answer]')
       await expect(cells).toHaveCount(2)
@@ -87,6 +90,7 @@ test('poll page with votes', { tag: '@screenshots' }, async ({ page, browser, us
 
   await signIn(page, userWithPoll)
   await page.goto(`/p/${pollId}`)
+  await waitForHydration(page)
   await expect(page.getByTestId('vote-grid')).toBeVisible()
   await shoot(page, 'poll')
 })
@@ -94,6 +98,7 @@ test('poll page with votes', { tag: '@screenshots' }, async ({ page, browser, us
 test('poll creator', { tag: '@screenshots' }, async ({ page, user }) => {
   await signIn(page, user)
   await page.goto('/new')
+  await waitForHydration(page)
   await expect(page.getByTestId('creator-wizard')).toBeVisible()
 
   await page.locator('#creator-title').fill('Team offsite planning')
@@ -107,6 +112,7 @@ test('poll creator', { tag: '@screenshots' }, async ({ page, user }) => {
 test('dashboard', { tag: '@screenshots' }, async ({ page, userWithPoll }) => {
   await signIn(page, userWithPoll)
   await page.goto('/dashboard')
+  await waitForHydration(page)
   await expect(page.locator('[data-testid="poll-card"]').first()).toBeVisible()
   await shoot(page, 'dashboard')
 })
@@ -135,6 +141,7 @@ test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithS
   const guest = await context.newPage()
   try {
     await guest.goto(`/p/${pollId}`)
+    await waitForHydration(guest)
     await expect(guest.getByTestId('slot-board')).toBeVisible()
     await guest
       .getByTestId('slot-card')
@@ -153,6 +160,7 @@ test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithS
 
   await signIn(page, userWithSignup)
   await page.goto(`/p/${pollId}`)
+  await waitForHydration(page)
   await expect(page.getByTestId('slot-board')).toBeVisible()
   await shoot(page, 'signup')
 })

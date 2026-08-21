@@ -1,8 +1,9 @@
-import { expect, signIn, test, waitForTurnstile } from './fixtures'
+import { expect, signIn, test, waitForHydration, waitForTurnstile } from './fixtures'
 
 test.describe('auth', () => {
   test('signing up shows the check-your-inbox screen', async ({ page }) => {
     await page.goto('/signup')
+    await waitForHydration(page)
 
     await page.locator('#signup-name').fill('New Person')
     await page.locator('#signup-email').fill(`signup-${Date.now()}@example.com`)
@@ -24,6 +25,7 @@ test.describe('auth', () => {
 
   test('shows an error for the wrong password', async ({ page, user }) => {
     await page.goto('/login')
+    await waitForHydration(page)
 
     await page.locator('#login-email').fill(user.email)
     await page.locator('#login-password').fill('definitely-the-wrong-password')
@@ -47,6 +49,7 @@ test.describe('auth', () => {
   test('settings page shows the passkeys section', async ({ page, user }) => {
     await signIn(page, user)
     await page.goto('/settings')
+    await waitForHydration(page)
 
     await expect(page.getByRole('heading', { name: 'Passkeys' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Add passkey' })).toBeVisible()

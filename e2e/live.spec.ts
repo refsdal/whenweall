@@ -1,4 +1,4 @@
-import { expect, signIn, test, waitForTurnstile } from './fixtures'
+import { expect, signIn, test, waitForHydration, waitForTurnstile } from './fixtures'
 
 test('a guest vote appears live in another tab, and the presence pill shows two viewers', async ({
   page,
@@ -11,6 +11,7 @@ test('a guest vote appears live in another tab, and the presence pill shows two 
   // Context A: the poll owner, watching the page.
   await signIn(page, userWithPoll)
   await page.goto(`/p/${pollId}`)
+  await waitForHydration(page)
   await expect(page.getByTestId('vote-grid')).toBeVisible()
 
   // Context B: a guest, in a fresh incognito context, opens the same poll.
@@ -18,6 +19,7 @@ test('a guest vote appears live in another tab, and the presence pill shows two 
   const guestPage = await guestContext.newPage()
   try {
     await guestPage.goto(`/p/${pollId}`)
+    await waitForHydration(guestPage)
     await expect(guestPage.getByTestId('vote-grid')).toBeVisible()
 
     // Once both sockets are connected, the presence pill on A reports two viewers.
