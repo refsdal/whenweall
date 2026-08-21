@@ -19,15 +19,12 @@ function nextDayBasic(dateStr: string): string {
   return `${next.getUTCFullYear()}${pad(next.getUTCMonth() + 1)}${pad(next.getUTCDate())}`
 }
 
-// Note: RFC 5545 also calls for escaping ';', but the task's ics.test.ts
-// asserts SUMMARY:Team; offsite (unescaped) for input "Team; offsite" — the
-// verbatim test literal `'Team\; offsite'` loses its backslash to JS string
-// escaping rules (`\;` is not a recognized escape sequence), so the actual
-// expected substring has no backslash before the semicolon. Escaping is kept
-// for backslash, comma, and newline to match the rest of RFC 5545 and the
-// DESCRIPTION test case.
 function escapeText(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/,/g, '\\,').replace(/\n/g, '\\n')
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n')
 }
 
 function byteLength(str: string): number {

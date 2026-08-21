@@ -13,8 +13,7 @@ describe('ics', () => {
     expect(ics).toContain('BEGIN:VCALENDAR\r\n')
     expect(ics).toContain('DTSTART;VALUE=DATE:20260901\r\n')
     expect(ics).toContain('DTEND;VALUE=DATE:20260902\r\n')
-    // eslint-disable-next-line no-useless-escape -- verbatim from task brief; \; collapses to ; per JS string escaping
-    expect(ics).toContain('SUMMARY:Team\; offsite\r\n')
+    expect(ics).toContain('SUMMARY:Team\\; offsite\r\n')
     expect(ics).toContain('DTSTAMP:20260820T100000Z\r\n')
     expect(ics.endsWith('END:VCALENDAR\r\n')).toBe(true)
   })
