@@ -1,4 +1,11 @@
-import { expect, pickFirstEnabledDay, signIn, test, waitForTurnstile } from './fixtures'
+import {
+  expect,
+  pickFirstEnabledDay,
+  signIn,
+  test,
+  waitForHydration,
+  waitForTurnstile,
+} from './fixtures'
 
 test('a visitor books the first open slot, the owner sees it, and cancelling frees it live', async ({
   page,
@@ -22,10 +29,12 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
   try {
     // --- both visitors land on the same day, before anything is booked ---
     await visitorPage.goto(bookPath)
+    await waitForHydration(visitorPage)
     await expect(visitorPage.getByTestId('booking-page')).toBeVisible()
     await pickFirstEnabledDay(visitorPage)
 
     await watcherPage.goto(bookPath)
+    await waitForHydration(watcherPage)
     await expect(watcherPage.getByTestId('booking-page')).toBeVisible()
     await pickFirstEnabledDay(watcherPage)
 
@@ -34,8 +43,13 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     const firstSlot = visitorSlotList.locator('button').first()
     const slotLabel = (await firstSlot.textContent())!.trim()
     expect(slotLabel).not.toBe('')
+    // Anchor on the chip's start time: a slot's accessible name is "start – end", so an
+    // unanchored /14:30/ would also match the 14:00–14:30 chip.
+    const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const slotByLabel = (locatorPage: typeof visitorPage) =>
-      locatorPage.getByTestId('slot-list').getByRole('button', { name: new RegExp(slotLabel) })
+      locatorPage
+        .getByTestId('slot-list')
+        .getByRole('button', { name: new RegExp('^' + escapeRegExp(slotLabel)) })
 
     // The watcher's day/month is chosen the same deterministic way, so it shows the same slot.
     await expect(slotByLabel(watcherPage)).toBeVisible()
@@ -73,11 +87,13 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     // --- the owner sees the visitor's name on the bookings page ---
     await signIn(page, userWithBookingPage)
     await page.goto(`/bookings/${pageId}`)
+    await waitForHydration(page)
     await expect(page.getByTestId('booking-page-view')).toBeVisible()
     await expect(page.getByText('Visitor One')).toBeVisible()
 
     // --- the visitor cancels via the manage link ---
     await visitorPage.goto(`/booking/${bookingId}?t=${encodeURIComponent(manageToken)}`)
+    await waitForHydration(visitorPage)
     await expect(visitorPage.getByTestId('manage-booking')).toBeVisible()
     await visitorPage.getByRole('button', { name: 'Cancel booking' }).click()
     const confirmDialog = visitorPage.getByRole('dialog', { name: 'Cancel this booking?' })

@@ -123,6 +123,7 @@ test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage
   const slug = userWithBookingPage.slug!
 
   await page.goto(`/book/${handle}/${slug}`)
+  await waitForHydration(page)
   await expect(page.getByTestId('booking-page')).toBeVisible()
 
   // Pick the first open day so the shot shows a real list of slot chips, not the empty state.
