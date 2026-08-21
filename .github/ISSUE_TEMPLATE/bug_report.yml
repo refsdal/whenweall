@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a problem with samla
+labels: [bug]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, step by step?
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened? Include error messages if any.
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser / device
+      description: Browser name, version, and OS (e.g. Chrome 128 on macOS 15)
+      placeholder: Chrome 128 on macOS 15
+    validations:
+      required: true
