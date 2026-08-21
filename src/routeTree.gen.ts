@@ -18,9 +18,13 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
+import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
+import { Route as BookingsNewRouteImport } from './routes/bookings/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
 import { Route as BookingIdCalendarDoticsRouteImport } from './routes/booking/$id/calendar[.]ics'
+import { Route as BookingsIdIndexRouteImport } from './routes/bookings/$id/index'
+import { Route as BookingsIdEditRouteImport } from './routes/bookings/$id/edit'
 import { Route as PIdIndexRouteImport } from './routes/p/$id/index'
 import { Route as PIdCalendarDoticsRouteImport } from './routes/p/$id/calendar[.]ics'
 import { Route as PIdEditRouteImport } from './routes/p/$id/edit'
@@ -73,6 +77,16 @@ const VerifyEmailRoute = VerifyEmailRouteImport.update({
   path: '/verify-email',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BookingsIndexRoute = BookingsIndexRouteImport.update({
+  id: '/bookings/',
+  path: '/bookings/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BookingsNewRoute = BookingsNewRouteImport.update({
+  id: '/bookings/new',
+  path: '/bookings/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -86,6 +100,16 @@ const ApiTestSeedRoute = ApiTestSeedRouteImport.update({
 const BookingIdCalendarDoticsRoute = BookingIdCalendarDoticsRouteImport.update({
   id: '/booking/$id/calendar.ics',
   path: '/booking/$id/calendar.ics',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BookingsIdIndexRoute = BookingsIdIndexRouteImport.update({
+  id: '/bookings/$id/',
+  path: '/bookings/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BookingsIdEditRoute = BookingsIdEditRouteImport.update({
+  id: '/bookings/$id/edit',
+  path: '/bookings/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PIdIndexRoute = PIdIndexRouteImport.update({
@@ -129,12 +153,16 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/bookings/new': typeof BookingsNewRoute
+  '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
+  '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
+  '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
@@ -149,12 +177,16 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/bookings/new': typeof BookingsNewRoute
+  '/bookings': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
+  '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
+  '/bookings/$id': typeof BookingsIdIndexRoute
   '/p/$id': typeof PIdIndexRoute
   '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
@@ -170,12 +202,16 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/bookings/new': typeof BookingsNewRoute
+  '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
+  '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
+  '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
@@ -192,12 +228,16 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/verify-email'
+    | '/bookings/new'
+    | '/bookings/'
     | '/api/auth/$'
     | '/api/test/seed'
     | '/booking/$id/calendar.ics'
+    | '/bookings/$id/edit'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
     | '/p/$id/roster.csv'
+    | '/bookings/$id/'
     | '/p/$id/'
     | '/api/bookings/$pageId/ws'
     | '/api/polls/$id/ws'
@@ -212,12 +252,16 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/verify-email'
+    | '/bookings/new'
+    | '/bookings'
     | '/api/auth/$'
     | '/api/test/seed'
     | '/booking/$id/calendar.ics'
+    | '/bookings/$id/edit'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
     | '/p/$id/roster.csv'
+    | '/bookings/$id'
     | '/p/$id'
     | '/api/bookings/$pageId/ws'
     | '/api/polls/$id/ws'
@@ -232,12 +276,16 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/verify-email'
+    | '/bookings/new'
+    | '/bookings/'
     | '/api/auth/$'
     | '/api/test/seed'
     | '/booking/$id/calendar.ics'
+    | '/bookings/$id/edit'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
     | '/p/$id/roster.csv'
+    | '/bookings/$id/'
     | '/p/$id/'
     | '/api/bookings/$pageId/ws'
     | '/api/polls/$id/ws'
@@ -253,12 +301,16 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
+  BookingsNewRoute: typeof BookingsNewRoute
+  BookingsIndexRoute: typeof BookingsIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiTestSeedRoute: typeof ApiTestSeedRoute
   BookingIdCalendarDoticsRoute: typeof BookingIdCalendarDoticsRoute
+  BookingsIdEditRoute: typeof BookingsIdEditRoute
   PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
   PIdEditRoute: typeof PIdEditRoute
   PIdRosterDotcsvRoute: typeof PIdRosterDotcsvRoute
+  BookingsIdIndexRoute: typeof BookingsIdIndexRoute
   PIdIndexRoute: typeof PIdIndexRoute
   ApiBookingsPageIdWsRoute: typeof ApiBookingsPageIdWsRoute
   ApiPollsIdWsRoute: typeof ApiPollsIdWsRoute
@@ -329,6 +381,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VerifyEmailRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bookings/': {
+      id: '/bookings/'
+      path: '/bookings'
+      fullPath: '/bookings/'
+      preLoaderRoute: typeof BookingsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bookings/new': {
+      id: '/bookings/new'
+      path: '/bookings/new'
+      fullPath: '/bookings/new'
+      preLoaderRoute: typeof BookingsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -348,6 +414,20 @@ declare module '@tanstack/react-router' {
       path: '/booking/$id/calendar.ics'
       fullPath: '/booking/$id/calendar.ics'
       preLoaderRoute: typeof BookingIdCalendarDoticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bookings/$id/': {
+      id: '/bookings/$id/'
+      path: '/bookings/$id'
+      fullPath: '/bookings/$id/'
+      preLoaderRoute: typeof BookingsIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bookings/$id/edit': {
+      id: '/bookings/$id/edit'
+      path: '/bookings/$id/edit'
+      fullPath: '/bookings/$id/edit'
+      preLoaderRoute: typeof BookingsIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/p/$id/': {
@@ -405,12 +485,16 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
   VerifyEmailRoute: VerifyEmailRoute,
+  BookingsNewRoute: BookingsNewRoute,
+  BookingsIndexRoute: BookingsIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiTestSeedRoute: ApiTestSeedRoute,
   BookingIdCalendarDoticsRoute: BookingIdCalendarDoticsRoute,
+  BookingsIdEditRoute: BookingsIdEditRoute,
   PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
   PIdEditRoute: PIdEditRoute,
   PIdRosterDotcsvRoute: PIdRosterDotcsvRoute,
+  BookingsIdIndexRoute: BookingsIdIndexRoute,
   PIdIndexRoute: PIdIndexRoute,
   ApiBookingsPageIdWsRoute: ApiBookingsPageIdWsRoute,
   ApiPollsIdWsRoute: ApiPollsIdWsRoute,

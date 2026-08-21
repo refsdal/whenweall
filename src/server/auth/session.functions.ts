@@ -13,6 +13,9 @@ export const getSession = createServerFn({ method: 'GET' })
             email: s.user.email,
             image: s.user.image ?? null,
             locale: (s.user as { locale?: string }).locale ?? null,
+            // Better-Auth `additionalFields`, so it rides along on the session user; the booking
+            // UI needs it to render `/book/<handle>/<slug>` links.
+            handle: (s.user as { handle?: string }).handle ?? null,
           },
         }
       : null

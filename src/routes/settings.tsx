@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { createFileRoute, redirect, useNavigate, useRouter } from '@tanstack/react-router'
+import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import { PasskeyManager } from '#/components/auth/PasskeyManager'
+import { HandleField } from '#/components/booking/HandleField'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
 import { Button } from '#/components/ui/button'
 import {
@@ -18,6 +20,7 @@ import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { m } from '#/lib/i18n'
 import { authClient } from '#/server/auth/client'
+import { setHandle } from '#/server/bookings/pages.functions'
 
 export const Route = createFileRoute('/settings')({
   beforeLoad: ({ context }) => {
@@ -29,7 +32,7 @@ export const Route = createFileRoute('/settings')({
 })
 
 function SettingsPage() {
-  const { session } = Route.useRouteContext()
+  const { session, publicConfig } = Route.useRouteContext()
   if (!session) return null
 
   return (
@@ -39,6 +42,12 @@ function SettingsPage() {
       </div>
 
       <ProfileSection name={session.user.name} email={session.user.email} />
+
+      <Separator />
+
+      <section>
+        <HandleSection handle={session.user.handle} appUrl={publicConfig.appUrl} />
+      </section>
 
       <Separator />
 
@@ -109,6 +118,24 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
       </form>
       <p className="text-sm text-muted-foreground">{email}</p>
     </section>
+  )
+}
+
+/** Wires `HandleField` (kept server-free so it can be unit-tested) to the `setHandle` server
+ * function, refreshing the session afterwards so every booking link picks the new handle up. */
+function HandleSection({ handle, appUrl }: { handle: string | null; appUrl: string }) {
+  const router = useRouter()
+  const setHandleFn = useServerFn(setHandle)
+
+  return (
+    <HandleField
+      currentHandle={handle}
+      appUrl={appUrl}
+      onSave={async (next) => {
+        await setHandleFn({ data: { handle: next } })
+        await router.invalidate()
+      }}
+    />
   )
 }
 
