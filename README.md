@@ -37,15 +37,12 @@ $5/month Workers Paid plan.
 
 ## Screenshots
 
-> The images below are captured from the real app by `bun run screenshots`
-> ([`e2e/screenshots.spec.ts`](./e2e/screenshots.spec.ts)) and committed by hand — run it on a
-> machine with Chromium installed. CI never generates or commits them, so if they don't render
-> here, they simply haven't been captured for this checkout yet.
-
-|                                                                                            |                                                                       |
-| ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| ![The landing page in light mode](./docs/screenshots/landing-light.png)                    | ![The landing page in dark mode](./docs/screenshots/landing-dark.png) |
-| ![A poll being voted on, with the winning column highlighted](./docs/screenshots/poll.png) | ![The three-step poll creator](./docs/screenshots/creator.png)        |
+There is no hosted instance yet, so no screenshots ship in this repo. Run
+`bun run screenshots` ([`e2e/screenshots.spec.ts`](./e2e/screenshots.spec.ts)) against your own
+checkout to generate them from the real app — see
+[`docs/screenshots/README.md`](./docs/screenshots/README.md) for what gets captured and where it
+lands. CI never generates or commits them, so they only appear once someone deliberately runs
+that script.
 
 ## Features
 
@@ -91,9 +88,10 @@ $5/month Workers Paid plan.
 - **Turnstile** on sign-up, sign-in and password reset (Better-Auth's captcha plugin) and on
   guest voting and commenting; a Workers rate-limiter binding additionally caps poll creation,
   voting and commenting per IP.
-- **Strict CSP**, HSTS in production, `nosniff`, `Referrer-Policy` and a `Permissions-Policy`
-  applied by a request middleware to every response.
-- **279 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
+- **CSP with inline scripts allowed** (required by TanStack Start hydration), HSTS in
+  production, `nosniff`, `Referrer-Policy` and a `Permissions-Policy` applied by a request
+  middleware to every response.
+- **322 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
   with a real D1 and Durable Object, and Playwright end-to-end flows.
 
 ## Architecture
@@ -252,9 +250,13 @@ first deploy.
 bun run deploy    # = bun run build && wrangler deploy
 ```
 
-Or let GitHub do it: [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) runs
-the remote migrations and deploys on every push to `main`. It needs a repository
-environment named **`production`** holding two secrets:
+Or let GitHub do it: [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) runs the
+remote migrations and deploys after every successful [CI](./.github/workflows/ci.yml) run on
+`main` (it also has a manual `workflow_dispatch` trigger). Before touching Cloudflare it runs a
+guard step that fails the job if `wrangler.jsonc` still has its local-development placeholders
+(`APP_ENV: "development"` or `APP_URL` pointing at `localhost:3000`) — see step 3 in
+[Cloudflare setup](#cloudflare-setup) above. It needs a repository environment named
+**`production`** holding two secrets:
 
 | Secret                  | Where to get it                                                                  |
 | ----------------------- | -------------------------------------------------------------------------------- |
@@ -295,7 +297,7 @@ bunx wrangler deploy --dry-run --outdir /tmp/samla-dryrun
 Three layers, all runnable from a clean checkout:
 
 ```bash
-bun run test        # 41 files / 279 tests: unit (jsdom) + integration (workerd)
+bun run test        # 42 files / 322 tests: unit (jsdom) + integration (workerd)
 bun run test:e2e    # 10 Playwright flows against the built Worker
 ```
 
