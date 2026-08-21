@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test'
 import {
   expect,
+  pickFirstEnabledDay,
   pickTwoCalendarDays,
   signIn,
   test,
@@ -114,4 +115,53 @@ test('dashboard', { tag: '@screenshots' }, async ({ page, userWithPoll }) => {
   await waitForHydration(page)
   await expect(page.locator('[data-testid="poll-card"]').first()).toBeVisible()
   await shoot(page, 'dashboard')
+})
+
+test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage }) => {
+  test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
+  const handle = userWithBookingPage.handle!
+  const slug = userWithBookingPage.slug!
+
+  await page.goto(`/book/${handle}/${slug}`)
+  await waitForHydration(page)
+  await expect(page.getByTestId('booking-page')).toBeVisible()
+
+  // Pick the first open day so the shot shows a real list of slot chips, not the empty state.
+  await pickFirstEnabledDay(page)
+  await expect(page.getByTestId('slot-list')).toBeVisible()
+
+  await shoot(page, 'booking')
+})
+
+test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithSignup }) => {
+  test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
+  const pollId = userWithSignup.pollId!
+
+  // A guest claims a slot so the board has a claimant to show.
+  const context = await browser.newContext()
+  const guest = await context.newPage()
+  try {
+    await guest.goto(`/p/${pollId}`)
+    await waitForHydration(guest)
+    await expect(guest.getByTestId('slot-board')).toBeVisible()
+    await guest
+      .getByTestId('slot-card')
+      .filter({ hasText: 'Slot 1' })
+      .getByRole('button', { name: 'Claim a spot for Slot 1' })
+      .click()
+
+    const identityDialog = guest.getByRole('dialog', { name: "Who's taking the slot?" })
+    await identityDialog.getByLabel('Your name').fill('Kari')
+    await waitForTurnstile(guest)
+    await identityDialog.getByRole('button', { name: 'Sign me up' }).click()
+    await expect(identityDialog).toBeHidden()
+  } finally {
+    await context.close()
+  }
+
+  await signIn(page, userWithSignup)
+  await page.goto(`/p/${pollId}`)
+  await waitForHydration(page)
+  await expect(page.getByTestId('slot-board')).toBeVisible()
+  await shoot(page, 'signup')
 })

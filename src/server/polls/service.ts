@@ -10,10 +10,12 @@ import {
   type OptionKind,
   type Poll,
   type PollOption,
+  type PollType,
 } from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
 import { newId, newPollId } from '#/lib/ids'
 import { bestOptionId, scoreOptions } from '#/lib/scoring'
+import { countClaims } from './claims'
 import type { OptionInput, UpdatePollInput, CreatePollInput } from './schemas'
 import type { PollSummary, PollView } from './viewmodel'
 
@@ -24,16 +26,35 @@ type OptionRowFields = {
   startAt: string | null
   endAt: string | null
   label: string | null
+  capacity: number | null
 }
 
-function optionRowFields(option: OptionInput): OptionRowFields {
+/**
+ * `fallbackCapacity` is used only when `option.capacity` is omitted: `1` for a brand-new option
+ * (the default every signup slot is created with), or the existing row's own capacity when
+ * `updatePoll` is re-saving an option the caller didn't touch — an omitted field must retain
+ * whatever capacity was already there, not silently reset it to 1.
+ */
+function optionRowFields(
+  option: OptionInput,
+  type: PollType,
+  fallbackCapacity: number | null = 1,
+): OptionRowFields {
+  const capacity =
+    type === 'signup' ? (option.capacity === undefined ? fallbackCapacity : option.capacity) : null
   if (option.kind === 'date') {
-    return { kind: 'date', startAt: option.date, endAt: null, label: null }
+    return { kind: 'date', startAt: option.date, endAt: null, label: null, capacity }
   }
   if (option.kind === 'datetime') {
-    return { kind: 'datetime', startAt: option.startAt, endAt: option.endAt ?? null, label: null }
+    return {
+      kind: 'datetime',
+      startAt: option.startAt,
+      endAt: option.endAt ?? null,
+      label: null,
+      capacity,
+    }
   }
-  return { kind: 'text', startAt: null, endAt: null, label: option.label }
+  return { kind: 'text', startAt: null, endAt: null, label: option.label, capacity }
 }
 
 export async function createPoll(
@@ -48,7 +69,7 @@ export async function createPoll(
     id: newId(),
     pollId: id,
     position: index,
-    ...optionRowFields(option),
+    ...optionRowFields(option, input.type),
   }))
 
   await db.batch([
@@ -65,9 +86,10 @@ export async function createPoll(
       finalizedOptionId: null,
       requireParticipantEmail: input.requireParticipantEmail ?? false,
       allowComments: input.allowComments ?? true,
-      allowIfNeedBe: input.allowIfNeedBe ?? true,
+      allowIfNeedBe: input.type === 'signup' ? false : (input.allowIfNeedBe ?? true),
       notifyOnVote: true,
       notifyOnComment: true,
+      signupMaxClaims: input.signupMaxClaims ?? 1,
       createdAt: now,
       updatedAt: now,
     }),
@@ -97,10 +119,21 @@ export async function getPollView(
   if (!poll || poll.deletedAt) return null
 
   const isOwner = viewer.userId !== null && viewer.userId === poll.ownerId
+  const isSignup = poll.type === 'signup'
   const optionIds = poll.options.map((o) => o.id)
   const allVotes = poll.participants.flatMap((p) => p.votes)
-  const scores = scoreOptions(optionIds, allVotes)
-  const best = bestOptionId(optionIds, scores)
+  const scores = isSignup ? {} : scoreOptions(optionIds, allVotes)
+  const best = isSignup ? null : bestOptionId(optionIds, scores)
+
+  const claims: PollView['claims'] = {}
+  for (const option of poll.options) {
+    const count = allVotes.filter((v) => v.optionId === option.id && v.answer === 'yes').length
+    claims[option.id] = {
+      count,
+      capacity: option.capacity,
+      full: option.capacity !== null && count >= option.capacity,
+    }
+  }
 
   return {
     id: poll.id,
@@ -117,6 +150,7 @@ export async function getPollView(
       requireParticipantEmail: poll.requireParticipantEmail,
       allowComments: poll.allowComments,
       allowIfNeedBe: poll.allowIfNeedBe,
+      signupMaxClaims: poll.signupMaxClaims,
     },
     notifications: isOwner
       ? { notifyOnVote: poll.notifyOnVote, notifyOnComment: poll.notifyOnComment }
@@ -130,6 +164,7 @@ export async function getPollView(
       startAt: o.startAt,
       endAt: o.endAt,
       label: o.label,
+      capacity: o.capacity,
     })),
     participants: poll.participants.map((p) => ({
       id: p.id,
@@ -149,6 +184,7 @@ export async function getPollView(
     })),
     scores,
     bestOptionId: best,
+    claims,
   }
 }
 
@@ -156,7 +192,7 @@ export async function listMyPolls(db: Db, ownerId: string): Promise<PollSummary[
   const rows = await db.query.polls.findMany({
     where: and(eq(polls.ownerId, ownerId), isNull(polls.deletedAt)),
     orderBy: (p, { desc }) => [desc(p.createdAt)],
-    with: { participants: true },
+    with: { participants: { with: { votes: true } } },
   })
 
   return rows.map((p) => ({
@@ -166,6 +202,10 @@ export async function listMyPolls(db: Db, ownerId: string): Promise<PollSummary[
     status: p.status,
     deadlineAt: p.deadlineAt,
     participantCount: p.participants.length,
+    claimCount: p.participants.reduce(
+      (sum, participant) => sum + participant.votes.filter((v) => v.answer === 'yes').length,
+      0,
+    ),
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   }))
@@ -201,6 +241,7 @@ export async function updatePoll(
   }
   if (input.allowComments !== undefined) scalarUpdate.allowComments = input.allowComments
   if (input.allowIfNeedBe !== undefined) scalarUpdate.allowIfNeedBe = input.allowIfNeedBe
+  if (input.signupMaxClaims !== undefined) scalarUpdate.signupMaxClaims = input.signupMaxClaims
 
   const queries: Query[] = [db.update(polls).set(scalarUpdate).where(eq(polls.id, pollId))]
 
@@ -209,13 +250,29 @@ export async function updatePoll(
       where: eq(pollOptions.pollId, pollId),
     })
     const existingIds = new Set(existing.map((o) => o.id))
+    const existingById = new Map(existing.map((o) => [o.id, o]))
+
+    if (poll.type === 'signup') {
+      const counts = await countClaims(db, pollId)
+      for (const option of input.options) {
+        if (!option.id || !existingIds.has(option.id)) continue
+        const newCapacity =
+          option.capacity === undefined ? existingById.get(option.id)!.capacity : option.capacity
+        const count = counts[option.id] ?? 0
+        if (newCapacity !== null && newCapacity < count) {
+          throw new AppError('CAPACITY_BELOW_CLAIMS')
+        }
+      }
+    }
+
     const keepIds = new Set<string>()
 
     input.options.forEach((option, index) => {
       const existingId = option.id && existingIds.has(option.id) ? option.id : undefined
       const id = existingId ?? newId()
       keepIds.add(id)
-      const fields = optionRowFields(option)
+      const fallbackCapacity = existingId ? existingById.get(existingId)!.capacity : 1
+      const fields = optionRowFields(option, poll.type, fallbackCapacity)
       if (existingId) {
         queries.push(
           db
@@ -263,6 +320,7 @@ export async function finalizePoll(
   recipients: { email: string; name: string; locale: string | null }[]
 }> {
   const poll = await requireOwnedPoll(db, pollId, ownerId)
+  if (poll.type === 'signup') throw new AppError('VALIDATION')
   if (poll.status === 'finalized') throw new AppError('CONFLICT')
 
   const option = await db.query.pollOptions.findFirst({ where: eq(pollOptions.id, optionId) })
@@ -326,6 +384,7 @@ export async function duplicatePoll(
     startAt: o.startAt,
     endAt: o.endAt,
     label: o.label,
+    capacity: o.capacity,
   }))
 
   await db.batch([
@@ -345,6 +404,7 @@ export async function duplicatePoll(
       allowIfNeedBe: original.allowIfNeedBe,
       notifyOnVote: original.notifyOnVote,
       notifyOnComment: original.notifyOnComment,
+      signupMaxClaims: original.signupMaxClaims,
       createdAt: now,
       updatedAt: now,
     }),

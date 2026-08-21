@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers'
 import type { DigestItem, PollEvent } from '#/do/protocol'
 import type { PollRoom } from '#/do/PollRoom'
+import type { ClaimIdentity } from '#/server/polls/claims'
 
 /**
  * Thin client for talking to a poll's `PollRoom` durable object from server functions and the
@@ -36,4 +37,28 @@ export async function syncDeadline(pollId: string, deadlineAt: string | null): P
   } catch (err) {
     console.error('[do-client] syncDeadline failed', err)
   }
+}
+
+/**
+ * Claims/unclaims a slot by routing the write through the poll's `PollRoom` DO, which serialises
+ * it against every other claim/unclaim for the same poll (see `PollRoom#claim`/`#unclaim`) so
+ * capacity checks are atomic. Unlike the notification helpers above, these are NOT best-effort:
+ * business errors (`SLOT_FULL`, `CLAIM_LIMIT_REACHED`, `POLL_CLOSED`, ...) thrown inside the DO
+ * must reach the caller so the server function can map them to the right response.
+ */
+export async function claimViaRoom(
+  pollId: string,
+  optionId: string,
+  identity: ClaimIdentity,
+): Promise<Awaited<ReturnType<PollRoom['claim']>>> {
+  return pollRoom(pollId).claim(pollId, optionId, identity)
+}
+
+export async function unclaimViaRoom(
+  pollId: string,
+  optionId: string,
+  participantId: string,
+  opts: { allowClosed?: boolean } = {},
+): Promise<Awaited<ReturnType<PollRoom['unclaim']>>> {
+  return pollRoom(pollId).unclaim(pollId, optionId, participantId, opts)
 }

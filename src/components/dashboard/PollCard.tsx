@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { CalendarDays, Copy, ListChecks, Trash2, Users, type LucideIcon } from 'lucide-react'
+import {
+  CalendarDays,
+  ClipboardList,
+  Copy,
+  ListChecks,
+  Trash2,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 import { DeadlineCountdown } from '#/components/poll/DeadlineCountdown'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
@@ -20,6 +28,7 @@ import type { PollSummary } from '#/server/polls/viewmodel'
 const TYPE_ICON: Record<PollType, LucideIcon> = {
   datetime: CalendarDays,
   options: ListChecks,
+  signup: ClipboardList,
 }
 
 /** Status pill colours borrow the vote-answer palette: open reads as "go", closed as "pending",
@@ -36,7 +45,13 @@ function statusLabel(status: PollStatus): string {
   return m.poll_status_finalized()
 }
 
-function participantsLabel(count: number): string {
+/** A sign-up sheet counts sign-ups, every other poll counts people who answered. */
+function participantsLabel(type: PollType, count: number): string {
+  if (type === 'signup') {
+    return count === 1
+      ? m.dashboard_signups_count_one()
+      : m.dashboard_signups_count_other({ count })
+  }
   return count === 1 ? m.poll_meta_people_one() : m.poll_meta_people_other({ count })
 }
 
@@ -84,7 +99,10 @@ export function PollCard({
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
           <Users aria-hidden="true" className="size-3.5" />
-          {participantsLabel(poll.participantCount)}
+          {participantsLabel(
+            poll.type,
+            poll.type === 'signup' ? poll.claimCount : poll.participantCount,
+          )}
         </span>
         {poll.deadlineAt ? (
           <DeadlineCountdown deadlineAt={poll.deadlineAt} />

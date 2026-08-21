@@ -1,10 +1,10 @@
 import { relations, sql } from 'drizzle-orm'
-import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { user } from './auth-schema'
 
 export * from './auth-schema'
 
-export const POLL_TYPES = ['datetime', 'options'] as const
+export const POLL_TYPES = ['datetime', 'options', 'signup'] as const
 export const POLL_STATUSES = ['open', 'closed', 'finalized'] as const
 export const OPTION_KINDS = ['date', 'datetime', 'text'] as const
 export const ANSWERS = ['yes', 'ifneedbe', 'no'] as const
@@ -36,6 +36,7 @@ export const polls = sqliteTable(
     allowIfNeedBe: bool('allow_if_need_be', true),
     notifyOnVote: bool('notify_on_vote', true),
     notifyOnComment: bool('notify_on_comment', true),
+    signupMaxClaims: integer('signup_max_claims').notNull().default(1),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),
@@ -139,4 +140,85 @@ export type PollOption = typeof pollOptions.$inferSelect
 export type Participant = typeof participants.$inferSelect
 export type Vote = typeof votes.$inferSelect
 export type Comment = typeof comments.$inferSelect
+
+export const BOOKING_PAGE_STATUSES = ['active', 'paused'] as const
+export const BOOKING_STATUSES = ['confirmed', 'cancelled'] as const
+export const CANCELLED_BY = ['visitor', 'organiser'] as const
+export type BookingPageStatus = (typeof BOOKING_PAGE_STATUSES)[number]
+export type BookingStatus = (typeof BOOKING_STATUSES)[number]
+export type CancelledBy = (typeof CANCELLED_BY)[number]
+
+export const bookingPages = sqliteTable(
+  'booking_pages',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    slug: text('slug').notNull(),
+    title: text('title').notNull(),
+    description: text('description'),
+    location: text('location'),
+    timezone: text('timezone').notNull(),
+    slotDurationMin: integer('slot_duration_min').notNull(),
+    bufferBeforeMin: integer('buffer_before_min').notNull(),
+    bufferAfterMin: integer('buffer_after_min').notNull(),
+    minNoticeMin: integer('min_notice_min').notNull(),
+    maxDaysAhead: integer('max_days_ahead').notNull(),
+    availability: text('availability').notNull(),
+    dateOverrides: text('date_overrides'),
+    googleSync: bool('google_sync', false),
+    reminders: bool('reminders', true),
+    status: text('status', { enum: BOOKING_PAGE_STATUSES }).notNull().default('active'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    deletedAt: text('deleted_at'),
+  },
+  (t) => [
+    // Partial so a soft-deleted page's slug can be reused by a new (or re-created) page — only
+    // live pages (deleted_at IS NULL) compete for a slug.
+    uniqueIndex('booking_pages_owner_slug_uidx')
+      .on(t.ownerId, t.slug)
+      .where(sql`${t.deletedAt} IS NULL`),
+  ],
+)
+
+export const bookings = sqliteTable(
+  'bookings',
+  {
+    id: text('id').primaryKey(),
+    pageId: text('page_id')
+      .notNull()
+      .references(() => bookingPages.id, { onDelete: 'cascade' }),
+    startAt: text('start_at').notNull(),
+    endAt: text('end_at').notNull(),
+    visitorName: text('visitor_name').notNull(),
+    visitorEmail: text('visitor_email').notNull(),
+    visitorNote: text('visitor_note'),
+    visitorLocale: text('visitor_locale'),
+    visitorTimezone: text('visitor_timezone').notNull(),
+    status: text('status', { enum: BOOKING_STATUSES }).notNull().default('confirmed'),
+    cancelledBy: text('cancelled_by', { enum: CANCELLED_BY }),
+    manageTokenHash: text('manage_token_hash').notNull(),
+    googleEventId: text('google_event_id'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [index('bookings_page_start_idx').on(t.pageId, t.startAt)],
+)
+
+export const bookingPagesRelations = relations(bookingPages, ({ one, many }) => ({
+  owner: one(user, { fields: [bookingPages.ownerId], references: [user.id] }),
+  bookings: many(bookings),
+}))
+
+export const bookingsRelations = relations(bookings, ({ one }) => ({
+  page: one(bookingPages, { fields: [bookings.pageId], references: [bookingPages.id] }),
+}))
+
+export type BookingPage = typeof bookingPages.$inferSelect
+export type NewBookingPage = typeof bookingPages.$inferInsert
+export type Booking = typeof bookings.$inferSelect
+export type NewBooking = typeof bookings.$inferInsert
+
 export { sql }

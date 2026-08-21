@@ -11,6 +11,8 @@ import {
   SERVER_FN_MIDDLEWARE as PARTICIPANTS_MIDDLEWARE,
 } from '#/server/polls/participants.functions'
 import * as participantsFunctions from '#/server/polls/participants.functions'
+import * as pagesFunctions from '#/server/bookings/pages.functions'
+import * as bookingsFunctions from '#/server/bookings/bookings.functions'
 import { makePoll, makeUser } from './helpers'
 
 // Server functions pull in `cloudflare:workers`, better-auth, and rate-limit/turnstile modules
@@ -41,6 +43,8 @@ describe('participants.functions module graph', () => {
     'removeParticipant',
     'addComment',
     'deleteComment',
+    'claimSlot',
+    'unclaimSlot',
   ] as const)('exports a callable %s server function', (name) => {
     expect(typeof participantsFunctions[name]).toBe('function')
   })
@@ -106,6 +110,92 @@ describe('participants.functions middleware wiring', () => {
   it('deleteComment only requires a session lookup', () => {
     expect(M.deleteComment).toContain(sessionMiddleware)
     expect(M.deleteComment).toHaveLength(1)
+  })
+
+  it('claimSlot and unclaimSlot are both vote-rate-limited', () => {
+    expect(M.claimSlot).toContain(sessionMiddleware)
+    expect(M.claimSlot).toContain(rateLimitMiddleware('vote'))
+    expect(M.unclaimSlot).toContain(sessionMiddleware)
+    expect(M.unclaimSlot).toContain(rateLimitMiddleware('vote'))
+  })
+})
+
+describe('pages.functions module graph', () => {
+  it.each([
+    'createBookingPage',
+    'updateBookingPage',
+    'deleteBookingPage',
+    'listMyBookingPages',
+    'getBookingPage',
+    'setHandle',
+    'getGoogleCalendarStatus',
+    'disconnectGoogleCalendar',
+  ] as const)('exports a callable %s server function', (name) => {
+    expect(typeof pagesFunctions[name]).toBe('function')
+  })
+})
+
+describe('bookings.functions module graph', () => {
+  it.each([
+    'getPublicAvailability',
+    'bookSlot',
+    'getManagedBooking',
+    'cancelBooking',
+    'rescheduleBooking',
+    'listPageBookings',
+  ] as const)('exports a callable %s server function', (name) => {
+    expect(typeof bookingsFunctions[name]).toBe('function')
+  })
+})
+
+describe('pages.functions middleware wiring', () => {
+  const M = pagesFunctions.SERVER_FN_MIDDLEWARE
+
+  it.each([
+    'createBookingPage',
+    'updateBookingPage',
+    'deleteBookingPage',
+    'listMyBookingPages',
+    'getBookingPage',
+    'setHandle',
+    'getGoogleCalendarStatus',
+    'disconnectGoogleCalendar',
+  ] as const)('%s requires a session via requireSessionMiddleware', (name) => {
+    expect(M[name]).toContain(requireSessionMiddleware)
+  })
+})
+
+describe('bookings.functions middleware wiring', () => {
+  const M = bookingsFunctions.SERVER_FN_MIDDLEWARE
+
+  it('getPublicAvailability has no auth middleware (it is a public lookup) but is rate-limited', () => {
+    expect(M.getPublicAvailability).not.toContain(sessionMiddleware)
+    expect(M.getPublicAvailability).not.toContain(requireSessionMiddleware)
+    expect(M.getPublicAvailability).toContain(rateLimitMiddleware('book'))
+  })
+
+  it('bookSlot requires a session lookup and is rate-limited on the book action', () => {
+    expect(M.bookSlot).toContain(sessionMiddleware)
+    expect(M.bookSlot).toContain(rateLimitMiddleware('book'))
+    expect(M.bookSlot).not.toContain(requireSessionMiddleware)
+  })
+
+  it('getManagedBooking only needs the optional session lookup — the manage token is the other auth path', () => {
+    expect(M.getManagedBooking).toContain(sessionMiddleware)
+    expect(M.getManagedBooking).not.toContain(requireSessionMiddleware)
+    expect(M.getManagedBooking).not.toContain(rateLimitMiddleware('book'))
+  })
+
+  it('cancelBooking and rescheduleBooking need the optional session lookup and are rate-limited on the book action', () => {
+    for (const name of ['cancelBooking', 'rescheduleBooking'] as const) {
+      expect(M[name]).toContain(sessionMiddleware)
+      expect(M[name]).not.toContain(requireSessionMiddleware)
+      expect(M[name]).toContain(rateLimitMiddleware('book'))
+    }
+  })
+
+  it('listPageBookings requires a session (owner-only)', () => {
+    expect(M.listPageBookings).toContain(requireSessionMiddleware)
   })
 })
 

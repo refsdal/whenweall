@@ -11,7 +11,12 @@ export function createAuth(d1: D1Database) {
     database: drizzleAdapter(drizzle(d1), { provider: 'sqlite' }),
     emailAndPassword: { enabled: true },
     plugins: [passkey()],
-    user: { additionalFields: { locale: { type: 'string', required: false, input: true } } },
+    user: {
+      additionalFields: {
+        locale: { type: 'string', required: false, input: true },
+        handle: { type: 'string', required: false, input: false },
+      },
+    },
   })
 }
 export const auth = createAuth(undefined as unknown as D1Database) // CLI only; runtime uses getAuth() (Task 8)

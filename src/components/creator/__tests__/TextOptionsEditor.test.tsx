@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TextOptionsEditor } from '#/components/creator/TextOptionsEditor'
 
@@ -128,6 +128,35 @@ describe('TextOptionsEditor', () => {
     await user.click(screen.getByRole('button', { name: /add option/i }))
 
     expect(rows()).toHaveLength(2)
+  })
+
+  it('does not show a capacity field by default', () => {
+    render(<TextOptionsEditor value={[{ label: 'Pizza' }]} onChange={vi.fn()} />)
+
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0)
+  })
+
+  it('shows a capacity field per row and reports the change when showCapacity is set', () => {
+    const onChange = vi.fn()
+    render(
+      <TextOptionsEditor
+        value={[{ label: 'Setup', capacity: 2 }, { label: 'Cleanup' }]}
+        onChange={onChange}
+        showCapacity
+      />,
+    )
+
+    const spinbuttons = screen.getAllByRole('spinbutton')
+    expect(spinbuttons).toHaveLength(2)
+    expect(spinbuttons[0]).toHaveValue(2)
+    expect(spinbuttons[1]).toHaveValue(1)
+
+    fireEvent.change(spinbuttons[1] as HTMLElement, { target: { value: '5' } })
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { label: 'Setup', capacity: 2 },
+      { label: 'Cleanup', capacity: 5 },
+    ])
   })
 
   it('stops adding rows once the limit is reached', async () => {

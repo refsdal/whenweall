@@ -1,5 +1,5 @@
 import { useMemo, type Dispatch, type KeyboardEvent } from 'react'
-import { CalendarDays, ListChecks } from 'lucide-react'
+import { CalendarDays, ClipboardList, ListChecks } from 'lucide-react'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
@@ -52,6 +52,12 @@ const TYPE_CARDS = [
     title: () => m.creator_type_options_title(),
     description: () => m.creator_type_options_desc(),
   },
+  {
+    type: 'signup' as const,
+    icon: ClipboardList,
+    title: () => m.creator_type_signup_title(),
+    description: () => m.creator_type_signup_desc(),
+  },
 ]
 
 /**
@@ -95,7 +101,7 @@ export function TypeStep({
       {showTypeCards && (
         <fieldset className="flex flex-col gap-3">
           <legend className="mb-3 text-sm font-medium">{m.creator_type_legend()}</legend>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             {TYPE_CARDS.map((card) => {
               const selected = draft.type === card.type
               const Icon = card.icon

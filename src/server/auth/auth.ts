@@ -55,7 +55,13 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
         ? { google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET } }
         : {},
     user: {
-      additionalFields: { locale: { type: 'string', required: false, input: true } },
+      additionalFields: {
+        locale: { type: 'string', required: false, input: true },
+        // handle is server-managed (see setUserHandle in src/server/bookings/pages.ts) and must
+        // never be client-writable, or /update-user and /sign-up could set it directly and bypass
+        // handleSchema's slug/uniqueness validation.
+        handle: { type: 'string', required: false, input: false },
+      },
       deleteUser: { enabled: true },
     },
     plugins: [

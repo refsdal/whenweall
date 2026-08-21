@@ -6,14 +6,22 @@ export type SeededUser = {
   password: string
   name: string
   pollId?: string
+  pageId?: string
+  handle?: string
+  slug?: string
 }
 
 async function seed(
   request: APIRequestContext,
-  opts: { name?: string; withPoll?: boolean } = {},
+  opts: { name?: string; withPoll?: boolean; withSignup?: boolean; withBookingPage?: boolean } = {},
 ): Promise<SeededUser> {
   const response = await request.post('/api/test/seed', {
-    data: { name: opts.name ?? 'E2E User', withPoll: opts.withPoll ?? false },
+    data: {
+      name: opts.name ?? 'E2E User',
+      withPoll: opts.withPoll ?? false,
+      withSignup: opts.withSignup ?? false,
+      withBookingPage: opts.withBookingPage ?? false,
+    },
   })
   if (!response.ok()) {
     throw new Error(
@@ -28,6 +36,14 @@ type Fixtures = {
   user: SeededUser
   /** A verified user that already owns one seeded two-option datetime poll. */
   userWithPoll: SeededUser
+  /** A verified user that already owns one seeded sign-up sheet (Slot 1 capacity 1, Slot 2 unlimited). */
+  userWithSignup: SeededUser
+  /**
+   * A verified user with a handle and one seeded booking page: weekday 09:00–17:00
+   * Europe/Oslo, 30-minute slots, slug `intro-call` — see `sampleBookingPage` in
+   * `src/routes/api/test/seed.ts`.
+   */
+  userWithBookingPage: SeededUser
 }
 
 /**
@@ -44,6 +60,12 @@ export const test = base.extend<Fixtures>({
   },
   userWithPoll: async ({ request }, provide) => {
     await provide(await seed(request, { withPoll: true }))
+  },
+  userWithSignup: async ({ request }, provide) => {
+    await provide(await seed(request, { withSignup: true }))
+  },
+  userWithBookingPage: async ({ request }, provide) => {
+    await provide(await seed(request, { withBookingPage: true }))
   },
 })
 
@@ -118,4 +140,26 @@ export async function pickTwoCalendarDays(page: Page): Promise<void> {
 
   await enabledDays.nth(0).click()
   await enabledDays.nth(1).click()
+}
+
+/**
+ * Picks the first enabled day on the public booking page's month picker (`MonthPicker`, built on
+ * the same `Calendar` primitive `pickTwoCalendarDays` drives for the poll creator), paging
+ * forward a month at a time if the visible month has none yet. The seeded page (weekday
+ * 09:00–17:00 Europe/Oslo, `min_notice_min: 0`) always has an enabled day within a couple of
+ * months, so this never depends on which day of the month the suite happens to run on.
+ */
+export async function pickFirstEnabledDay(page: Page): Promise<void> {
+  const calendar = page.locator('[data-slot="calendar"]')
+  await expect(calendar).toBeVisible()
+
+  const enabledDays = calendar.locator('button[data-day]:not([disabled])')
+  for (let guard = 0; guard < 6 && (await enabledDays.count()) < 1; guard++) {
+    await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
+  }
+  await expect(async () => {
+    expect(await enabledDays.count()).toBeGreaterThanOrEqual(1)
+  }).toPass({ timeout: 5_000 })
+
+  await enabledDays.first().click()
 }

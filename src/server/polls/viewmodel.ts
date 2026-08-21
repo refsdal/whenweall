@@ -8,6 +8,7 @@ export type PollOptionView = {
   startAt: string | null
   endAt: string | null
   label: string | null
+  capacity: number | null
 }
 
 export type ParticipantView = {
@@ -39,7 +40,12 @@ export type PollView = {
   deadlineAt: string | null
   finalizedOptionId: string | null
   createdAt: string
-  settings: { requireParticipantEmail: boolean; allowComments: boolean; allowIfNeedBe: boolean }
+  settings: {
+    requireParticipantEmail: boolean
+    allowComments: boolean
+    allowIfNeedBe: boolean
+    signupMaxClaims: number
+  }
   notifications: { notifyOnVote: boolean; notifyOnComment: boolean } | null
   owner: { id: string; name: string }
   isOwner: boolean
@@ -48,6 +54,7 @@ export type PollView = {
   comments: CommentView[]
   scores: Record<string, OptionScore>
   bestOptionId: string | null
+  claims: Record<string, { count: number; capacity: number | null; full: boolean }>
 }
 
 export type PollSummary = {
@@ -57,6 +64,9 @@ export type PollSummary = {
   status: PollStatus
   deadlineAt: string | null
   participantCount: number
+  /** Sum of yes-votes across the poll's options — the sign-up count for a `signup` poll, where
+   * one person can hold several slots and `participantCount` alone would undercount sign-ups. */
+  claimCount: number
   createdAt: string
   updatedAt: string
 }

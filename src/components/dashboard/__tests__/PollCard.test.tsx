@@ -15,6 +15,7 @@ function makeSummary(overrides: Partial<PollSummary> = {}): PollSummary {
     status: 'open',
     deadlineAt: null,
     participantCount: 3,
+    claimCount: 3,
     createdAt: '2026-08-01T10:00:00.000Z',
     updatedAt: '2026-08-01T10:00:00.000Z',
     ...overrides,
@@ -48,6 +49,16 @@ describe('PollCard', () => {
     })
 
     expect(screen.getByText(/1 person/)).toBeInTheDocument()
+  })
+
+  it('counts claims, not participants, for a sign-up sheet', async () => {
+    await renderCard({
+      poll: makeSummary({ type: 'signup', participantCount: 2, claimCount: 5 }),
+      onDuplicate: vi.fn(),
+      onDelete: vi.fn(),
+    })
+
+    expect(screen.getByText(/5 sign-ups/)).toBeInTheDocument()
   })
 
   it('shows the finalized status', async () => {

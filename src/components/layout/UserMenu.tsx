@@ -1,5 +1,5 @@
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { LayoutDashboard, LogOut, Settings } from 'lucide-react'
+import { CalendarClock, LayoutDashboard, LogOut, Settings } from 'lucide-react'
 import { m } from '#/lib/i18n'
 import { authClient } from '#/server/auth/client'
 import type { ClientSession } from '#/server/auth/session.functions'
@@ -60,6 +60,12 @@ export function UserMenu({ session }: { session: ClientSession }) {
           <Link to="/dashboard">
             <LayoutDashboard aria-hidden="true" />
             {m.nav_dashboard()}
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/bookings">
+            <CalendarClock aria-hidden="true" />
+            {m.nav_booking_pages()}
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>

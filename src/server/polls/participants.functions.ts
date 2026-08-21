@@ -1,21 +1,32 @@
 import { createServerFn } from '@tanstack/react-start'
+import { env } from 'cloudflare:workers'
 import { eq } from 'drizzle-orm'
 import * as z from 'zod'
 import type { Db } from '#/server/db/client'
 import { getDb } from '#/server/db/client'
-import { polls } from '#/server/db/schema'
+import { participants, polls } from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
 import { getLocale } from '#/paraglide/runtime'
 import { sessionMiddleware } from '#/server/auth/middleware'
 import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { requireTurnstile } from '#/server/http/turnstile'
-import { notifyChanged, queueDigest } from '#/server/notifications/do-client'
+import {
+  claimViaRoom,
+  notifyChanged,
+  queueDigest,
+  unclaimViaRoom,
+} from '#/server/notifications/do-client'
+import { sendClaimConfirmation } from '#/server/notifications/claim-emails'
+import { requireParticipantAuth, requireSignupPoll } from './claim-auth'
 import { resolveVerifiedParticipantId } from './comment-auth'
+import type { ClaimIdentity } from './claims'
 import * as participantService from './participants'
 import {
   addCommentSchema,
   addParticipantSchema,
+  claimSchema,
   pollIdSchema,
+  unclaimSchema,
   updateParticipantSchema,
 } from './schemas'
 
@@ -36,6 +47,8 @@ export const SERVER_FN_MIDDLEWARE = {
   removeParticipant: SESSION_AND_VOTE_LIMIT,
   addComment: SESSION_AND_COMMENT_LIMIT,
   deleteComment: SESSION_ONLY,
+  claimSlot: SESSION_AND_VOTE_LIMIT,
+  unclaimSlot: SESSION_AND_VOTE_LIMIT,
 } as const
 
 /**
@@ -64,14 +77,30 @@ async function requireIsOwner(db: Db, pollId: string, userId: string | null): Pr
   return userId !== null && poll.ownerId === userId
 }
 
+/**
+ * `addParticipant`/`updateParticipant` write plain (non-claim) votes — for a `signup` poll those
+ * writes must only ever happen via `claimSlot`/`unclaimSlot` (capacity is only enforced there, via
+ * the DO), so both handlers below reject a signup poll before touching `participantService` at all.
+ */
+async function requireNotSignupPoll(db: Db, pollId: string): Promise<void> {
+  const poll = await db.query.polls.findFirst({
+    where: eq(polls.id, pollId),
+    columns: { type: true, deletedAt: true },
+  })
+  if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
+  if (poll.type === 'signup') throw new AppError('VALIDATION')
+}
+
 export const addParticipant = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.addParticipant)
   .validator(addParticipantSchema)
   .handler(async ({ data, context }) => {
+    const db = getDb()
+    await requireNotSignupPoll(db, data.pollId)
+
     const userId = context.session?.user.id ?? null
     if (!userId) await requireTurnstile(data.turnstileToken)
 
-    const db = getDb()
     const result = await participantService.addParticipant(db, data.pollId, {
       name: data.name,
       email: data.email,
@@ -91,6 +120,8 @@ export const updateParticipant = createServerFn({ method: 'POST' })
   .validator(updateParticipantSchema)
   .handler(async ({ data, context }) => {
     const db = getDb()
+    await requireNotSignupPoll(db, data.pollId)
+
     const userId = context.session?.user.id ?? null
     const isOwner = await requireIsOwner(db, data.pollId, userId)
 
@@ -165,4 +196,91 @@ export const deleteComment = createServerFn({ method: 'POST' })
 
     await participantService.deleteComment(db, data.pollId, data.commentId, { userId, isOwner })
     await notifyChanged(data.pollId, 'comment')
+  })
+
+export const claimSlot = createServerFn({ method: 'POST' })
+  .middleware(SERVER_FN_MIDDLEWARE.claimSlot)
+  .validator(claimSchema)
+  .handler(async ({ data, context }) => {
+    const db = getDb()
+    const poll = await requireSignupPoll(db, data.pollId)
+    const userId = context.session?.user.id ?? null
+
+    let identity: ClaimIdentity
+    if (data.participantId) {
+      await requireParticipantAuth(db, data.pollId, data.participantId, poll.ownerId, {
+        userId,
+        editToken: data.editToken,
+      })
+      identity = { participantId: data.participantId }
+    } else {
+      if (!data.name) throw new AppError('VALIDATION')
+      if (!userId) await requireTurnstile(data.turnstileToken)
+      identity = { name: data.name, email: data.email, userId, locale: getLocale() }
+    }
+
+    // `PollRoom#claim` runs the write inside the DO (serialised per poll) and broadcasts
+    // `poll.changed`/'vote' itself — no separate `notifyChanged` call is needed here.
+    const result = await claimViaRoom(data.pollId, data.optionId, identity)
+
+    // A re-claim of a slot already held is a no-op (`changed: false`) — nothing changed, so don't
+    // queue a digest entry or re-send the confirmation email for it.
+    if (result.changed) {
+      const claimant = await db.query.participants.findFirst({
+        where: eq(participants.id, result.participantId),
+        columns: { name: true },
+      })
+      await queueDigest(data.pollId, {
+        kind: 'vote',
+        name: claimant?.name ?? data.name ?? '',
+        at: new Date().toISOString(),
+      })
+
+      // Best-effort: `sendClaimConfirmation` never throws (it catches and logs internally), so a
+      // stalled mailer must never fail a claim that already succeeded.
+      await sendClaimConfirmation(env, {
+        db,
+        pollId: data.pollId,
+        participantId: result.participantId,
+      })
+    }
+
+    return {
+      participantId: result.participantId,
+      editToken: result.editToken,
+      claimedOptionIds: result.claimedOptionIds,
+    }
+  })
+
+export const unclaimSlot = createServerFn({ method: 'POST' })
+  .middleware(SERVER_FN_MIDDLEWARE.unclaimSlot)
+  .validator(unclaimSchema)
+  .handler(async ({ data, context }) => {
+    const db = getDb()
+    const poll = await requireSignupPoll(db, data.pollId)
+    const userId = context.session?.user.id ?? null
+    const isOwner = userId !== null && userId === poll.ownerId
+
+    await requireParticipantAuth(db, data.pollId, data.participantId, poll.ownerId, {
+      userId,
+      editToken: data.editToken,
+    })
+
+    // `PollRoom#unclaim` broadcasts `poll.changed`/'vote' itself; see the note in `claimSlot`. The
+    // owner may free up a spot on a closed sheet; anyone acting on their own claim still needs it
+    // open — `requireSignupPoll`/`removeClaim` enforce that via `allowClosed`.
+    const result = await unclaimViaRoom(data.pollId, data.optionId, data.participantId, {
+      allowClosed: isOwner,
+    })
+
+    // Best-effort, same as in `claimSlot`: resend the confirmation so the participant's email
+    // reflects their remaining claims. `sendClaimConfirmation` itself sends nothing once none are
+    // left, and never throws.
+    await sendClaimConfirmation(env, {
+      db,
+      pollId: data.pollId,
+      participantId: data.participantId,
+    })
+
+    return { remainingOptionIds: result.remainingOptionIds }
   })

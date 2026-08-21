@@ -13,6 +13,7 @@ import { ShareSheet } from '#/components/poll/ShareSheet'
 import { storeTimeZone, TimezoneSwitch, useViewerTimeZone } from '#/components/poll/TimezoneSwitch'
 import { VoteGrid } from '#/components/poll/VoteGrid'
 import { canVote, type ViewerState } from '#/components/poll/viewer'
+import { SlotBoard } from '#/components/signup/SlotBoard'
 import { Button } from '#/components/ui/button'
 import { clearEditToken, useEditToken } from '#/lib/edit-tokens'
 import { getLocale, m } from '#/lib/i18n'
@@ -46,6 +47,26 @@ function Legend() {
       ))}
     </ul>
   )
+}
+
+/** "3 options · 5 people", or — on a sign-up sheet — "3 slots · 5 sign-ups". */
+function metaOptions(poll: PollView): string {
+  const count = poll.options.length
+  if (poll.type === 'signup') {
+    return count === 1 ? m.signup_meta_slots_one() : m.signup_meta_slots_other({ count })
+  }
+  return count === 1 ? m.poll_meta_options_one() : m.poll_meta_options_other({ count })
+}
+
+function metaPeople(poll: PollView): string {
+  if (poll.type === 'signup') {
+    // A sign-up count is claims, not participants — one person can hold several slots (up to
+    // `signupMaxClaims`), and each of those is a sign-up worth counting.
+    const count = Object.values(poll.claims).reduce((sum, claim) => sum + claim.count, 0)
+    return count === 1 ? m.signup_meta_people_one() : m.signup_meta_people_other({ count })
+  }
+  const count = poll.participants.length
+  return count === 1 ? m.poll_meta_people_one() : m.poll_meta_people_other({ count })
 }
 
 function StatusBadge({ poll }: { poll: PollView }) {
@@ -133,11 +154,17 @@ export function PollPage({
     [poll.options, locale, timeZone],
   )
 
+  const isSignup = poll.type === 'signup'
   const open = canVote(poll)
   const editingParticipant = editingId
     ? poll.participants.find((participant) => participant.id === editingId)
     : undefined
-  const showAddRow = open && (editingParticipant !== undefined || yourParticipant === undefined)
+  const showAddRow =
+    !isSignup && open && (editingParticipant !== undefined || yourParticipant === undefined)
+  // Slots are only worth re-reading in another timezone when they carry a time of day; a whole-day
+  // slot and a text slot read the same everywhere.
+  const showTimezone =
+    poll.type === 'datetime' || (isSignup && poll.options.some((o) => o.kind === 'datetime'))
 
   const handleTimeZone = useCallback((zone: string) => {
     setChosenZone(zone)
@@ -191,13 +218,9 @@ export function PollPage({
             <p className="mt-1 text-sm text-muted-foreground">
               {m.poll_owner_by({ name: poll.owner.name })}
               {' · '}
-              {poll.options.length === 1
-                ? m.poll_meta_options_one()
-                : m.poll_meta_options_other({ count: poll.options.length })}
+              {metaOptions(poll)}
               {' · '}
-              {poll.participants.length === 1
-                ? m.poll_meta_people_one()
-                : m.poll_meta_people_other({ count: poll.participants.length })}
+              {metaPeople(poll)}
             </p>
           </div>
 
@@ -238,40 +261,56 @@ export function PollPage({
         </p>
       )}
 
-      <section className="flex flex-col gap-3">
-        <VoteGrid
+      {isSignup ? (
+        <SlotBoard
           poll={poll}
-          viewer={viewer}
-          onEditParticipant={setEditingId}
-          onRemoveParticipant={(participantId) => void handleRemove(participantId)}
-          editingParticipantId={editingId}
-          addRow={
-            showAddRow ? (
-              <AddYourselfRow
-                key={editingParticipant?.id ?? 'new'}
-                poll={poll}
-                session={session}
-                optionLabels={optionLabels}
-                existingParticipant={editingParticipant}
-                editToken={storedToken?.token ?? null}
-                onSaved={handleSaved}
-                onCancel={editingParticipant ? () => setEditingId(null) : undefined}
-              />
-            ) : null
-          }
+          session={session}
+          locale={locale}
+          timeZone={timeZone}
+          onChanged={onChanged}
         />
+      ) : (
+        <section className="flex flex-col gap-3">
+          <VoteGrid
+            poll={poll}
+            viewer={viewer}
+            onEditParticipant={setEditingId}
+            onRemoveParticipant={(participantId) => void handleRemove(participantId)}
+            editingParticipantId={editingId}
+            addRow={
+              showAddRow ? (
+                <AddYourselfRow
+                  key={editingParticipant?.id ?? 'new'}
+                  poll={poll}
+                  session={session}
+                  optionLabels={optionLabels}
+                  existingParticipant={editingParticipant}
+                  editToken={storedToken?.token ?? null}
+                  onSaved={handleSaved}
+                  onCancel={editingParticipant ? () => setEditingId(null) : undefined}
+                />
+              ) : null
+            }
+          />
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Legend />
-          {poll.type === 'datetime' && (
-            <TimezoneSwitch
-              value={timeZone}
-              onChange={handleTimeZone}
-              pollTimeZone={poll.timezone}
-            />
-          )}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Legend />
+            {showTimezone && (
+              <TimezoneSwitch
+                value={timeZone}
+                onChange={handleTimeZone}
+                pollTimeZone={poll.timezone}
+              />
+            )}
+          </div>
+        </section>
+      )}
+
+      {isSignup && showTimezone && (
+        <div className="flex justify-end">
+          <TimezoneSwitch value={timeZone} onChange={handleTimeZone} pollTimeZone={poll.timezone} />
         </div>
-      </section>
+      )}
 
       {poll.settings.allowComments && (
         <Comments
