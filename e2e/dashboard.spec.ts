@@ -1,4 +1,4 @@
-import { expect, signIn, test } from './fixtures'
+import { expect, signIn, test, waitForHydration } from './fixtures'
 
 test('lists a created poll, duplicates it as a "(copy)", and deletes it', async ({
   page,
@@ -6,6 +6,7 @@ test('lists a created poll, duplicates it as a "(copy)", and deletes it', async 
 }) => {
   await signIn(page, userWithPoll)
   await page.goto('/dashboard')
+  await waitForHydration(page)
 
   const original = page.locator('[data-testid="poll-card"]', { hasText: 'Seeded test poll' })
   await expect(original).toBeVisible()
@@ -15,6 +16,7 @@ test('lists a created poll, duplicates it as a "(copy)", and deletes it', async 
   await page.waitForURL(/\/p\/[^/?]+$/)
 
   await page.goto('/dashboard')
+  await waitForHydration(page)
   const copy = page.locator('[data-testid="poll-card"]', {
     hasText: 'Seeded test poll (copy)',
   })

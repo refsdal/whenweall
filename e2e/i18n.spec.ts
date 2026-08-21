@@ -1,7 +1,8 @@
-import { expect, test } from './fixtures'
+import { expect, test, waitForHydration } from './fixtures'
 
 test('switching locale updates the page and persists across a reload', async ({ page }) => {
   await page.goto('/')
+  await waitForHydration(page)
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Find a time everyone can make.')
