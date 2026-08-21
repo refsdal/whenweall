@@ -1,4 +1,4 @@
-import { useNavigate, useRouter } from '@tanstack/react-router'
+import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { LayoutDashboard, LogOut, Settings } from 'lucide-react'
 import { m } from '#/lib/i18n'
 import { authClient } from '#/server/auth/client'
@@ -24,11 +24,10 @@ export function UserMenu({ session }: { session: ClientSession }) {
   const navigate = useNavigate()
 
   if (!session) {
-    // `/login` arrives with task 16; until then this is a plain anchor.
     return (
-      <a href="/login" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}>
+      <Link to="/login" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}>
         {m.nav_sign_in()}
-      </a>
+      </Link>
     )
   }
 
@@ -57,7 +56,7 @@ export function UserMenu({ session }: { session: ClientSession }) {
           <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {/* `/dashboard` and `/settings` arrive with tasks 18-19; plain anchors until then. */}
+        {/* `/dashboard` arrives with task 18-19; plain anchor until then. */}
         <DropdownMenuItem asChild>
           <a href="/dashboard">
             <LayoutDashboard aria-hidden="true" />
@@ -65,10 +64,10 @@ export function UserMenu({ session }: { session: ClientSession }) {
           </a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <a href="/settings">
+          <Link to="/settings">
             <Settings aria-hidden="true" />
             {m.nav_settings()}
-          </a>
+          </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void handleSignOut()}>

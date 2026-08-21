@@ -8,6 +8,7 @@ import { Toaster } from '#/components/ui/sonner'
 import { getLocale } from '#/lib/i18n'
 import { themeInitScript } from '#/lib/theme'
 import { getSession } from '#/server/auth/session.functions'
+import { getPublicConfig } from '#/server/config.functions'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -29,7 +30,11 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
   }),
-  beforeLoad: async () => ({ session: await getSession(), locale: getLocale() }),
+  beforeLoad: async () => ({
+    session: await getSession(),
+    locale: getLocale(),
+    publicConfig: await getPublicConfig(),
+  }),
   shellComponent: RootDocument,
   component: RootLayout,
 })
