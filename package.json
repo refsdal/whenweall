@@ -19,6 +19,7 @@
     "test:unit": "vitest run --project unit",
     "test:workers": "vitest run --project workers",
     "test:e2e": "playwright test",
+    "screenshots": "SCREENSHOTS=1 playwright test --grep @screenshots",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply samla-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply samla-db --remote",
