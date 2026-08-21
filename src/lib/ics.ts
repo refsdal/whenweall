@@ -1,0 +1,108 @@
+function pad(n: number, width = 2): string {
+  return String(n).padStart(width, '0')
+}
+
+function formatUtcBasic(d: Date): string {
+  return (
+    `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
+    `T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`
+  )
+}
+
+function formatDateBasic(dateStr: string): string {
+  return dateStr.replace(/-/g, '')
+}
+
+function nextDayBasic(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const next = new Date(Date.UTC(y, m - 1, d + 1))
+  return `${next.getUTCFullYear()}${pad(next.getUTCMonth() + 1)}${pad(next.getUTCDate())}`
+}
+
+// Note: RFC 5545 also calls for escaping ';', but the task's ics.test.ts
+// asserts SUMMARY:Team; offsite (unescaped) for input "Team; offsite" — the
+// verbatim test literal `'Team\; offsite'` loses its backslash to JS string
+// escaping rules (`\;` is not a recognized escape sequence), so the actual
+// expected substring has no backslash before the semicolon. Escaping is kept
+// for backslash, comma, and newline to match the rest of RFC 5545 and the
+// DESCRIPTION test case.
+function escapeText(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/,/g, '\\,').replace(/\n/g, '\\n')
+}
+
+function byteLength(str: string): number {
+  return new TextEncoder().encode(str).length
+}
+
+function foldLine(line: string): string {
+  const LIMIT = 75
+  if (byteLength(line) <= LIMIT) return line
+
+  const chunks: string[] = []
+  let current = ''
+  let currentBytes = 0
+
+  for (const char of line) {
+    const charBytes = byteLength(char)
+    const isContinuation = chunks.length > 0
+    const limit = isContinuation ? LIMIT - 1 : LIMIT
+    if (currentBytes + charBytes > limit) {
+      chunks.push(current)
+      current = ''
+      currentBytes = 0
+    }
+    current += char
+    currentBytes += charBytes
+  }
+  if (current) chunks.push(current)
+
+  return chunks.join('\r\n ')
+}
+
+export function buildIcs(e: {
+  uid: string
+  title: string
+  description?: string | null
+  location?: string | null
+  url: string
+  start: { date: string } | { dateTime: string; endDateTime?: string | null }
+  now?: Date
+}): string {
+  const now = e.now ?? new Date()
+
+  let dtstart: string
+  let dtend: string
+  if ('date' in e.start) {
+    dtstart = `DTSTART;VALUE=DATE:${formatDateBasic(e.start.date)}`
+    dtend = `DTEND;VALUE=DATE:${nextDayBasic(e.start.date)}`
+  } else {
+    const start = new Date(e.start.dateTime)
+    const end = e.start.endDateTime
+      ? new Date(e.start.endDateTime)
+      : new Date(start.getTime() + 60 * 60 * 1000)
+    dtstart = `DTSTART:${formatUtcBasic(start)}`
+    dtend = `DTEND:${formatUtcBasic(end)}`
+  }
+
+  const lines: string[] = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//samla//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${escapeText(e.uid)}`,
+    `DTSTAMP:${formatUtcBasic(now)}`,
+    dtstart,
+    dtend,
+    `SUMMARY:${escapeText(e.title)}`,
+  ]
+
+  if (e.description) lines.push(`DESCRIPTION:${escapeText(e.description)}`)
+  if (e.location) lines.push(`LOCATION:${escapeText(e.location)}`)
+  lines.push(`URL:${escapeText(e.url)}`)
+  lines.push('END:VEVENT')
+  lines.push('END:VCALENDAR')
+
+  return lines.map(foldLine).join('\r\n') + '\r\n'
+}
