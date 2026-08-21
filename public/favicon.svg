@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1 1 22 22" width="32" height="32">
+  <!-- Same mark as public/logo.svg, tightened and with stronger side bars so it survives 16px. -->
+  <rect x="2.5" y="9" width="5" height="9" rx="2" fill="#8b8178" opacity=".5"/>
+  <rect x="16.5" y="9" width="5" height="9" rx="2" fill="#8b8178" opacity=".5"/>
+  <rect x="9.5" y="6" width="5" height="12" rx="2.2" fill="#f3562e"/>
+  <circle cx="12" cy="2.9" r="1.6" fill="#f3562e"/>
+</svg>

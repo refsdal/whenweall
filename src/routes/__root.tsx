@@ -36,7 +36,10 @@ export const Route = createRootRoute({
         media: '(prefers-color-scheme: dark)',
       },
     ],
-    links: [{ rel: 'stylesheet', href: appCss }],
+    links: [
+      { rel: 'stylesheet', href: appCss },
+      { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+    ],
   }),
   beforeLoad: async () => ({
     session: await getSession(),

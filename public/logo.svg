@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="samla">
+  <title>samla</title>
+  <!-- The samla mark: three option columns with the winning one filled in ember coral.
+       Mirrors src/components/layout/Logo.tsx — keep the two in sync. -->
+  <rect x="2.5" y="9" width="5" height="9" rx="2" fill="#8b8178" opacity=".35"/>
+  <rect x="16.5" y="9" width="5" height="9" rx="2" fill="#8b8178" opacity=".35"/>
+  <rect x="9.5" y="6" width="5" height="12" rx="2.2" fill="#f3562e"/>
+  <circle cx="12" cy="2.9" r="1.6" fill="#f3562e"/>
+</svg>
