@@ -13,7 +13,7 @@ import { newId } from '#/lib/ids'
 import { generateToken, hashToken, verifyToken } from '#/lib/tokens'
 import type { BookingForManage, BookingView } from './viewmodel'
 
-function pageRulesFrom(page: BookingPage): PageRules {
+export function pageRulesFrom(page: BookingPage): PageRules {
   return {
     timezone: page.timezone,
     slotDurationMin: page.slotDurationMin,
@@ -228,6 +228,15 @@ export async function getBookingForManage(
       timezone: page.timezone,
     },
   }
+}
+
+/** Records the Google Calendar event id created for a booking (best-effort sync — see
+ * `bookings.functions.ts`), or updates it after a reschedule re-creates the event. */
+export async function setGoogleEventId(db: Db, bookingId: string, eventId: string): Promise<void> {
+  await db
+    .update(bookings)
+    .set({ googleEventId: eventId, updatedAt: new Date().toISOString() })
+    .where(eq(bookings.id, bookingId))
 }
 
 export async function listBookings(

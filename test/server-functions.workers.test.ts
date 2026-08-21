@@ -11,6 +11,8 @@ import {
   SERVER_FN_MIDDLEWARE as PARTICIPANTS_MIDDLEWARE,
 } from '#/server/polls/participants.functions'
 import * as participantsFunctions from '#/server/polls/participants.functions'
+import * as pagesFunctions from '#/server/bookings/pages.functions'
+import * as bookingsFunctions from '#/server/bookings/bookings.functions'
 import { makePoll, makeUser } from './helpers'
 
 // Server functions pull in `cloudflare:workers`, better-auth, and rate-limit/turnstile modules
@@ -115,6 +117,76 @@ describe('participants.functions middleware wiring', () => {
     expect(M.claimSlot).toContain(rateLimitMiddleware('vote'))
     expect(M.unclaimSlot).toContain(sessionMiddleware)
     expect(M.unclaimSlot).toContain(rateLimitMiddleware('vote'))
+  })
+})
+
+describe('pages.functions module graph', () => {
+  it.each([
+    'createBookingPage',
+    'updateBookingPage',
+    'deleteBookingPage',
+    'listMyBookingPages',
+    'getBookingPage',
+    'setHandle',
+    'getGoogleCalendarStatus',
+    'disconnectGoogleCalendar',
+  ] as const)('exports a callable %s server function', (name) => {
+    expect(typeof pagesFunctions[name]).toBe('function')
+  })
+})
+
+describe('bookings.functions module graph', () => {
+  it.each([
+    'getPublicAvailability',
+    'bookSlot',
+    'getManagedBooking',
+    'cancelBooking',
+    'rescheduleBooking',
+    'listPageBookings',
+  ] as const)('exports a callable %s server function', (name) => {
+    expect(typeof bookingsFunctions[name]).toBe('function')
+  })
+})
+
+describe('pages.functions middleware wiring', () => {
+  const M = pagesFunctions.SERVER_FN_MIDDLEWARE
+
+  it.each([
+    'createBookingPage',
+    'updateBookingPage',
+    'deleteBookingPage',
+    'listMyBookingPages',
+    'getBookingPage',
+    'setHandle',
+    'getGoogleCalendarStatus',
+    'disconnectGoogleCalendar',
+  ] as const)('%s requires a session via requireSessionMiddleware', (name) => {
+    expect(M[name]).toContain(requireSessionMiddleware)
+  })
+})
+
+describe('bookings.functions middleware wiring', () => {
+  const M = bookingsFunctions.SERVER_FN_MIDDLEWARE
+
+  it('getPublicAvailability has no auth middleware — it is a public lookup', () => {
+    expect(M.getPublicAvailability).toHaveLength(0)
+  })
+
+  it('bookSlot requires a session lookup and is rate-limited on the book action', () => {
+    expect(M.bookSlot).toContain(sessionMiddleware)
+    expect(M.bookSlot).toContain(rateLimitMiddleware('book'))
+    expect(M.bookSlot).not.toContain(requireSessionMiddleware)
+  })
+
+  it('getManagedBooking, cancelBooking and rescheduleBooking only need the optional session lookup — the manage token is the other auth path', () => {
+    for (const name of ['getManagedBooking', 'cancelBooking', 'rescheduleBooking'] as const) {
+      expect(M[name]).toContain(sessionMiddleware)
+      expect(M[name]).not.toContain(requireSessionMiddleware)
+    }
+  })
+
+  it('listPageBookings requires a session (owner-only)', () => {
+    expect(M.listPageBookings).toContain(requireSessionMiddleware)
   })
 })
 

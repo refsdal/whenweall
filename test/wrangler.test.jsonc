@@ -19,9 +19,15 @@
     },
   ],
   "durable_objects": {
-    "bindings": [{ "name": "POLL_ROOM", "class_name": "PollRoom" }],
+    "bindings": [
+      { "name": "POLL_ROOM", "class_name": "PollRoom" },
+      { "name": "BOOKING_ROOM", "class_name": "BookingRoom" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PollRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PollRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["BookingRoom"] },
+  ],
   "ratelimits": [
     { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
   ],

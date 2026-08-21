@@ -209,6 +209,16 @@ export async function getPublicPage(
   }
 }
 
+/** `disconnectGoogleCalendar` server fn: turns off `googleSync` on every page this owner has —
+ * the linked Google account itself is unlinked separately (via settings/Better-Auth), so this is
+ * just the booking-side switch that stops calendar reads/writes for their pages. */
+export async function disconnectGoogleSync(db: Db, ownerId: string): Promise<void> {
+  await db
+    .update(bookingPages)
+    .set({ googleSync: false, updatedAt: new Date().toISOString() })
+    .where(eq(bookingPages.ownerId, ownerId))
+}
+
 export async function setUserHandle(db: Db, userId: string, handle: string): Promise<void> {
   try {
     await db.update(user).set({ handle }).where(eq(user.id, userId))
