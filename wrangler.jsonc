@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "samla",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "upload_source_maps": true,
+  "vars": {
+    "APP_URL": "http://localhost:3000",
+    "APP_ENV": "development",
+    "EMAIL_FROM": "samla <no-reply@samla.app>",
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "samla-db",
+      // Placeholder UUID so `wrangler dev` works locally without a real D1 database. Replace
+      // with the id printed by `wrangler d1 create samla-db` before deploying.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "drizzle",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "POLL_ROOM", "class_name": "PollRoom" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PollRoom"] }],
+  "send_email": [{ "name": "EMAIL" }],
+  "ratelimits": [
+    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
+  ],
+}

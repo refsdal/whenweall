@@ -1,0 +1,387 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/bricolage-grotesque';
+
+/*
+ * samla design tokens.
+ *
+ * Identity: warm paper, near-black warm ink, ember coral accent. Colours are authored in
+ * oklch so that lightness steps stay perceptually even between the light and dark themes.
+ *
+ * Roles
+ *   --primary          ember coral, the brand colour (marks, rings, highlights, "best" column)
+ *   --primary-strong   the AA-safe fill behind white button text (>= 4.5:1)
+ *   --primary-ink      ember tuned for text/links on the page background (>= 4.5:1)
+ *   --yes/--ifneedbe/--no  vote answers, each with a `-soft` surface and an `-ink` text pair
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+
+  --radius: 0.9rem;
+
+  --background: oklch(0.985 0.004 85);
+  --foreground: oklch(0.2 0.01 60);
+
+  --card: oklch(1 0.002 85);
+  --card-foreground: oklch(0.2 0.01 60);
+  --popover: oklch(1 0.002 85);
+  --popover-foreground: oklch(0.2 0.01 60);
+
+  --primary: oklch(0.66 0.2 35);
+  --primary-strong: oklch(0.57 0.19 33);
+  --primary-ink: oklch(0.52 0.18 33);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.955 0.008 75);
+  --secondary-foreground: oklch(0.3 0.015 55);
+
+  --muted: oklch(0.96 0.008 80);
+  --muted-foreground: oklch(0.5 0.02 60);
+
+  --accent-soft: oklch(0.95 0.04 35);
+  --accent: oklch(0.95 0.04 35);
+  --accent-foreground: oklch(0.4 0.13 33);
+
+  --destructive: oklch(0.55 0.2 27);
+  --destructive-foreground: oklch(1 0 0);
+
+  --border: oklch(0.9 0.012 70);
+  --input: oklch(0.9 0.012 70);
+  --ring: oklch(0.66 0.2 35);
+
+  --yes: oklch(0.72 0.17 150);
+  --yes-soft: oklch(0.93 0.07 150);
+  --yes-ink: oklch(0.42 0.12 152);
+  --ifneedbe: oklch(0.82 0.16 85);
+  --ifneedbe-soft: oklch(0.95 0.07 85);
+  --ifneedbe-ink: oklch(0.45 0.1 75);
+  --no: oklch(0.65 0.2 25);
+  --no-soft: oklch(0.945 0.035 25);
+  --no-ink: oklch(0.48 0.16 27);
+  --best: var(--primary);
+
+  --chart-1: oklch(0.66 0.2 35);
+  --chart-2: oklch(0.72 0.17 150);
+  --chart-3: oklch(0.82 0.16 85);
+  --chart-4: oklch(0.6 0.12 250);
+  --chart-5: oklch(0.62 0.15 300);
+
+  --shadow-color: 30 30% 12%;
+}
+
+/*
+ * Dark theme. Applied by the `.dark` class that the inline theme script puts on <html>
+ * (so Tailwind's `dark:` variant works), with a prefers-color-scheme fallback for the
+ * no-JS case. Keep the two blocks in sync.
+ */
+.dark {
+  color-scheme: dark;
+
+  --background: oklch(0.17 0.01 60);
+  --foreground: oklch(0.95 0.005 85);
+
+  --card: oklch(0.215 0.012 58);
+  --card-foreground: oklch(0.95 0.005 85);
+  --popover: oklch(0.23 0.012 58);
+  --popover-foreground: oklch(0.95 0.005 85);
+
+  --primary: oklch(0.72 0.19 38);
+  --primary-strong: oklch(0.58 0.2 34);
+  --primary-ink: oklch(0.76 0.16 38);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.27 0.014 58);
+  --secondary-foreground: oklch(0.93 0.005 85);
+
+  --muted: oklch(0.25 0.012 58);
+  --muted-foreground: oklch(0.72 0.015 80);
+
+  --accent-soft: oklch(0.3 0.06 35);
+  --accent: oklch(0.3 0.06 35);
+  --accent-foreground: oklch(0.92 0.05 45);
+
+  --destructive: oklch(0.58 0.21 27);
+  --destructive-foreground: oklch(1 0 0);
+
+  --border: oklch(0.32 0.012 58);
+  --input: oklch(0.34 0.012 58);
+  --ring: oklch(0.72 0.19 38);
+
+  --yes: oklch(0.75 0.16 152);
+  --yes-soft: oklch(0.32 0.07 152);
+  --yes-ink: oklch(0.85 0.14 152);
+  --ifneedbe: oklch(0.84 0.15 85);
+  --ifneedbe-soft: oklch(0.33 0.06 80);
+  --ifneedbe-ink: oklch(0.88 0.12 85);
+  --no: oklch(0.68 0.19 25);
+  --no-soft: oklch(0.32 0.07 25);
+  --no-ink: oklch(0.83 0.11 25);
+
+  --shadow-color: 25 40% 2%;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not(.light):not(.dark) {
+    color-scheme: dark;
+
+    --background: oklch(0.17 0.01 60);
+    --foreground: oklch(0.95 0.005 85);
+
+    --card: oklch(0.215 0.012 58);
+    --card-foreground: oklch(0.95 0.005 85);
+    --popover: oklch(0.23 0.012 58);
+    --popover-foreground: oklch(0.95 0.005 85);
+
+    --primary: oklch(0.72 0.19 38);
+    --primary-strong: oklch(0.58 0.2 34);
+    --primary-ink: oklch(0.76 0.16 38);
+    --primary-foreground: oklch(1 0 0);
+
+    --secondary: oklch(0.27 0.014 58);
+    --secondary-foreground: oklch(0.93 0.005 85);
+
+    --muted: oklch(0.25 0.012 58);
+    --muted-foreground: oklch(0.72 0.015 80);
+
+    --accent-soft: oklch(0.3 0.06 35);
+    --accent: oklch(0.3 0.06 35);
+    --accent-foreground: oklch(0.92 0.05 45);
+
+    --destructive: oklch(0.58 0.21 27);
+    --destructive-foreground: oklch(1 0 0);
+
+    --border: oklch(0.32 0.012 58);
+    --input: oklch(0.34 0.012 58);
+    --ring: oklch(0.72 0.19 38);
+
+    --yes: oklch(0.75 0.16 152);
+    --yes-soft: oklch(0.32 0.07 152);
+    --yes-ink: oklch(0.85 0.14 152);
+    --ifneedbe: oklch(0.84 0.15 85);
+    --ifneedbe-soft: oklch(0.33 0.06 80);
+    --ifneedbe-ink: oklch(0.88 0.12 85);
+    --no: oklch(0.68 0.19 25);
+    --no-soft: oklch(0.32 0.07 25);
+    --no-ink: oklch(0.83 0.11 25);
+
+    --shadow-color: 25 40% 2%;
+  }
+}
+
+@theme inline {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display:
+    'Bricolage Grotesque Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-yes: var(--yes);
+  --color-yes-soft: var(--yes-soft);
+  --color-yes-ink: var(--yes-ink);
+  --color-ifneedbe: var(--ifneedbe);
+  --color-ifneedbe-soft: var(--ifneedbe-soft);
+  --color-ifneedbe-ink: var(--ifneedbe-ink);
+  --color-no: var(--no);
+  --color-no-soft: var(--no-soft);
+  --color-no-ink: var(--no-ink);
+  --color-best: var(--best);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --animate-cell-in: samla-cell-in 9s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
+  --animate-pop-in: samla-pop-in 0.24s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+  --animate-best-pulse: samla-best-pulse 9s ease-in-out infinite;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings:
+      'cv05' 1,
+      'ss03' 1;
+  }
+
+  ::selection {
+    background-color: var(--accent-soft);
+    color: var(--accent-foreground);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/** Display type: the Bricolage wordmark voice — tight, confident, slightly optical. */
+@utility display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+}
+
+/** A raised paper surface: card fill, hairline border, soft warm shadow. */
+@utility surface {
+  background-color: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow:
+    0 1px 2px -1px hsl(var(--shadow-color) / 0.08),
+    0 8px 24px -12px hsl(var(--shadow-color) / 0.14);
+}
+
+/** Explicit focus ring for elements that suppress the default outline. */
+@utility focus-ring {
+  outline: none;
+
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/** Warm ember glow used behind the hero and under the primary CTA on hover. */
+@utility ember-glow {
+  box-shadow: 0 10px 30px -12px color-mix(in oklab, var(--primary) 65%, transparent);
+}
+
+@keyframes samla-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.7) rotate(-25deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+/*
+ * The landing illustration: each cell starts blank and "receives a vote" — a small pop into
+ * its own colour — then holds before the loop restarts. Delays are staggered per cell so the
+ * grid fills in the way a real poll does.
+ */
+@keyframes samla-cell-in {
+  0%,
+  6% {
+    background-color: var(--muted);
+    transform: scale(0.92);
+  }
+  12% {
+    transform: scale(1.06);
+  }
+  18%,
+  92% {
+    background-color: var(--cell-bg, var(--muted));
+    transform: scale(1);
+  }
+  100% {
+    background-color: var(--muted);
+    transform: scale(0.92);
+  }
+}
+
+@keyframes samla-best-pulse {
+  0%,
+  40% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  55%,
+  92% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Hold the illustration on its resolved state instead of flashing through the loop. */
+  [data-mock-cell] {
+    animation: none !important;
+    background-color: var(--cell-bg, var(--muted)) !important;
+    transform: none !important;
+  }
+
+  [data-mock-best] {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+@keyframes samla-cell-mark {
+  0%,
+  10% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  18%,
+  92% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
