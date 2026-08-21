@@ -22,6 +22,8 @@ import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
+import { Route as BookHandleSlugRouteImport } from './routes/book/$handle/$slug'
+import { Route as BookingIdIndexRouteImport } from './routes/booking/$id/index'
 import { Route as BookingIdCalendarDoticsRouteImport } from './routes/booking/$id/calendar[.]ics'
 import { Route as BookingsIdIndexRouteImport } from './routes/bookings/$id/index'
 import { Route as BookingsIdEditRouteImport } from './routes/bookings/$id/edit'
@@ -97,6 +99,16 @@ const ApiTestSeedRoute = ApiTestSeedRouteImport.update({
   path: '/api/test/seed',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BookHandleSlugRoute = BookHandleSlugRouteImport.update({
+  id: '/book/$handle/$slug',
+  path: '/book/$handle/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BookingIdIndexRoute = BookingIdIndexRouteImport.update({
+  id: '/booking/$id/',
+  path: '/booking/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BookingIdCalendarDoticsRoute = BookingIdCalendarDoticsRouteImport.update({
   id: '/booking/$id/calendar.ics',
   path: '/booking/$id/calendar.ics',
@@ -157,11 +169,13 @@ export interface FileRoutesByFullPath {
   '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
+  '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
+  '/booking/$id/': typeof BookingIdIndexRoute
   '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
@@ -181,11 +195,13 @@ export interface FileRoutesByTo {
   '/bookings': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
+  '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
+  '/booking/$id': typeof BookingIdIndexRoute
   '/bookings/$id': typeof BookingsIdIndexRoute
   '/p/$id': typeof PIdIndexRoute
   '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
@@ -206,11 +222,13 @@ export interface FileRoutesById {
   '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
+  '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
+  '/booking/$id/': typeof BookingIdIndexRoute
   '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
@@ -232,11 +250,13 @@ export interface FileRouteTypes {
     | '/bookings/'
     | '/api/auth/$'
     | '/api/test/seed'
+    | '/book/$handle/$slug'
     | '/booking/$id/calendar.ics'
     | '/bookings/$id/edit'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
     | '/p/$id/roster.csv'
+    | '/booking/$id/'
     | '/bookings/$id/'
     | '/p/$id/'
     | '/api/bookings/$pageId/ws'
@@ -256,11 +276,13 @@ export interface FileRouteTypes {
     | '/bookings'
     | '/api/auth/$'
     | '/api/test/seed'
+    | '/book/$handle/$slug'
     | '/booking/$id/calendar.ics'
     | '/bookings/$id/edit'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
     | '/p/$id/roster.csv'
+    | '/booking/$id'
     | '/bookings/$id'
     | '/p/$id'
     | '/api/bookings/$pageId/ws'
@@ -280,11 +302,13 @@ export interface FileRouteTypes {
     | '/bookings/'
     | '/api/auth/$'
     | '/api/test/seed'
+    | '/book/$handle/$slug'
     | '/booking/$id/calendar.ics'
     | '/bookings/$id/edit'
     | '/p/$id/calendar.ics'
     | '/p/$id/edit'
     | '/p/$id/roster.csv'
+    | '/booking/$id/'
     | '/bookings/$id/'
     | '/p/$id/'
     | '/api/bookings/$pageId/ws'
@@ -305,11 +329,13 @@ export interface RootRouteChildren {
   BookingsIndexRoute: typeof BookingsIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiTestSeedRoute: typeof ApiTestSeedRoute
+  BookHandleSlugRoute: typeof BookHandleSlugRoute
   BookingIdCalendarDoticsRoute: typeof BookingIdCalendarDoticsRoute
   BookingsIdEditRoute: typeof BookingsIdEditRoute
   PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
   PIdEditRoute: typeof PIdEditRoute
   PIdRosterDotcsvRoute: typeof PIdRosterDotcsvRoute
+  BookingIdIndexRoute: typeof BookingIdIndexRoute
   BookingsIdIndexRoute: typeof BookingsIdIndexRoute
   PIdIndexRoute: typeof PIdIndexRoute
   ApiBookingsPageIdWsRoute: typeof ApiBookingsPageIdWsRoute
@@ -409,6 +435,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTestSeedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/book/$handle/$slug': {
+      id: '/book/$handle/$slug'
+      path: '/book/$handle/$slug'
+      fullPath: '/book/$handle/$slug'
+      preLoaderRoute: typeof BookHandleSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/booking/$id/': {
+      id: '/booking/$id/'
+      path: '/booking/$id'
+      fullPath: '/booking/$id/'
+      preLoaderRoute: typeof BookingIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/booking/$id/calendar.ics': {
       id: '/booking/$id/calendar.ics'
       path: '/booking/$id/calendar.ics'
@@ -489,11 +529,13 @@ const rootRouteChildren: RootRouteChildren = {
   BookingsIndexRoute: BookingsIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiTestSeedRoute: ApiTestSeedRoute,
+  BookHandleSlugRoute: BookHandleSlugRoute,
   BookingIdCalendarDoticsRoute: BookingIdCalendarDoticsRoute,
   BookingsIdEditRoute: BookingsIdEditRoute,
   PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
   PIdEditRoute: PIdEditRoute,
   PIdRosterDotcsvRoute: PIdRosterDotcsvRoute,
+  BookingIdIndexRoute: BookingIdIndexRoute,
   BookingsIdIndexRoute: BookingsIdIndexRoute,
   PIdIndexRoute: PIdIndexRoute,
   ApiBookingsPageIdWsRoute: ApiBookingsPageIdWsRoute,

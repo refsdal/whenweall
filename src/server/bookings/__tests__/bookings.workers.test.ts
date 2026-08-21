@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { AppError } from '#/lib/errors'
 import { localToUtcIso } from '#/lib/time'
-import { updatePage } from '#/server/bookings/pages'
+import { setUserHandle, updatePage } from '#/server/bookings/pages'
 import {
   bookedIntervals,
   cancelBooking,
@@ -315,6 +315,46 @@ describe('getBookingForManage', () => {
     await expect(getBookingForManage(db, 'missing', { ownerId })).rejects.toMatchObject(
       new AppError('NOT_FOUND'),
     )
+  })
+
+  it('carries the page handle, slug, duration and organiser name so the manage page can reschedule', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db, { name: 'Ada' })
+    await setUserHandle(db, ownerId, `ada-${Math.random().toString(36).slice(2, 8)}`)
+    const { id: pageId } = await makeBookingPage(db, ownerId, { slug: 'chat' })
+    const { bookingId, manageToken } = await createBooking(
+      db,
+      pageId,
+      { startAt: TUE_9AM, name: 'Bob', email: 'bob@example.com', timezone: 'Europe/Oslo' },
+      [],
+      NOW,
+    )
+
+    const view = await getBookingForManage(db, bookingId, { token: manageToken })
+
+    expect(view.page.slug).toBe('chat')
+    expect(view.page.handle).toMatch(/^ada-/)
+    expect(view.page.slotDurationMin).toBe(30)
+    expect(view.page.owner).toEqual({ name: 'Ada' })
+    // Never the owner's internal id — a token-bearing visitor gets this exact shape.
+    expect(view.page).not.toHaveProperty('ownerId')
+  })
+
+  it('reports a null handle when the organiser has not picked one yet', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { bookingId } = await createBooking(
+      db,
+      pageId,
+      { startAt: TUE_9AM, name: 'Bob', email: 'bob@example.com', timezone: 'Europe/Oslo' },
+      [],
+      NOW,
+    )
+
+    const view = await getBookingForManage(db, bookingId, { ownerId })
+
+    expect(view.page.handle).toBeNull()
   })
 })
 

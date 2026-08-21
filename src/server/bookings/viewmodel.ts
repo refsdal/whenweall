@@ -76,9 +76,14 @@ export type BookingView = {
 export type BookingForManage = BookingView & {
   page: {
     id: string
+    /** The organiser's public handle, or null while they haven't picked one — without it there
+     * is no `/book/<handle>/<slug>` to reschedule against or to book again from. */
+    handle: string | null
     slug: string
     title: string
     location: string | null
     timezone: string
+    slotDurationMin: number
+    owner: { name: string }
   }
 }

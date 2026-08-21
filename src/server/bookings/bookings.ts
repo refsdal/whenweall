@@ -3,6 +3,7 @@ import type { Db } from '#/server/db/client'
 import {
   bookingPages,
   bookings,
+  user,
   type Booking,
   type BookingPage,
   type CancelledBy,
@@ -218,14 +219,19 @@ export async function getBookingForManage(
     throw new AppError('FORBIDDEN')
   }
 
+  const owner = await db.query.user.findFirst({ where: eq(user.id, page.ownerId) })
+
   return {
     ...toBookingView(booking),
     page: {
       id: page.id,
+      handle: owner?.handle ?? null,
       slug: page.slug,
       title: page.title,
       location: page.location,
       timezone: page.timezone,
+      slotDurationMin: page.slotDurationMin,
+      owner: { name: owner?.name ?? '' },
     },
   }
 }
