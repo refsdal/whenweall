@@ -50,6 +50,26 @@ export async function makePoll(
   return createPoll(db, ownerId, input)
 }
 
+export async function makeSignupPoll(
+  db: Db,
+  ownerId: string,
+  opts: { capacities: (number | null)[]; maxClaims?: number; requireEmail?: boolean },
+): Promise<{ id: string }> {
+  const input: CreatePollInput = {
+    type: 'signup',
+    title: 'Sign-up sheet',
+    timezone: 'Europe/Oslo',
+    options: opts.capacities.map((capacity, i) => ({
+      kind: 'text',
+      label: `Slot ${i + 1}`,
+      capacity,
+    })),
+    signupMaxClaims: opts.maxClaims,
+    requireParticipantEmail: opts.requireEmail,
+  }
+  return createPoll(db, ownerId, input)
+}
+
 export async function makeParticipant(
   db: Db,
   pollId: string,
