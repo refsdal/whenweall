@@ -14,12 +14,12 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
 
   const title = `E2E poll ${Date.now()}`
   await page.locator('#creator-title').fill(title)
-  await page.getByRole('button', { name: 'Next' }).click()
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
 
   await pickTwoCalendarDays(page)
   await expect(page.getByText('2 options')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Next' }).click()
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
   await page.getByRole('button', { name: 'Create poll' }).click()
 
   await page.waitForURL(/\/p\/[^/?]+/)
@@ -43,7 +43,7 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
     await expect(guestPage.getByTestId('vote-grid')).toBeVisible()
 
     const guestName = `Guest ${Date.now()}`
-    await guestPage.getByLabel('Your name').fill(guestName)
+    await guestPage.getByTestId('add-yourself-row').getByLabel('Your name').fill(guestName)
     const guestCells = guestPage.locator('[data-testid="add-yourself-row"] button[data-answer]')
     await expect(guestCells).toHaveCount(2)
     await guestCells.nth(0).click()

@@ -6,7 +6,7 @@ test('switching locale updates the page and persists across a reload', async ({ 
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Find a time everyone can make.')
 
-  const switcher = page.getByRole('group', { name: 'Language' })
+  const switcher = page.getByRole('navigation').getByRole('group', { name: 'Language' })
   await switcher.getByRole('button', { name: 'NO' }).click()
 
   // `setLocale` sets the `samla_locale` cookie and reloads the page.
