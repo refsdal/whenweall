@@ -65,6 +65,14 @@ export function SettingsStep({
   const [enabled, setEnabled] = useState(draft.deadlineAt !== null)
   const [date, setDate] = useState(stored?.date ?? defaultDeadlineDate(draft))
   const [time, setTime] = useState(stored?.time ?? '12:00')
+  const [maxClaimsText, setMaxClaimsText] = useState(String(draft.signupMaxClaims))
+  const [syncedMaxClaims, setSyncedMaxClaims] = useState(draft.signupMaxClaims)
+  // Adjusted during render (not an effect) so the field's own draft text stays in sync the moment
+  // `draft.signupMaxClaims` changes from outside — same pattern as `CapacityField`.
+  if (draft.signupMaxClaims !== syncedMaxClaims) {
+    setSyncedMaxClaims(draft.signupMaxClaims)
+    setMaxClaimsText(String(draft.signupMaxClaims))
+  }
 
   const count = countOptions(draft)
   const { slots, spots } = signupCapacitySummary(draft)
@@ -173,14 +181,16 @@ export function SettingsStep({
             min={1}
             max={100}
             step={1}
-            value={draft.signupMaxClaims}
+            value={maxClaimsText}
             className="ml-7 h-9 w-24 tabular-nums"
             onChange={(e) => {
+              setMaxClaimsText(e.target.value)
               const parsed = Number(e.target.value)
               if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) {
                 setField('signupMaxClaims', parsed)
               }
             }}
+            onBlur={() => setMaxClaimsText(String(draft.signupMaxClaims))}
           />
         </section>
       )}

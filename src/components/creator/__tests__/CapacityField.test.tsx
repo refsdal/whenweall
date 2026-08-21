@@ -69,6 +69,31 @@ describe('CapacityField', () => {
     expect(onChange).toHaveBeenCalledWith(1)
   })
 
+  it('reverts the visible text to the last committed value when blurred empty', () => {
+    const onChange = vi.fn()
+    render(<CapacityField value={5} onChange={onChange} />)
+    const input = screen.getByRole('spinbutton')
+
+    fireEvent.change(input, { target: { value: '' } })
+    expect(input).toHaveValue(null)
+    fireEvent.blur(input)
+
+    expect(input).toHaveValue(5)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('reverts the visible text to the last committed value when blurred with an out-of-range number', () => {
+    const onChange = vi.fn()
+    render(<CapacityField value={3} onChange={onChange} />)
+    const input = screen.getByRole('spinbutton')
+
+    fireEvent.change(input, { target: { value: '20000' } })
+    fireEvent.blur(input)
+
+    expect(input).toHaveValue(3)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('associates the input and switch with their labels', () => {
     render(<CapacityField value={2} onChange={vi.fn()} id="my-capacity" />)
 

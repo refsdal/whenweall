@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { optionPlainLabel } from '#/components/poll/OptionHeader'
 import type { ClaimBlockedReason } from '#/components/signup/ClaimButton'
 import { IdentitySheet } from '#/components/signup/IdentitySheet'
 import { SlotCard } from '#/components/signup/SlotCard'
@@ -90,6 +91,11 @@ export function SlotBoard({
   }
 
   const claimedCount = viewer.claimedOptionIds.length
+  const identityOption =
+    identityFor !== null ? poll.options.find((option) => option.id === identityFor) : undefined
+  const identitySlotLabel = identityOption
+    ? optionPlainLabel(identityOption, locale, timeZone)
+    : undefined
 
   return (
     <section className="flex flex-col gap-3">
@@ -150,6 +156,7 @@ export function SlotBoard({
         requireEmail={poll.settings.requireParticipantEmail}
         needsCaptcha={session === null}
         defaultName={session?.user.name ?? ''}
+        slotLabel={identitySlotLabel}
         submitting={submitting}
         onSubmit={submitIdentity}
       />

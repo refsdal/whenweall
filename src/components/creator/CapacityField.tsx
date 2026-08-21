@@ -54,6 +54,13 @@ export function CapacityField({
     onChange(parsed)
   }
 
+  // An invalid or empty draft (cleared the field, typed something out of range) never reached
+  // `onChange`, so `text` can be left showing something that was never actually committed. Blur
+  // is the natural moment to reconcile the visible text back to the last real value.
+  function handleBlur() {
+    setText(value === null ? '' : String(value))
+  }
+
   function handleUnlimitedChange(next: boolean) {
     onChange(next ? null : lastValue)
   }
@@ -79,6 +86,7 @@ export function CapacityField({
           aria-label={size === 'sm' ? m.creator_capacity_label() : undefined}
           aria-describedby={hintId}
           onChange={handleChange}
+          onBlur={handleBlur}
           className={cn(
             'tabular-nums',
             size === 'sm' ? 'h-8 w-16 px-2 text-sm' : 'h-9 w-20',
