@@ -6,17 +6,21 @@ export type SeededUser = {
   password: string
   name: string
   pollId?: string
+  pageId?: string
+  handle?: string
+  slug?: string
 }
 
 async function seed(
   request: APIRequestContext,
-  opts: { name?: string; withPoll?: boolean; withSignup?: boolean } = {},
+  opts: { name?: string; withPoll?: boolean; withSignup?: boolean; withBookingPage?: boolean } = {},
 ): Promise<SeededUser> {
   const response = await request.post('/api/test/seed', {
     data: {
       name: opts.name ?? 'E2E User',
       withPoll: opts.withPoll ?? false,
       withSignup: opts.withSignup ?? false,
+      withBookingPage: opts.withBookingPage ?? false,
     },
   })
   if (!response.ok()) {
@@ -34,6 +38,12 @@ type Fixtures = {
   userWithPoll: SeededUser
   /** A verified user that already owns one seeded sign-up sheet (Slot 1 capacity 1, Slot 2 unlimited). */
   userWithSignup: SeededUser
+  /**
+   * A verified user with a handle and one seeded booking page: weekday 09:00–17:00
+   * Europe/Oslo, 30-minute slots, slug `intro-call` — see `sampleBookingPage` in
+   * `src/routes/api/test/seed.ts`.
+   */
+  userWithBookingPage: SeededUser
 }
 
 /**
@@ -53,6 +63,9 @@ export const test = base.extend<Fixtures>({
   },
   userWithSignup: async ({ request }, provide) => {
     await provide(await seed(request, { withSignup: true }))
+  },
+  userWithBookingPage: async ({ request }, provide) => {
+    await provide(await seed(request, { withBookingPage: true }))
   },
 })
 

@@ -104,6 +104,29 @@ test('dashboard', { tag: '@screenshots' }, async ({ page, userWithPoll }) => {
   await shoot(page, 'dashboard')
 })
 
+test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage }) => {
+  test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
+  const handle = userWithBookingPage.handle!
+  const slug = userWithBookingPage.slug!
+
+  await page.goto(`/book/${handle}/${slug}`)
+  await expect(page.getByTestId('booking-page')).toBeVisible()
+
+  // Pick the first open day so the shot shows a real list of slot chips, not the empty state.
+  const calendar = page.locator('[data-slot="calendar"]')
+  const enabledDays = calendar.locator('button[data-day]:not([disabled])')
+  for (let guard = 0; guard < 6 && (await enabledDays.count()) < 1; guard++) {
+    await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
+  }
+  await expect(async () => {
+    expect(await enabledDays.count()).toBeGreaterThanOrEqual(1)
+  }).toPass({ timeout: 5_000 })
+  await enabledDays.first().click()
+  await expect(page.getByTestId('slot-list')).toBeVisible()
+
+  await shoot(page, 'booking')
+})
+
 test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithSignup }) => {
   test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
   const pollId = userWithSignup.pollId!
