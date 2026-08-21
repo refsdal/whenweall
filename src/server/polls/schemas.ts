@@ -15,22 +15,27 @@ export const pollIdSchema = z.string().regex(/^[0-9A-Za-z]{12}$/)
 
 export const answerSchema = z.enum(['yes', 'ifneedbe', 'no'])
 
+export const capacitySchema = z.number().int().min(1).max(10000).nullable()
+
 export const optionInputSchema = z.discriminatedUnion('kind', [
   z.object({
     id: z.string().optional(),
     kind: z.literal('date'),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    capacity: capacitySchema.optional(),
   }),
   z.object({
     id: z.string().optional(),
     kind: z.literal('datetime'),
     startAt: z.iso.datetime(),
     endAt: z.iso.datetime().nullable().optional(),
+    capacity: capacitySchema.optional(),
   }),
   z.object({
     id: z.string().optional(),
     kind: z.literal('text'),
     label: z.string().trim().min(1).max(LIMITS.optionLabel),
+    capacity: capacitySchema.optional(),
   }),
 ])
 
@@ -48,13 +53,14 @@ export const pollSettingsSchema = z.object({
  * are both optional, but must agree when both are present).
  */
 function refinePollOptions(
-  type: 'datetime' | 'options' | undefined,
+  type: 'datetime' | 'options' | 'signup' | undefined,
   options: OptionInput[] | undefined,
   ctx: z.RefinementCtx,
 ): void {
   if (!options) return
 
   const seenKeys = new Set<string>()
+  let signupKind: OptionInput['kind'] | undefined
 
   options.forEach((option, index) => {
     if (type === 'datetime' && option.kind !== 'date' && option.kind !== 'datetime') {
@@ -69,6 +75,29 @@ function refinePollOptions(
         code: 'custom',
         message: 'Options for an options poll must be text',
         path: ['options', index],
+      })
+    }
+    if (type === 'signup') {
+      if (signupKind === undefined) {
+        signupKind = option.kind
+      } else if (option.kind !== signupKind) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Sign-up sheet options must all be the same kind',
+          path: ['options', index],
+        })
+      }
+    }
+    if (
+      type !== undefined &&
+      type !== 'signup' &&
+      option.capacity !== undefined &&
+      option.capacity !== null
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Capacity is only allowed on sign-up sheet options',
+        path: ['options', index, 'capacity'],
       })
     }
 
@@ -103,18 +132,26 @@ function refinePollOptions(
 
 const createPollBase = z
   .object({
-    type: z.enum(['datetime', 'options']),
+    type: z.enum(['datetime', 'options', 'signup']),
     title: z.string().trim().min(1).max(LIMITS.title),
     description: z.string().trim().max(LIMITS.description).optional(),
     location: z.string().trim().max(LIMITS.location).optional(),
     timezone: z.string().min(1).max(64),
     deadlineAt: z.iso.datetime().nullable().optional(),
     options: z.array(optionInputSchema).min(1).max(LIMITS.options),
+    signupMaxClaims: z.number().int().min(1).max(100).optional(),
   })
   .extend(pollSettingsSchema.partial().shape)
 
 export const createPollSchema = createPollBase.superRefine((data, ctx) => {
   refinePollOptions(data.type, data.options, ctx)
+  if (data.type !== 'signup' && data.signupMaxClaims !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'signupMaxClaims is only allowed for sign-up sheets',
+      path: ['signupMaxClaims'],
+    })
+  }
 })
 
 export type CreatePollInput = z.infer<typeof createPollSchema>
@@ -167,3 +204,24 @@ export const notificationPrefsSchema = z.object({
 })
 
 export type NotificationPrefsInput = z.infer<typeof notificationPrefsSchema>
+
+export const claimSchema = z.object({
+  pollId: pollIdSchema,
+  optionId: z.string(),
+  participantId: z.string().optional(),
+  editToken: z.string().optional(),
+  name: z.string().trim().min(1).max(LIMITS.name).optional(),
+  email: z.union([z.literal(''), z.email().max(254)]).optional(),
+  turnstileToken: z.string().optional(),
+})
+
+export type ClaimInput = z.infer<typeof claimSchema>
+
+export const unclaimSchema = z.object({
+  pollId: pollIdSchema,
+  optionId: z.string(),
+  participantId: z.string(),
+  editToken: z.string().optional(),
+})
+
+export type UnclaimInput = z.infer<typeof unclaimSchema>

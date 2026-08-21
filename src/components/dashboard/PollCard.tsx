@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { CalendarDays, Copy, ListChecks, Trash2, Users, type LucideIcon } from 'lucide-react'
+import {
+  CalendarDays,
+  ClipboardList,
+  Copy,
+  ListChecks,
+  Trash2,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 import { DeadlineCountdown } from '#/components/poll/DeadlineCountdown'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
@@ -20,6 +28,7 @@ import type { PollSummary } from '#/server/polls/viewmodel'
 const TYPE_ICON: Record<PollType, LucideIcon> = {
   datetime: CalendarDays,
   options: ListChecks,
+  signup: ClipboardList,
 }
 
 /** Status pill colours borrow the vote-answer palette: open reads as "go", closed as "pending",

@@ -414,7 +414,12 @@ function pollView(overrides: Partial<PollView> = {}): PollView {
     deadlineAt: '2026-06-14T10:00:00.000Z',
     finalizedOptionId: null,
     createdAt: '2026-06-01T00:00:00.000Z',
-    settings: { requireParticipantEmail: true, allowComments: false, allowIfNeedBe: false },
+    settings: {
+      requireParticipantEmail: true,
+      allowComments: false,
+      allowIfNeedBe: false,
+      signupMaxClaims: 1,
+    },
     notifications: null,
     owner: { id: 'user1', name: 'Ada' },
     isOwner: true,
@@ -423,6 +428,7 @@ function pollView(overrides: Partial<PollView> = {}): PollView {
     comments: [],
     scores: {},
     bestOptionId: null,
+    claims: {},
     ...overrides,
   }
 }
@@ -438,6 +444,7 @@ describe('draftFromPoll', () => {
           startAt: '2026-06-15',
           endAt: null,
           label: null,
+          capacity: null,
         },
         {
           id: 'opt-slot',
@@ -447,6 +454,7 @@ describe('draftFromPoll', () => {
           startAt: '2026-06-16T07:00:00.000Z',
           endAt: '2026-06-16T08:30:00.000Z',
           label: null,
+          capacity: null,
         },
       ],
     })
@@ -483,8 +491,24 @@ describe('draftFromPoll', () => {
     const poll = pollView({
       type: 'options',
       options: [
-        { id: 'opt-1', position: 0, kind: 'text', startAt: null, endAt: null, label: 'Pizza' },
-        { id: 'opt-2', position: 1, kind: 'text', startAt: null, endAt: null, label: 'Sushi' },
+        {
+          id: 'opt-1',
+          position: 0,
+          kind: 'text',
+          startAt: null,
+          endAt: null,
+          label: 'Pizza',
+          capacity: null,
+        },
+        {
+          id: 'opt-2',
+          position: 1,
+          kind: 'text',
+          startAt: null,
+          endAt: null,
+          label: 'Sushi',
+          capacity: null,
+        },
       ],
     })
 

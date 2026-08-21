@@ -117,6 +117,7 @@ export async function getPollView(
       requireParticipantEmail: poll.requireParticipantEmail,
       allowComments: poll.allowComments,
       allowIfNeedBe: poll.allowIfNeedBe,
+      signupMaxClaims: poll.signupMaxClaims,
     },
     notifications: isOwner
       ? { notifyOnVote: poll.notifyOnVote, notifyOnComment: poll.notifyOnComment }
@@ -130,6 +131,7 @@ export async function getPollView(
       startAt: o.startAt,
       endAt: o.endAt,
       label: o.label,
+      capacity: o.capacity,
     })),
     participants: poll.participants.map((p) => ({
       id: p.id,
@@ -149,6 +151,7 @@ export async function getPollView(
     })),
     scores,
     bestOptionId: best,
+    claims: {},
   }
 }
 

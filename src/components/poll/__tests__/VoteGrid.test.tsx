@@ -21,7 +21,12 @@ function makePoll(overrides: Partial<PollView> = {}): PollView {
     deadlineAt: null,
     finalizedOptionId: null,
     createdAt: '2026-08-01T10:00:00.000Z',
-    settings: { requireParticipantEmail: false, allowComments: true, allowIfNeedBe: true },
+    settings: {
+      requireParticipantEmail: false,
+      allowComments: true,
+      allowIfNeedBe: true,
+      signupMaxClaims: 1,
+    },
     notifications: null,
     owner: { id: 'user_1', name: 'Ada' },
     isOwner: false,
@@ -33,6 +38,7 @@ function makePoll(overrides: Partial<PollView> = {}): PollView {
         startAt: '2026-09-01T16:30:00.000Z',
         endAt: null,
         label: null,
+        capacity: null,
       },
       {
         id: OPTION_B,
@@ -41,6 +47,7 @@ function makePoll(overrides: Partial<PollView> = {}): PollView {
         startAt: '2026-09-02T09:00:00.000Z',
         endAt: null,
         label: null,
+        capacity: null,
       },
     ],
     participants: [
@@ -67,6 +74,7 @@ function makePoll(overrides: Partial<PollView> = {}): PollView {
       [OPTION_B]: { yes: 0, ifneedbe: 1, no: 1, score: 1 },
     },
     bestOptionId: OPTION_A,
+    claims: {},
     ...overrides,
   }
 }

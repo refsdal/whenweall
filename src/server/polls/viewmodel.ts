@@ -8,6 +8,7 @@ export type PollOptionView = {
   startAt: string | null
   endAt: string | null
   label: string | null
+  capacity: number | null
 }
 
 export type ParticipantView = {
@@ -39,7 +40,12 @@ export type PollView = {
   deadlineAt: string | null
   finalizedOptionId: string | null
   createdAt: string
-  settings: { requireParticipantEmail: boolean; allowComments: boolean; allowIfNeedBe: boolean }
+  settings: {
+    requireParticipantEmail: boolean
+    allowComments: boolean
+    allowIfNeedBe: boolean
+    signupMaxClaims: number
+  }
   notifications: { notifyOnVote: boolean; notifyOnComment: boolean } | null
   owner: { id: string; name: string }
   isOwner: boolean
@@ -48,6 +54,7 @@ export type PollView = {
   comments: CommentView[]
   scores: Record<string, OptionScore>
   bestOptionId: string | null
+  claims: Record<string, { count: number; capacity: number | null; full: boolean }>
 }
 
 export type PollSummary = {

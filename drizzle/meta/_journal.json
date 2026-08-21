@@ -8,6 +8,13 @@
       "when": 1787272027317,
       "tag": "0000_purple_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787295466058,
+      "tag": "0001_many_network",
+      "breakpoints": true
     }
   ]
 }

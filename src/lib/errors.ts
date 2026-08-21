@@ -11,6 +11,9 @@ export const ERROR_CODES = [
   'LIMIT_REACHED',
   'INVALID_TOKEN',
   'CONFLICT',
+  'SLOT_FULL',
+  'CLAIM_LIMIT_REACHED',
+  'CAPACITY_BELOW_CLAIMS',
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]

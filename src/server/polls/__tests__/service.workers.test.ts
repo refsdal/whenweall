@@ -88,6 +88,7 @@ describe('createPoll', () => {
       requireParticipantEmail: false,
       allowComments: true,
       allowIfNeedBe: true,
+      signupMaxClaims: 1,
     })
     expect(view?.notifications).toEqual({ notifyOnVote: true, notifyOnComment: true })
     expect(view?.status).toBe('open')
