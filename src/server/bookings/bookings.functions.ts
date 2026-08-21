@@ -32,17 +32,17 @@ import {
  * the same note in `pages.functions.ts`/`polls.functions.ts`. These arrays are declared once here
  * and reused both to build each function below and as the manifest that test asserts against.
  */
-const NONE = [] as const
+const BOOK_LIMIT_ONLY = [rateLimitMiddleware('book')] as const
 const SESSION_ONLY = [sessionMiddleware] as const
 const SESSION_AND_BOOK_LIMIT = [sessionMiddleware, rateLimitMiddleware('book')] as const
 const REQUIRE_SESSION = [requireSessionMiddleware] as const
 
 export const SERVER_FN_MIDDLEWARE = {
-  getPublicAvailability: NONE,
+  getPublicAvailability: BOOK_LIMIT_ONLY,
   bookSlot: SESSION_AND_BOOK_LIMIT,
   getManagedBooking: SESSION_ONLY,
-  cancelBooking: SESSION_ONLY,
-  rescheduleBooking: SESSION_ONLY,
+  cancelBooking: SESSION_AND_BOOK_LIMIT,
+  rescheduleBooking: SESSION_AND_BOOK_LIMIT,
   listPageBookings: REQUIRE_SESSION,
 } as const
 

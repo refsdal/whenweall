@@ -168,8 +168,10 @@ describe('pages.functions middleware wiring', () => {
 describe('bookings.functions middleware wiring', () => {
   const M = bookingsFunctions.SERVER_FN_MIDDLEWARE
 
-  it('getPublicAvailability has no auth middleware — it is a public lookup', () => {
-    expect(M.getPublicAvailability).toHaveLength(0)
+  it('getPublicAvailability has no auth middleware (it is a public lookup) but is rate-limited', () => {
+    expect(M.getPublicAvailability).not.toContain(sessionMiddleware)
+    expect(M.getPublicAvailability).not.toContain(requireSessionMiddleware)
+    expect(M.getPublicAvailability).toContain(rateLimitMiddleware('book'))
   })
 
   it('bookSlot requires a session lookup and is rate-limited on the book action', () => {
@@ -178,10 +180,17 @@ describe('bookings.functions middleware wiring', () => {
     expect(M.bookSlot).not.toContain(requireSessionMiddleware)
   })
 
-  it('getManagedBooking, cancelBooking and rescheduleBooking only need the optional session lookup — the manage token is the other auth path', () => {
-    for (const name of ['getManagedBooking', 'cancelBooking', 'rescheduleBooking'] as const) {
+  it('getManagedBooking only needs the optional session lookup — the manage token is the other auth path', () => {
+    expect(M.getManagedBooking).toContain(sessionMiddleware)
+    expect(M.getManagedBooking).not.toContain(requireSessionMiddleware)
+    expect(M.getManagedBooking).not.toContain(rateLimitMiddleware('book'))
+  })
+
+  it('cancelBooking and rescheduleBooking need the optional session lookup and are rate-limited on the book action', () => {
+    for (const name of ['cancelBooking', 'rescheduleBooking'] as const) {
       expect(M[name]).toContain(sessionMiddleware)
       expect(M[name]).not.toContain(requireSessionMiddleware)
+      expect(M[name]).toContain(rateLimitMiddleware('book'))
     }
   })
 

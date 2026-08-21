@@ -16,6 +16,23 @@ export class GoogleApiError extends Error {
 
 const CALENDAR_API = 'https://www.googleapis.com/calendar/v3'
 
+const REQUIRED_CALENDAR_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
+] as const
+
+/**
+ * Whether a Better-Auth `account.scope` string (space-separated, as Google reports it) grants
+ * every scope Samla needs to read/write the linked calendar. Returns `null` — not `false` — when
+ * `scope` itself wasn't recorded (older rows, or a provider that doesn't report it back), so
+ * callers can tell "known to lack a scope" apart from "unknown, fall back to a live probe".
+ */
+function hasRequiredCalendarScopes(scope: string | null | undefined): boolean | null {
+  if (!scope) return null
+  const granted = new Set(scope.split(/\s+/).filter(Boolean))
+  return REQUIRED_CALENDAR_SCOPES.every((s) => granted.has(s))
+}
+
 export type CreateEventInput = {
   summary: string
   description?: string | null
@@ -105,6 +122,9 @@ export async function getGoogleAccessToken(userId: string): Promise<string | nul
     where: and(eq(account.userId, userId), eq(account.providerId, 'google')),
   })
   if (!row) return null
+  // Known (not just unknown) to be missing a required calendar scope — don't bother refreshing a
+  // token that can't do what the caller needs it for.
+  if (hasRequiredCalendarScopes(row.scope) === false) return null
 
   try {
     const tokens = await getAuth().api.getAccessToken({
@@ -113,5 +133,45 @@ export async function getGoogleAccessToken(userId: string): Promise<string | nul
     return tokens?.accessToken ?? null
   } catch {
     return null
+  }
+}
+
+/**
+ * Whether `userId` currently has a *usable* Google Calendar connection — verifying the granted
+ * capability, not just that some token/row exists. `account.scope` is the source of truth when
+ * Better-Auth recorded it: both calendar scopes present is `connected: true`, either missing is
+ * `false`, with no network call needed either way. Only when `scope` itself is unavailable (older
+ * rows, or a provider that never reported it back) does this fall back to a live freebusy probe —
+ * treating a 401/403 (auth/permission failure) as not connected, and any other outcome (including
+ * a transient error) as connected, since the token itself was obtained successfully.
+ */
+export async function getGoogleCalendarStatus(
+  userId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ connected: boolean }> {
+  const db = getDb()
+  const row = await db.query.account.findFirst({
+    where: and(eq(account.userId, userId), eq(account.providerId, 'google')),
+  })
+  if (!row) return { connected: false }
+
+  const scopesKnown = hasRequiredCalendarScopes(row.scope)
+  if (scopesKnown !== null) return { connected: scopesKnown }
+
+  const token = await getGoogleAccessToken(userId)
+  if (!token) return { connected: false }
+
+  try {
+    const now = new Date()
+    await createCalendarClient(fetchImpl).getFreeBusy(token, {
+      timeMin: now.toISOString(),
+      timeMax: new Date(now.getTime() + 60_000).toISOString(),
+    })
+    return { connected: true }
+  } catch (err) {
+    if (err instanceof GoogleApiError && (err.status === 401 || err.status === 403)) {
+      return { connected: false }
+    }
+    return { connected: true }
   }
 }

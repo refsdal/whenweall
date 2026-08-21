@@ -7,6 +7,7 @@ import { account } from '#/server/db/schema'
 import {
   createCalendarClient,
   getGoogleAccessToken,
+  getGoogleCalendarStatus,
   GoogleApiError,
 } from '#/server/google/calendar'
 import { makeUser } from '../../../../test/helpers'
@@ -144,5 +145,96 @@ describe('getGoogleAccessToken', () => {
     // 'google' social provider registered and `getAccessToken` fails — this exercises the
     // catch-and-degrade path rather than a successful refresh.
     await expect(getGoogleAccessToken(userId)).resolves.toBeNull()
+  })
+
+  it('returns null when the linked account is missing a required calendar scope', async () => {
+    const db = createDb(env.DB)
+    const { id: userId } = await makeUser(db)
+    const now = new Date()
+    await db.insert(account).values({
+      id: 'acct_2',
+      issuer: 'google',
+      accountId: 'google-sub-2',
+      providerId: 'google',
+      userId,
+      accessToken: 'some-token',
+      // openid/email/profile only — no calendar.readonly or calendar.events.
+      scope: 'openid email profile',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    await expect(getGoogleAccessToken(userId)).resolves.toBeNull()
+  })
+})
+
+describe('getGoogleCalendarStatus', () => {
+  it('is not connected when there is no linked google account', async () => {
+    const db = createDb(env.DB)
+    const { id: userId } = await makeUser(db)
+
+    await expect(getGoogleCalendarStatus(userId)).resolves.toEqual({ connected: false })
+  })
+
+  it('is not connected when the granted scope is missing a calendar scope', async () => {
+    const db = createDb(env.DB)
+    const { id: userId } = await makeUser(db)
+    const now = new Date()
+    await db.insert(account).values({
+      id: 'acct_3',
+      issuer: 'google',
+      accountId: 'google-sub-3',
+      providerId: 'google',
+      userId,
+      accessToken: 'some-token',
+      scope: 'openid email https://www.googleapis.com/auth/calendar.readonly',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    await expect(getGoogleCalendarStatus(userId)).resolves.toEqual({ connected: false })
+  })
+
+  it('is connected when the granted scope covers both calendar scopes', async () => {
+    const db = createDb(env.DB)
+    const { id: userId } = await makeUser(db)
+    const now = new Date()
+    await db.insert(account).values({
+      id: 'acct_4',
+      issuer: 'google',
+      accountId: 'google-sub-4',
+      providerId: 'google',
+      userId,
+      accessToken: 'some-token',
+      scope:
+        'openid https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    await expect(getGoogleCalendarStatus(userId)).resolves.toEqual({ connected: true })
+  })
+
+  it('falls back to a token probe (and degrades to not-connected) when the scope column is unavailable', async () => {
+    const db = createDb(env.DB)
+    const { id: userId } = await makeUser(db)
+    const now = new Date()
+    await db.insert(account).values({
+      id: 'acct_5',
+      issuer: 'google',
+      accountId: 'google-sub-5',
+      providerId: 'google',
+      userId,
+      accessToken: 'some-token',
+      // No `scope` recorded at all (older account row / provider that didn't report it) —
+      // status must fall back to a token/freebusy probe rather than trusting token presence.
+      // The test env has no GOOGLE_CLIENT_ID configured, so the token fetch itself degrades to
+      // null and the probe never runs — this is the same "Google not configured" degrade as
+      // `getGoogleAccessToken` above.
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    await expect(getGoogleCalendarStatus(userId)).resolves.toEqual({ connected: false })
   })
 })

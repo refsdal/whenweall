@@ -2,7 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import * as z from 'zod'
 import { getDb } from '#/server/db/client'
 import { requireSessionMiddleware } from '#/server/auth/middleware'
-import { getGoogleAccessToken } from '#/server/google/calendar'
+import { getGoogleCalendarStatus as googleCalendarStatus } from '#/server/google/calendar'
 import { notifyPageChanged } from '#/server/notifications/booking-client'
 import * as pagesService from './pages'
 import { createBookingPageSchema, handleSchema, updateBookingPageSchema } from './schemas'
@@ -76,8 +76,7 @@ export const setHandle = createServerFn({ method: 'POST' })
 export const getGoogleCalendarStatus = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.getGoogleCalendarStatus)
   .handler(async ({ context }) => {
-    const token = await getGoogleAccessToken(context.session.user.id)
-    return { connected: token !== null }
+    return googleCalendarStatus(context.session.user.id)
   })
 
 export const disconnectGoogleCalendar = createServerFn({ method: 'POST' })
