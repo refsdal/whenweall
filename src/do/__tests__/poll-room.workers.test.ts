@@ -8,7 +8,7 @@ import { errorCode } from '#/lib/errors'
 import type { MailMessage } from '#/server/mailer/mailer'
 import { DIGEST_DELAY_MS, MAX_RETRIES, PollRoom, RETRY_DELAY_MS } from '#/do/PollRoom'
 import type { PollEvent } from '#/do/protocol'
-import { getPollView } from '#/server/polls/service'
+import { getPollView, setPollStatus } from '#/server/polls/service'
 import { makePoll, makeSignupPoll, makeUser } from '../../../test/helpers'
 
 // `vi.mock` cannot reach code running inside a Durable Object's own module graph in
@@ -424,6 +424,31 @@ describe('claim / unclaim RPC', () => {
     expect(messages[1]).toEqual({ type: 'poll.changed', entity: 'vote' })
   })
 
+  it('does not broadcast when re-claiming a slot already held (changed: false)', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    const first = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+    expect(first.changed).toBe(true)
+
+    const { messages, waitForMessage } = await connect(stub, pollId)
+    await waitForMessage(0) // presence
+
+    const again = await stub.claim(pollId, slot.id, { participantId: first.participantId })
+    expect(again.changed).toBe(false)
+
+    // Prove nothing more ever arrives: a `broadcast` call after the re-claim is the next message
+    // this socket sees, so if the re-claim had (wrongly) broadcast too, this would land at index 2
+    // and the assertion below on index 1 would fail.
+    await stub.broadcast(pollId, { type: 'poll.changed', entity: 'poll' })
+    await waitForMessage(1)
+    expect(messages[1]).toEqual({ type: 'poll.changed', entity: 'poll' })
+  })
+
   it('unclaims a slot inside the DO and broadcasts poll.changed vote', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db)
@@ -441,6 +466,31 @@ describe('claim / unclaim RPC', () => {
 
     await waitForMessage(1)
     expect(messages[1]).toEqual({ type: 'poll.changed', entity: 'vote' })
+  })
+
+  it('unclaims on a closed sheet when allowClosed is set, and rejects it otherwise', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    const claimed = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+    await setPollStatus(db, pollId, ownerId, 'closed')
+
+    let caught: unknown
+    try {
+      await stub.unclaim(pollId, slot.id, claimed.participantId)
+    } catch (err) {
+      caught = err
+    }
+    expect(errorCode(caught)).toBe('POLL_CLOSED')
+
+    const result = await stub.unclaim(pollId, slot.id, claimed.participantId, {
+      allowClosed: true,
+    })
+    expect(result.remainingOptionIds).toEqual([])
   })
 
   it('propagates an AppError code thrown inside the DO to the caller via errorCode()', async () => {

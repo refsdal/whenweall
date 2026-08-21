@@ -58,6 +58,7 @@ export async function unclaimViaRoom(
   pollId: string,
   optionId: string,
   participantId: string,
+  opts: { allowClosed?: boolean } = {},
 ): Promise<Awaited<ReturnType<PollRoom['unclaim']>>> {
-  return pollRoom(pollId).unclaim(pollId, optionId, participantId)
+  return pollRoom(pollId).unclaim(pollId, optionId, participantId, opts)
 }

@@ -13,12 +13,54 @@ export type ClaimIdentity =
   | { participantId: string }
   | { name: string; email?: string | null; userId: string | null; locale?: string | null }
 
-async function requireOpenSignupPoll(db: Db, pollId: string) {
+async function requireSignupPoll(db: Db, pollId: string, opts: { allowClosed?: boolean } = {}) {
   const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
   if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
   if (poll.type !== 'signup') throw new AppError('VALIDATION')
-  if (poll.status !== 'open') throw new AppError('POLL_CLOSED')
+  if (poll.status !== 'open' && !opts.allowClosed) throw new AppError('POLL_CLOSED')
   return poll
+}
+
+type NewParticipantFields = {
+  participantId: string
+  name: string
+  email: string | null
+  userId: string | null
+  editToken: string | null
+  locale: string | null
+}
+
+/**
+ * Validates and prepares a brand-new participant row (name/email checks, the poll-wide
+ * participant cap) without writing anything yet — shared by the guest-claim path and the
+ * signed-in-first-claim path below, which differ only in whether an edit token is minted.
+ */
+async function prepareNewParticipant(
+  db: Db,
+  pollId: string,
+  poll: { requireParticipantEmail: boolean },
+  identity: { name: string; email?: string | null; userId: string | null; locale?: string | null },
+): Promise<NewParticipantFields> {
+  const trimmedName = identity.name.trim()
+  if (!trimmedName) throw new AppError('VALIDATION')
+
+  const trimmedEmail = identity.email?.trim() ?? ''
+  if (poll.requireParticipantEmail && !trimmedEmail) throw new AppError('EMAIL_REQUIRED')
+
+  const existingParticipants = await db.query.participants.findMany({
+    where: eq(participants.pollId, pollId),
+  })
+  if (existingParticipants.length >= LIMITS.participants) throw new AppError('LIMIT_REACHED')
+
+  return {
+    participantId: `pa_${newId()}`,
+    name: trimmedName,
+    email: trimmedEmail || null,
+    userId: identity.userId,
+    // A signed-in claimant is authenticated by their session, never an edit token.
+    editToken: identity.userId === null ? generateToken() : null,
+    locale: identity.locale ?? null,
+  }
 }
 
 export async function countClaims(db: Db, pollId: string): Promise<Record<string, number>> {
@@ -52,8 +94,9 @@ export async function applyClaim(
   editToken: string | null
   claimedOptionIds: string[]
   created: boolean
+  changed: boolean
 }> {
-  const poll = await requireOpenSignupPoll(db, pollId)
+  const poll = await requireSignupPoll(db, pollId)
 
   const option = await db.query.pollOptions.findFirst({ where: eq(pollOptions.id, optionId) })
   if (!option || option.pollId !== pollId) throw new AppError('NOT_FOUND')
@@ -72,25 +115,34 @@ export async function applyClaim(
     })
     if (!participant || participant.pollId !== pollId) throw new AppError('NOT_FOUND')
     participantId = participant.id
-  } else {
-    const trimmedName = identity.name.trim()
-    if (!trimmedName) throw new AppError('VALIDATION')
-
-    const trimmedEmail = identity.email?.trim() ?? ''
-    if (poll.requireParticipantEmail && !trimmedEmail) throw new AppError('EMAIL_REQUIRED')
-
-    const existingParticipants = await db.query.participants.findMany({
-      where: eq(participants.pollId, pollId),
+  } else if (identity.userId !== null) {
+    // A signed-in caller always reuses their own participant row on this poll — creating a fresh
+    // one per claim (as the guest branch below does) would hand them a new claim budget every
+    // time and skip Turnstile, since a signed-in claim never requires one.
+    const existing = await db.query.participants.findFirst({
+      where: and(eq(participants.pollId, pollId), eq(participants.userId, identity.userId)),
     })
-    if (existingParticipants.length >= LIMITS.participants) throw new AppError('LIMIT_REACHED')
-
-    participantId = `pa_${newId()}`
+    if (existing) {
+      participantId = existing.id
+    } else {
+      const prepared = await prepareNewParticipant(db, pollId, poll, identity)
+      participantId = prepared.participantId
+      created = true
+      name = prepared.name
+      email = prepared.email
+      userId = prepared.userId
+      locale = prepared.locale
+      editToken = prepared.editToken
+    }
+  } else {
+    const prepared = await prepareNewParticipant(db, pollId, poll, identity)
+    participantId = prepared.participantId
     created = true
-    name = trimmedName
-    email = trimmedEmail || null
-    userId = identity.userId
-    locale = identity.locale ?? null
-    editToken = userId === null ? generateToken() : null
+    name = prepared.name
+    email = prepared.email
+    userId = prepared.userId
+    locale = prepared.locale
+    editToken = prepared.editToken
   }
 
   const existingClaims = await db.query.votes.findMany({
@@ -109,7 +161,7 @@ export async function applyClaim(
   }
 
   if (alreadyClaimed) {
-    return { participantId, editToken, claimedOptionIds, created }
+    return { participantId, editToken, claimedOptionIds, created, changed: false }
   }
 
   const now = new Date().toISOString()
@@ -140,6 +192,7 @@ export async function applyClaim(
     editToken,
     claimedOptionIds: [...claimedOptionIds, optionId],
     created,
+    changed: true,
   }
 }
 
@@ -148,8 +201,9 @@ export async function removeClaim(
   pollId: string,
   optionId: string,
   participantId: string,
+  opts: { allowClosed?: boolean } = {},
 ): Promise<{ remainingOptionIds: string[] }> {
-  await requireOpenSignupPoll(db, pollId)
+  await requireSignupPoll(db, pollId, opts)
 
   await db
     .delete(votes)

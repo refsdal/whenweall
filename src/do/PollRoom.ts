@@ -109,7 +109,9 @@ export class PollRoom extends DurableObject<Env> {
       await this.#setPollId(pollId)
       const db = createDb(this.env.DB)
       const result = await applyClaim(db, pollId, optionId, identity)
-      this.#send({ type: 'poll.changed', entity: 'vote' })
+      // A re-claim of a slot the participant already holds is a no-op (`changed: false`) — nothing
+      // for anyone else to see, so skip the broadcast rather than fan out a phantom update.
+      if (result.changed) this.#send({ type: 'poll.changed', entity: 'vote' })
       return result
     })
   }
@@ -118,11 +120,12 @@ export class PollRoom extends DurableObject<Env> {
     pollId: string,
     optionId: string,
     participantId: string,
+    opts: { allowClosed?: boolean } = {},
   ): Promise<{ remainingOptionIds: string[] }> {
     return this.#serialize(async () => {
       await this.#setPollId(pollId)
       const db = createDb(this.env.DB)
-      const result = await removeClaim(db, pollId, optionId, participantId)
+      const result = await removeClaim(db, pollId, optionId, participantId, opts)
       this.#send({ type: 'poll.changed', entity: 'vote' })
       return result
     })

@@ -223,23 +223,27 @@ export const claimSlot = createServerFn({ method: 'POST' })
     // `poll.changed`/'vote' itself — no separate `notifyChanged` call is needed here.
     const result = await claimViaRoom(data.pollId, data.optionId, identity)
 
-    const claimant = await db.query.participants.findFirst({
-      where: eq(participants.id, result.participantId),
-      columns: { name: true },
-    })
-    await queueDigest(data.pollId, {
-      kind: 'vote',
-      name: claimant?.name ?? data.name ?? '',
-      at: new Date().toISOString(),
-    })
+    // A re-claim of a slot already held is a no-op (`changed: false`) — nothing changed, so don't
+    // queue a digest entry or re-send the confirmation email for it.
+    if (result.changed) {
+      const claimant = await db.query.participants.findFirst({
+        where: eq(participants.id, result.participantId),
+        columns: { name: true },
+      })
+      await queueDigest(data.pollId, {
+        kind: 'vote',
+        name: claimant?.name ?? data.name ?? '',
+        at: new Date().toISOString(),
+      })
 
-    // Best-effort: `sendClaimConfirmation` never throws (it catches and logs internally), so a
-    // stalled mailer must never fail a claim that already succeeded.
-    await sendClaimConfirmation(env, {
-      db,
-      pollId: data.pollId,
-      participantId: result.participantId,
-    })
+      // Best-effort: `sendClaimConfirmation` never throws (it catches and logs internally), so a
+      // stalled mailer must never fail a claim that already succeeded.
+      await sendClaimConfirmation(env, {
+        db,
+        pollId: data.pollId,
+        participantId: result.participantId,
+      })
+    }
 
     return {
       participantId: result.participantId,
@@ -255,14 +259,28 @@ export const unclaimSlot = createServerFn({ method: 'POST' })
     const db = getDb()
     const poll = await requireSignupPoll(db, data.pollId)
     const userId = context.session?.user.id ?? null
+    const isOwner = userId !== null && userId === poll.ownerId
 
     await requireParticipantAuth(db, data.pollId, data.participantId, poll.ownerId, {
       userId,
       editToken: data.editToken,
     })
 
-    // `PollRoom#unclaim` broadcasts `poll.changed`/'vote' itself; see the note in `claimSlot`.
-    const result = await unclaimViaRoom(data.pollId, data.optionId, data.participantId)
+    // `PollRoom#unclaim` broadcasts `poll.changed`/'vote' itself; see the note in `claimSlot`. The
+    // owner may free up a spot on a closed sheet; anyone acting on their own claim still needs it
+    // open — `requireSignupPoll`/`removeClaim` enforce that via `allowClosed`.
+    const result = await unclaimViaRoom(data.pollId, data.optionId, data.participantId, {
+      allowClosed: isOwner,
+    })
+
+    // Best-effort, same as in `claimSlot`: resend the confirmation so the participant's email
+    // reflects their remaining claims. `sendClaimConfirmation` itself sends nothing once none are
+    // left, and never throws.
+    await sendClaimConfirmation(env, {
+      db,
+      pollId: data.pollId,
+      participantId: data.participantId,
+    })
 
     return { remainingOptionIds: result.remainingOptionIds }
   })
