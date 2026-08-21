@@ -60,7 +60,18 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
     },
     plugins: [
       passkey({ rpID: url.hostname, rpName: appConfig.name, origin: env.APP_URL }),
-      captcha({ provider: 'cloudflare-turnstile', secretKey: env.TURNSTILE_SECRET_KEY }),
+      captcha({
+        provider: 'cloudflare-turnstile',
+        secretKey: env.TURNSTILE_SECRET_KEY,
+        // Default-enforced Better-Auth endpoints (sign-up, sign-in, password reset) plus
+        // `/send-verification-email`, whose resend flow otherwise ships unprotected.
+        endpoints: [
+          '/sign-up/email',
+          '/sign-in/email',
+          '/request-password-reset',
+          '/send-verification-email',
+        ],
+      }),
       // tanstackStartCookies dynamically imports '@tanstack/react-start/server', which relies on
       // virtual modules only provided by the tanstackStart() Vite plugin during a real app
       // request. The workers Vitest project runs auth.api.* handlers outside that plugin/request

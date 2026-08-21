@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import * as z from 'zod'
 import { AuthCard } from '#/components/auth/AuthCard'
+import { TurnstileField } from '#/components/auth/TurnstileField'
 import { Button, buttonVariants } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
@@ -39,16 +40,21 @@ function VerifyEmailPage() {
 
 function VerifyEmailExpired() {
   const [email, setEmail] = useState('')
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [sent, setSent] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!email) return
+    if (!email || !captchaToken) return
 
     setSubmitting(true)
     try {
-      await authClient.sendVerificationEmail({ email, callbackURL: '/verify-email?done=1' })
+      await authClient.sendVerificationEmail({
+        email,
+        callbackURL: '/verify-email?done=1',
+        fetchOptions: { headers: { 'x-captcha-response': captchaToken } },
+      })
       setSent(true)
     } finally {
       setSubmitting(false)
@@ -72,7 +78,8 @@ function VerifyEmailExpired() {
               required
             />
           </div>
-          <Button type="submit" className="w-full" disabled={submitting}>
+          <TurnstileField onToken={setCaptchaToken} />
+          <Button type="submit" className="w-full" disabled={submitting || !captchaToken}>
             {submitting ? m.auth_verify_resend_submitting() : m.auth_verify_resend_submit()}
           </Button>
         </form>

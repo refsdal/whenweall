@@ -31,6 +31,18 @@ describe('nextSearchSchema', () => {
     expect(nextSearchSchema.safeParse({ next: '/%5cevil.example' }).success).toBe(false)
   })
 
+  it('rejects a raw-tab-prefixed path that a browser would strip into a protocol-relative URL', () => {
+    expect(nextSearchSchema.safeParse({ next: '/\t/evil.example' }).success).toBe(false)
+  })
+
+  it('rejects a raw-newline-prefixed path that a browser would strip into a protocol-relative URL', () => {
+    expect(nextSearchSchema.safeParse({ next: '/\n/evil.example' }).success).toBe(false)
+  })
+
+  it('rejects an encoded-tab-prefixed path', () => {
+    expect(nextSearchSchema.safeParse({ next: '/%09/evil.example' }).success).toBe(false)
+  })
+
   it('treats next as optional', () => {
     expect(nextSearchSchema.parse({})).toEqual({})
   })
@@ -39,6 +51,18 @@ describe('nextSearchSchema', () => {
 describe('safeNext', () => {
   it('falls back for a protocol-relative path', () => {
     expect(safeNext('//evil.example')).toBe('/')
+  })
+
+  it('falls back for a raw-tab-prefixed path', () => {
+    expect(safeNext('/\t/evil.example')).toBe('/')
+  })
+
+  it('falls back for a raw-newline-prefixed path', () => {
+    expect(safeNext('/\n/evil.example')).toBe('/')
+  })
+
+  it('falls back for an encoded-tab-prefixed path', () => {
+    expect(safeNext('/%09/evil.example')).toBe('/')
   })
 
   it('falls back to a custom default when next is undefined', () => {

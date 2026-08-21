@@ -40,6 +40,7 @@ function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null)
   const [resending, setResending] = useState(false)
+  const [resendCaptchaToken, setResendCaptchaToken] = useState<string | null>(null)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -78,12 +79,13 @@ function LoginPage() {
   }
 
   async function handleResend() {
-    if (!unverifiedEmail) return
+    if (!unverifiedEmail || !resendCaptchaToken) return
     setResending(true)
     try {
       await authClient.sendVerificationEmail({
         email: unverifiedEmail,
         callbackURL: '/verify-email?done=1',
+        fetchOptions: { headers: { 'x-captcha-response': resendCaptchaToken } },
       })
       toast.success(m.auth_verify_resent())
     } finally {
@@ -153,11 +155,12 @@ function LoginPage() {
         {unverifiedEmail && (
           <div className="flex flex-col gap-2 rounded-lg border border-border bg-secondary/60 p-3 text-sm">
             <p>{m.auth_login_unverified()}</p>
+            <TurnstileField onToken={setResendCaptchaToken} />
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={resending}
+              disabled={resending || !resendCaptchaToken}
               onClick={() => void handleResend()}
             >
               {m.auth_resend_verification()}

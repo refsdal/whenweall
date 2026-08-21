@@ -6,7 +6,8 @@
 import { setupNetwork } from '@msw/cloudflare'
 import { http, HttpResponse } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { verifyTurnstile } from '#/server/http/turnstile'
+import { AppError } from '#/lib/errors'
+import { requireTurnstile, verifyTurnstile } from '#/server/http/turnstile'
 
 const network = setupNetwork()
 
@@ -31,5 +32,28 @@ describe('verifyTurnstile', () => {
 
   it('returns false without making a request when token is missing', async () => {
     await expect(verifyTurnstile(undefined)).resolves.toBe(false)
+  })
+})
+
+describe('requireTurnstile', () => {
+  it('forwards the caller IP as remoteip to siteverify', async () => {
+    let body: URLSearchParams | undefined
+    network.use(
+      http.post(SITEVERIFY_URL, async ({ request }) => {
+        body = new URLSearchParams(await request.text())
+        return HttpResponse.json({ success: true })
+      }),
+    )
+
+    await expect(requireTurnstile('tok')).resolves.toBeUndefined()
+    // No `cf-connecting-ip` header is set outside a real request context, so `clientIp()` falls
+    // back to 'unknown' — this proves `remoteip` is wired through at all, not the exact value.
+    expect(body?.get('remoteip')).toBe('unknown')
+  })
+
+  it('throws CAPTCHA_FAILED when siteverify fails', async () => {
+    network.use(http.post(SITEVERIFY_URL, () => HttpResponse.json({ success: false })))
+
+    await expect(requireTurnstile('tok')).rejects.toMatchObject(new AppError('CAPTCHA_FAILED'))
   })
 })

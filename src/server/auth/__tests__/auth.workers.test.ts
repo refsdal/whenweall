@@ -39,4 +39,23 @@ describe('auth', () => {
     expect(auth.options.plugins?.some((p) => p.id === 'captcha')).toBe(true)
     expect(auth.options.plugins?.some((p) => p.id === 'passkey')).toBe(true)
   })
+
+  it('protects /send-verification-email with captcha, alongside the other auth endpoints', () => {
+    const auth = createAuth({ d1: env.DB, env })
+    const found = auth.options.plugins?.find((p) => p.id === 'captcha')
+    // `.options` is the plugin's own construction options and is introspectable at runtime (the
+    // server function objects built by `createServerFn` are not — see
+    // test/server-functions.workers.test.ts for that manifest-based approach instead). The
+    // plugin union's other members (passkey, tanstack-start-cookies) don't share this shape, so
+    // this is cast through `unknown` rather than narrowed with a type predicate.
+    const captchaPlugin = found as unknown as { options?: { endpoints?: string[] } } | undefined
+    expect(captchaPlugin?.options?.endpoints).toEqual(
+      expect.arrayContaining([
+        '/sign-up/email',
+        '/sign-in/email',
+        '/request-password-reset',
+        '/send-verification-email',
+      ]),
+    )
+  })
 })

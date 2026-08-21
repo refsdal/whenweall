@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers'
 import { AppError } from '#/lib/errors'
+import { clientIp } from '#/server/http/rate-limit'
 
 const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
 
@@ -27,6 +28,6 @@ export async function verifyTurnstile(
 }
 
 export async function requireTurnstile(token: string | undefined): Promise<void> {
-  const ok = await verifyTurnstile(token)
+  const ok = await verifyTurnstile(token, clientIp())
   if (!ok) throw new AppError('CAPTCHA_FAILED')
 }
