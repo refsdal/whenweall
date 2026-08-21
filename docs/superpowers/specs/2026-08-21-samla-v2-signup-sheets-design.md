@@ -1,6 +1,6 @@
 # samla — v2 design spec: Sign-up sheets
 
-Date: 2026-08-21 · Builds on v1 (`docs/superpowers/specs/2026-08-20-samla-v1-design.md`). The v1 spec reserved v2 for "sign-up sheets (options gain `capacity`; participants *claim* instead of vote)". Anders asked that the next phase start automatically after v1; the decisions below are the controller's rulings, recorded for his review.
+Date: 2026-08-21 · Builds on v1 (`docs/superpowers/specs/2026-08-20-samla-v1-design.md`). The v1 spec reserved v2 for "sign-up sheets (options gain `capacity`; participants _claim_ instead of vote)". Anders asked that the next phase start automatically after v1; the decisions below are the controller's rulings, recorded for his review.
 
 ## Goal
 
