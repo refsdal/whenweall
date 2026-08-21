@@ -5,7 +5,7 @@ import * as z from 'zod'
 import { appConfig } from '#/app.config'
 import { ManageBooking } from '#/components/booking/ManageBooking'
 import { NotFoundCard } from '#/components/layout/NotFoundCard'
-import { loadBookingToken } from '#/lib/booking-tokens'
+import { useBookingToken } from '#/lib/booking-tokens'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { getManagedBooking } from '#/server/bookings/bookings.functions'
@@ -55,14 +55,15 @@ function ManageRoute() {
   const navigate = Route.useNavigate()
   const router = useRouter()
 
-  // The browser that made the booking kept its manage token; put it in the URL so the loader can
-  // use it. Runs only when the loader came back empty-handed.
+  // The browser that made the booking kept its manage token. Reading it through the external
+  // store keeps the server render (always null) and the first client render in agreement; the
+  // effect then puts it in the URL so the loader can use it. Only fires when the loader came back
+  // empty-handed.
+  const storedToken = useBookingToken(params.id)
   useEffect(() => {
-    if (booking || t) return
-    const stored = loadBookingToken(params.id)
-    if (!stored) return
-    void navigate({ search: { t: stored }, replace: true })
-  }, [booking, navigate, params.id, t])
+    if (booking || t || !storedToken) return
+    void navigate({ search: { t: storedToken }, replace: true })
+  }, [booking, navigate, storedToken, t])
 
   if (!booking) {
     return (

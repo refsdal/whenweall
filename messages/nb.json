@@ -588,7 +588,6 @@
   "book_public_pick_day": "Velg en dag",
   "book_public_pick_time": "Velg et tidspunkt",
   "book_public_slots_on": "Tider {day}",
-  "book_public_select_day_hint": "Velg en av de markerte dagene for å se ledige tider.",
   "book_public_no_slots_day": "Ingen ledige tider igjen denne dagen.",
   "book_public_no_slots_month": "Ingenting ledig denne måneden. Prøv den neste.",
   "book_public_slot_range": "{start} til {end}",

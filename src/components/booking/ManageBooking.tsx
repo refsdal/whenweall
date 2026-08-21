@@ -91,6 +91,10 @@ export function ManageBooking({
   // Compared against the loader's clock, so the page renders the same on both sides of hydration.
   const past = booking.startAt <= now
   const canAct = !cancelled && !past
+  // Rescheduling means sending the visitor back to the page's public availability, which only
+  // exists once the organiser has claimed a handle — without one there is nothing to offer, so
+  // the button is not shown at all rather than opening a dialog that can't be built.
+  const canReschedule = canAct && booking.page.handle !== null
   const bookAgainTo = booking.page.handle
     ? { handle: booking.page.handle, slug: booking.page.slug }
     : null
@@ -202,21 +206,21 @@ export function ManageBooking({
 
       {!cancelled && (
         <div className="flex flex-wrap gap-2">
+          {canReschedule && (
+            <Button type="button" onClick={() => setRescheduleOpen(true)} disabled={busy}>
+              {m.booking_manage_reschedule()}
+            </Button>
+          )}
           {canAct && (
-            <>
-              <Button type="button" onClick={() => setRescheduleOpen(true)} disabled={busy}>
-                {m.booking_manage_reschedule()}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => setConfirmOpen(true)}
-                disabled={busy}
-              >
-                {m.booking_manage_cancel()}
-              </Button>
-            </>
+            <Button
+              type="button"
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setConfirmOpen(true)}
+              disabled={busy}
+            >
+              {m.booking_manage_cancel()}
+            </Button>
           )}
           <Button asChild variant="ghost">
             <a href={icsHref} download>

@@ -588,7 +588,6 @@
   "book_public_pick_day": "Pick a day",
   "book_public_pick_time": "Pick a time",
   "book_public_slots_on": "Times on {day}",
-  "book_public_select_day_hint": "Choose one of the highlighted days to see the free times.",
   "book_public_no_slots_day": "No free times left on this day.",
   "book_public_no_slots_month": "Nothing free this month. Try the next one.",
   "book_public_slot_range": "{start} to {end}",
