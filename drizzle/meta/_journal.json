@@ -15,6 +15,13 @@
       "when": 1787295466058,
       "tag": "0001_many_network",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787304586423,
+      "tag": "0002_melted_guardsmen",
+      "breakpoints": true
     }
   ]
 }

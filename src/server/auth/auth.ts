@@ -55,7 +55,10 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
         ? { google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET } }
         : {},
     user: {
-      additionalFields: { locale: { type: 'string', required: false, input: true } },
+      additionalFields: {
+        locale: { type: 'string', required: false, input: true },
+        handle: { type: 'string', required: false, input: true },
+      },
       deleteUser: { enabled: true },
     },
     plugins: [
