@@ -184,7 +184,10 @@ export async function updatePoll(
   ownerId: string,
   input: Omit<UpdatePollInput, 'pollId'>,
 ): Promise<void> {
-  await requireOwnedPoll(db, pollId, ownerId)
+  const poll = await requireOwnedPoll(db, pollId, ownerId)
+  if (poll.status === 'finalized' && input.options !== undefined) {
+    throw new AppError('POLL_FINALIZED')
+  }
   const now = new Date().toISOString()
 
   const scalarUpdate: Partial<typeof polls.$inferInsert> = { updatedAt: now }
@@ -374,8 +377,9 @@ export async function closeExpiredPoll(db: Db, pollId: string): Promise<boolean>
   if (poll.status !== 'open') return false
   if (!poll.deadlineAt) return false
 
+  if (Date.parse(poll.deadlineAt) > Date.now()) return false
+
   const now = new Date().toISOString()
-  if (poll.deadlineAt > now) return false
 
   await db.update(polls).set({ status: 'closed', updatedAt: now }).where(eq(polls.id, pollId))
   return true

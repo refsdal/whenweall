@@ -15,9 +15,14 @@ export type ParticipantAuth = {
   isOwner: boolean
 }
 
-async function requireOpenPoll(db: Db, pollId: string) {
+async function requirePollExists(db: Db, pollId: string) {
   const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
   if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
+  return poll
+}
+
+async function requireOpenPoll(db: Db, pollId: string) {
+  const poll = await requirePollExists(db, pollId)
   if (poll.status !== 'open') throw new AppError('POLL_CLOSED')
   return poll
 }
@@ -154,7 +159,13 @@ export async function removeParticipant(
   auth: ParticipantAuth,
 ): Promise<void> {
   const participant = await requireParticipantInPoll(db, pollId, participantId)
-  await requireOpenPoll(db, pollId)
+  // Owners may remove a participant regardless of poll status (open, closed, or finalized);
+  // everyone else still needs the poll to be open.
+  if (auth.isOwner) {
+    await requirePollExists(db, pollId)
+  } else {
+    await requireOpenPoll(db, pollId)
+  }
 
   if (!(await canEditParticipant(participant, auth))) throw new AppError('FORBIDDEN')
 

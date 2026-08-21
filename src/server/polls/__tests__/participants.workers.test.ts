@@ -485,7 +485,7 @@ describe('removeParticipant', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  it('throws POLL_CLOSED once the poll is no longer open, even for the owner', async () => {
+  it('lets the owner remove a participant once the poll is closed', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db)
     const { id: pollId } = await makePoll(db, ownerId)
@@ -497,9 +497,62 @@ describe('removeParticipant', () => {
     })
     await setPollStatus(db, pollId, ownerId, 'closed')
 
+    await removeParticipant(db, pollId, participantId, { userId: null, isOwner: true })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.participants.some((p) => p.id === participantId)).toBe(false)
+  })
+
+  it('lets the owner remove a participant once the poll is finalized', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const [opt1] = await pollOptions(db, pollId, ownerId)
+    const { participantId } = await addParticipant(db, pollId, {
+      name: 'Bob',
+      answers: { [opt1!.id]: 'yes' },
+      userId: null,
+    })
+    await finalizePoll(db, pollId, ownerId, opt1!.id)
+
+    await removeParticipant(db, pollId, participantId, { userId: null, isOwner: true })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.participants.some((p) => p.id === participantId)).toBe(false)
+  })
+
+  it('throws POLL_CLOSED for a non-owner once the poll is no longer open', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const [opt1] = await pollOptions(db, pollId, ownerId)
+    const { participantId, editToken } = await addParticipant(db, pollId, {
+      name: 'Bob',
+      answers: { [opt1!.id]: 'yes' },
+      userId: null,
+    })
+    await setPollStatus(db, pollId, ownerId, 'closed')
+
+    await expect(
+      removeParticipant(db, pollId, participantId, { userId: null, editToken, isOwner: false }),
+    ).rejects.toMatchObject({ code: 'POLL_CLOSED' })
+  })
+
+  it('throws NOT_FOUND for the owner when the poll is soft-deleted', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const [opt1] = await pollOptions(db, pollId, ownerId)
+    const { participantId } = await addParticipant(db, pollId, {
+      name: 'Bob',
+      answers: { [opt1!.id]: 'yes' },
+      userId: null,
+    })
+    await deletePoll(db, pollId, ownerId)
+
     await expect(
       removeParticipant(db, pollId, participantId, { userId: null, isOwner: true }),
-    ).rejects.toMatchObject({ code: 'POLL_CLOSED' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 })
 

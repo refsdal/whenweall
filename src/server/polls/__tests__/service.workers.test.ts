@@ -215,6 +215,34 @@ describe('updatePoll', () => {
     expect(alice?.votes).toEqual({ [opt1!.id]: 'yes' })
   })
 
+  it('throws POLL_FINALIZED when editing options on a finalized poll', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const [opt1] = view!.options
+    await finalizePoll(db, pollId, ownerId, opt1!.id)
+
+    await expect(
+      updatePoll(db, pollId, ownerId, {
+        options: [{ id: opt1!.id, kind: 'datetime', startAt: opt1!.startAt! }],
+      }),
+    ).rejects.toMatchObject({ code: 'POLL_FINALIZED' })
+  })
+
+  it('still allows non-option edits (e.g. title) on a finalized poll', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    await finalizePoll(db, pollId, ownerId, view!.options[0]!.id)
+
+    await updatePoll(db, pollId, ownerId, { title: 'Renamed after finalizing' })
+
+    const after = await getPollView(db, pollId, { userId: ownerId })
+    expect(after?.title).toBe('Renamed after finalizing')
+  })
+
   it('changing the deadline updates it', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db)
@@ -384,6 +412,24 @@ describe('closeExpiredPoll', () => {
     const { id: pollId } = await makePoll(db, ownerId)
     const past = new Date(Date.now() - 60_000).toISOString()
     await updatePoll(db, pollId, ownerId, { deadlineAt: past })
+
+    const changed = await closeExpiredPoll(db, pollId)
+    expect(changed).toBe(true)
+    expect((await getPollView(db, pollId, { userId: ownerId }))?.status).toBe('closed')
+  })
+
+  it('closes a poll whose deadline has no milliseconds (string comparison would treat it as still future)', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    // A deadline truncated to whole seconds, set to "now". As a *string* comparison,
+    // `poll.deadlineAt > now` reads this as still in the future: "Z" (0x5A) sorts after "."
+    // (0x2E), the point where `now`'s own ISO string continues on with milliseconds — e.g.
+    // "…T10:00:00Z" > "…T10:00:00.004Z" lexicographically, even though the deadline instant is
+    // earlier. `Date.parse` compares them as instants instead, so a deadline that has just
+    // passed correctly closes the poll.
+    const deadline = `${new Date().toISOString().slice(0, 19)}Z`
+    await updatePoll(db, pollId, ownerId, { deadlineAt: deadline })
 
     const changed = await closeExpiredPoll(db, pollId)
     expect(changed).toBe(true)

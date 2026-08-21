@@ -1,6 +1,17 @@
+import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
+import { createDb } from '#/server/db/client'
+import { requireSessionMiddleware, sessionMiddleware } from '#/server/auth/middleware'
+import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
+import { resolveVerifiedParticipantId } from '#/server/polls/comment-auth'
+import { addParticipant } from '#/server/polls/participants'
 import * as pollsFunctions from '#/server/polls/polls.functions'
+import {
+  resolveAuthorName,
+  SERVER_FN_MIDDLEWARE as PARTICIPANTS_MIDDLEWARE,
+} from '#/server/polls/participants.functions'
 import * as participantsFunctions from '#/server/polls/participants.functions'
+import { makePoll, makeUser } from './helpers'
 
 // Server functions pull in `cloudflare:workers`, better-auth, and rate-limit/turnstile modules
 // that only resolve correctly inside the Workers runtime. This proves the module graph for both
@@ -32,5 +43,133 @@ describe('participants.functions module graph', () => {
     'deleteComment',
   ] as const)('exports a callable %s server function', (name) => {
     expect(typeof participantsFunctions[name]).toBe('function')
+  })
+})
+
+/*
+ * A built `createServerFn(...)` object does not expose its `.middleware([...])` array at runtime:
+ * the only own properties on the returned function are `method` and `__executeServer` (confirmed
+ * by inspecting `Object.getOwnPropertyNames` on one of these functions directly — there is no
+ * `.options`, no symbol, nothing to introspect). Calling the function itself would require
+ * hand-constructing a TanStack Start RPC request, which is what this file's module-graph tests
+ * above already note is awkward outside a real client fetcher.
+ *
+ * Instead, each functions file exports a `SERVER_FN_MIDDLEWARE` manifest built from the *same*
+ * array references passed to each `.middleware(...)` call (see the top of polls.functions.ts and
+ * participants.functions.ts) — so asserting against the manifest is equivalent to asserting
+ * against what each function actually runs, with no risk of the manifest drifting out of sync.
+ */
+describe('polls.functions middleware wiring', () => {
+  const M = pollsFunctions.SERVER_FN_MIDDLEWARE
+
+  it.each([
+    'createPoll',
+    'updatePoll',
+    'setPollStatus',
+    'finalizePoll',
+    'deletePoll',
+    'duplicatePoll',
+    'listMyPolls',
+    'updateNotificationPrefs',
+  ] as const)('%s requires a session via requireSessionMiddleware', (name) => {
+    expect(M[name]).toContain(requireSessionMiddleware)
+  })
+
+  it('getPoll only requires the (optional) session lookup, not requireSessionMiddleware', () => {
+    expect(M.getPoll).toContain(sessionMiddleware)
+    expect(M.getPoll).not.toContain(requireSessionMiddleware)
+  })
+
+  it('createPoll is also rate-limited on the create action', () => {
+    expect(M.createPoll).toContain(rateLimitMiddleware('create'))
+  })
+})
+
+describe('participants.functions middleware wiring', () => {
+  const M = PARTICIPANTS_MIDDLEWARE
+
+  it('addParticipant requires a session lookup and the vote rate limit', () => {
+    expect(M.addParticipant).toContain(sessionMiddleware)
+    expect(M.addParticipant).toContain(rateLimitMiddleware('vote'))
+  })
+
+  it('updateParticipant and removeParticipant are both vote-rate-limited', () => {
+    expect(M.updateParticipant).toContain(rateLimitMiddleware('vote'))
+    expect(M.removeParticipant).toContain(rateLimitMiddleware('vote'))
+  })
+
+  it('addComment is rate-limited on the comment action, not vote', () => {
+    expect(M.addComment).toContain(rateLimitMiddleware('comment'))
+    expect(M.addComment).not.toContain(rateLimitMiddleware('vote'))
+  })
+
+  it('deleteComment only requires a session lookup', () => {
+    expect(M.deleteComment).toContain(sessionMiddleware)
+    expect(M.deleteComment).toHaveLength(1)
+  })
+})
+
+describe('resolveVerifiedParticipantId (addComment participantId-verification branch)', () => {
+  it('resolves the participant id when the edit token matches', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const { participantId, editToken } = await addParticipant(db, pollId, {
+      name: 'Alice',
+      answers: {},
+      userId: null,
+    })
+
+    await expect(resolveVerifiedParticipantId(db, pollId, participantId, editToken)).resolves.toBe(
+      participantId,
+    )
+  })
+
+  it('returns null for a wrong edit token', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const { participantId } = await addParticipant(db, pollId, {
+      name: 'Alice',
+      answers: {},
+      userId: null,
+    })
+
+    await expect(
+      resolveVerifiedParticipantId(db, pollId, participantId, 'wrong-token'),
+    ).resolves.toBeNull()
+  })
+
+  it('returns null when the participant belongs to a different poll', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const { id: otherPollId } = await makePoll(db, ownerId)
+    const { participantId, editToken } = await addParticipant(db, otherPollId, {
+      name: 'Alice',
+      answers: {},
+      userId: null,
+    })
+
+    await expect(
+      resolveVerifiedParticipantId(db, pollId, participantId, editToken),
+    ).resolves.toBeNull()
+  })
+
+  it('returns null when either the participantId or editToken is missing', async () => {
+    const db = createDb(env.DB)
+    await expect(resolveVerifiedParticipantId(db, 'poll12345678', null, 'tok')).resolves.toBeNull()
+    await expect(resolveVerifiedParticipantId(db, 'poll12345678', 'pa_x', null)).resolves.toBeNull()
+  })
+})
+
+describe('resolveAuthorName (addComment authorName-from-session branch)', () => {
+  it('uses the session name for a signed-in author, ignoring the client value', () => {
+    expect(resolveAuthorName({ user: { name: 'Ada' } }, 'Someone Else')).toBe('Ada')
+  })
+
+  it('falls back to the client-supplied name for a guest (no session)', () => {
+    expect(resolveAuthorName(null, 'Guest Name')).toBe('Guest Name')
+    expect(resolveAuthorName(undefined, 'Guest Name')).toBe('Guest Name')
   })
 })

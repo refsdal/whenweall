@@ -15,8 +15,34 @@ import {
   updatePollSchema,
 } from './schemas'
 
+/*
+ * A `createServerFn(...)` object doesn't expose its `.middleware([...])` array at runtime (only
+ * `method` and `__executeServer` — see test/server-functions.workers.test.ts for how that was
+ * confirmed), so these arrays are declared once here and reused both to build each function below
+ * and as the manifest that test asserts against. Reusing the same array reference means the
+ * manifest can never drift from what a function actually runs.
+ */
+const SESSION_ONLY = [sessionMiddleware] as const
+const REQUIRE_SESSION = [requireSessionMiddleware] as const
+const REQUIRE_SESSION_AND_CREATE_LIMIT = [
+  requireSessionMiddleware,
+  rateLimitMiddleware('create'),
+] as const
+
+export const SERVER_FN_MIDDLEWARE = {
+  getPoll: SESSION_ONLY,
+  createPoll: REQUIRE_SESSION_AND_CREATE_LIMIT,
+  updatePoll: REQUIRE_SESSION,
+  setPollStatus: REQUIRE_SESSION,
+  finalizePoll: REQUIRE_SESSION,
+  deletePoll: REQUIRE_SESSION,
+  duplicatePoll: REQUIRE_SESSION,
+  listMyPolls: REQUIRE_SESSION,
+  updateNotificationPrefs: REQUIRE_SESSION,
+} as const
+
 export const getPoll = createServerFn({ method: 'GET' })
-  .middleware([sessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.getPoll)
   .validator(z.object({ pollId: pollIdSchema }))
   .handler(async ({ data, context }) => {
     const view = await pollService.getPollView(getDb(), data.pollId, {
@@ -27,7 +53,7 @@ export const getPoll = createServerFn({ method: 'GET' })
   })
 
 export const createPoll = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware, rateLimitMiddleware('create')])
+  .middleware(SERVER_FN_MIDDLEWARE.createPoll)
   .validator(createPollSchema)
   .handler(async ({ data, context }) => {
     const result = await pollService.createPoll(getDb(), context.session.user.id, data)
@@ -36,7 +62,7 @@ export const createPoll = createServerFn({ method: 'POST' })
   })
 
 export const updatePoll = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.updatePoll)
   .validator(updatePollSchema)
   .handler(async ({ data, context }) => {
     const { pollId, ...input } = data
@@ -52,7 +78,7 @@ export const updatePoll = createServerFn({ method: 'POST' })
   })
 
 export const setPollStatus = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.setPollStatus)
   .validator(z.object({ pollId: pollIdSchema, status: z.enum(['open', 'closed']) }))
   .handler(async ({ data, context }) => {
     await pollService.setPollStatus(getDb(), data.pollId, context.session.user.id, data.status)
@@ -60,7 +86,7 @@ export const setPollStatus = createServerFn({ method: 'POST' })
   })
 
 export const finalizePoll = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.finalizePoll)
   .validator(z.object({ pollId: pollIdSchema, optionId: z.string() }))
   .handler(async ({ data, context }) => {
     const result = await pollService.finalizePoll(
@@ -76,27 +102,29 @@ export const finalizePoll = createServerFn({ method: 'POST' })
   })
 
 export const deletePoll = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.deletePoll)
   .validator(z.object({ pollId: pollIdSchema }))
   .handler(async ({ data, context }) => {
     await pollService.deletePoll(getDb(), data.pollId, context.session.user.id)
+    await notifyChanged(data.pollId, 'poll')
+    await syncDeadline(data.pollId, null)
   })
 
 export const duplicatePoll = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.duplicatePoll)
   .validator(z.object({ pollId: pollIdSchema }))
   .handler(async ({ data, context }) => {
     return pollService.duplicatePoll(getDb(), data.pollId, context.session.user.id)
   })
 
 export const listMyPolls = createServerFn({ method: 'GET' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.listMyPolls)
   .handler(async ({ context }) => {
     return pollService.listMyPolls(getDb(), context.session.user.id)
   })
 
 export const updateNotificationPrefs = createServerFn({ method: 'POST' })
-  .middleware([requireSessionMiddleware])
+  .middleware(SERVER_FN_MIDDLEWARE.updateNotificationPrefs)
   .validator(notificationPrefsSchema)
   .handler(async ({ data, context }) => {
     const { pollId, ...prefs } = data
