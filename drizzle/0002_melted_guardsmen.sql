@@ -22,7 +22,7 @@ CREATE TABLE `booking_pages` (
 	FOREIGN KEY (`owner_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `booking_pages_owner_slug_uidx` ON `booking_pages` (`owner_id`,`slug`);--> statement-breakpoint
+CREATE UNIQUE INDEX `booking_pages_owner_slug_uidx` ON `booking_pages` (`owner_id`,`slug`) WHERE "booking_pages"."deleted_at" IS NULL;--> statement-breakpoint
 CREATE TABLE `bookings` (
 	`id` text PRIMARY KEY NOT NULL,
 	`page_id` text NOT NULL,
@@ -47,6 +47,12 @@ ALTER TABLE `user` ADD `handle` text;--> statement-breakpoint
 -- Hand-written: Better-Auth's `auth generate` emits the `handle` column above but has no way to
 -- express a unique index on a Better-Auth additionalField, so this index is added by hand rather
 -- than generated. Partial (WHERE handle IS NOT NULL) so multiple users without a handle yet don't
--- collide on NULL; drizzle-kit's own schema diffing does not model this table (it lives in
--- auth-schema.ts, generated separately), so it will not attempt to drop this index later.
+-- collide on NULL. drizzle-kit *does* model the `user` table (auth-schema.ts is re-exported by
+-- schema.ts, drizzle.config.ts's schema entrypoint), but this index isn't declared on the `handle`
+-- column there (no `.unique()` / index builder), so drizzle-kit's diffing doesn't see it and won't
+-- try to drop it on the next `db:generate` — that stays true only as long as `handle` stays
+-- undeclared in auth-schema.ts. If a future `bun run auth:generate` (or a hand-edit) adds
+-- `.unique()` to `handle`, drizzle-kit will start modeling its own unique constraint/index for the
+-- column, which would collide or duplicate with this hand-written partial index; reconcile the two
+-- (likely by dropping this one) rather than letting both stand.
 CREATE UNIQUE INDEX `user_handle_unique` ON `user` (`handle`) WHERE `handle` IS NOT NULL;

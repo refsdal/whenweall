@@ -57,7 +57,10 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
     user: {
       additionalFields: {
         locale: { type: 'string', required: false, input: true },
-        handle: { type: 'string', required: false, input: true },
+        // handle is server-managed (see setUserHandle in src/server/bookings/pages.ts) and must
+        // never be client-writable, or /update-user and /sign-up could set it directly and bypass
+        // handleSchema's slug/uniqueness validation.
+        handle: { type: 'string', required: false, input: false },
       },
       deleteUser: { enabled: true },
     },

@@ -296,7 +296,8 @@
             "owner_id",
             "slug"
           ],
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"booking_pages\".\"deleted_at\" IS NULL"
         }
       },
       "foreignKeys": {

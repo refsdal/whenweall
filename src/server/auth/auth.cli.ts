@@ -14,7 +14,7 @@ export function createAuth(d1: D1Database) {
     user: {
       additionalFields: {
         locale: { type: 'string', required: false, input: true },
-        handle: { type: 'string', required: false, input: true },
+        handle: { type: 'string', required: false, input: false },
       },
     },
   })

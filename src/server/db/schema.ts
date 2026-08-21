@@ -174,7 +174,13 @@ export const bookingPages = sqliteTable(
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),
   },
-  (t) => [uniqueIndex('booking_pages_owner_slug_uidx').on(t.ownerId, t.slug)],
+  (t) => [
+    // Partial so a soft-deleted page's slug can be reused by a new (or re-created) page — only
+    // live pages (deleted_at IS NULL) compete for a slug.
+    uniqueIndex('booking_pages_owner_slug_uidx')
+      .on(t.ownerId, t.slug)
+      .where(sql`${t.deletedAt} IS NULL`),
+  ],
 )
 
 export const bookings = sqliteTable(

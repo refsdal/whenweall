@@ -58,6 +58,23 @@ describe('createPage', () => {
     await createPage(db, owner1, baseInput())
     await expect(createPage(db, owner2, baseInput())).resolves.toBeTruthy()
   })
+
+  it('allows reusing a slug after the page that held it is soft-deleted', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+
+    const { id: firstId } = await createPage(db, ownerId, baseInput())
+    await deletePage(db, firstId, ownerId)
+
+    const { id: secondId } = await createPage(db, ownerId, baseInput())
+    expect(secondId).toBeTruthy()
+    expect(secondId).not.toBe(firstId)
+
+    // Two live pages with the same (owner, slug) still collide.
+    await expect(createPage(db, ownerId, baseInput())).rejects.toMatchObject(
+      new AppError('SLUG_TAKEN'),
+    )
+  })
 })
 
 describe('updatePage', () => {
