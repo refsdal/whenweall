@@ -39,6 +39,15 @@ export const slugSchema = z
   .max(LIMITS.slugMax)
   .regex(HANDLE_SLUG_RE, 'Must be lowercase letters, digits and hyphens')
 
+/**
+ * Shape of a booking page id as minted by `newId()` (`nanoid(16)`, the library's default
+ * URL-safe alphabet): 16 characters of `A-Za-z0-9_-`. Same role as polls' `pollIdSchema` — a
+ * cheap, pre-database sanity check on a path param before it reaches a Durable Object lookup
+ * (see `src/routes/api/bookings/$pageId/ws.ts`) — but sized to this id's actual format rather
+ * than reusing `pollIdSchema`'s 12-char alnum-only pattern, which real page ids don't match.
+ */
+export const pageIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16}$/)
+
 const HHMM_RE = /^([01]\d|2[0-3]):(00|15|30|45)$/
 
 function toMinutes(hhmm: string): number {
@@ -140,13 +149,15 @@ export const updateBookingPageSchema = createBookingPageSchema.partial().extend(
 
 export type UpdateBookingPageInput = z.infer<typeof updateBookingPageSchema>
 
+// No `timezone` field: availability is computed against the page's own configured timezone
+// (`page.timezone`, via `pageRulesFrom`/`generateSlots`), and slots are grouped into the
+// visitor's local days entirely client-side — the visitor's zone never needs to reach the server.
 export const publicAvailabilityQuerySchema = z
   .object({
     handle: handleSchema,
     slug: slugSchema,
     from: z.iso.date(),
     to: z.iso.date(),
-    timezone: timezoneSchema,
   })
   .refine(
     (data) => {

@@ -8,6 +8,7 @@ import type { MailMessage } from '#/server/mailer/mailer'
 import { BookingRoom } from '#/do/BookingRoom'
 import type { BookingRoomEvent } from '#/do/booking-protocol'
 import { cancelBooking } from '#/server/bookings/bookings'
+import { deletePage } from '#/server/bookings/pages'
 import { makeBookingPage, makeUser } from '../../../test/helpers'
 
 // `vi.mock` cannot reach code running inside a Durable Object's own module graph in
@@ -351,6 +352,35 @@ describe('reminder alarm', () => {
     // Cancel via the service directly (bypassing the DO) so the reminder key is left stale, as if
     // the booking had been cancelled through some other path.
     await cancelBooking(db, bookingId, 'organiser')
+    await putStorage(stub, `reminder:${bookingId}`, Date.now() - 1000)
+
+    const sent: MailMessage[] = []
+    await installMailer(stub, async (_env, msg) => {
+      sent.push(msg)
+      return true
+    })
+
+    await runDurableObjectAlarm(stub)
+
+    expect(sent).toHaveLength(0)
+    expect(await getStorage(stub, `reminder:${bookingId}`)).toBeUndefined()
+  })
+
+  it('skips a booking on a soft-deleted page but still clears its key', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const stub = stubFor(pageId)
+    const startAt = nextWeekdaySlot()
+
+    const { bookingId } = await stub.book(
+      pageId,
+      { startAt, name: 'Alice', email: 'alice@example.com', timezone: 'Europe/Oslo' },
+      [],
+    )
+    // Soft-delete the page directly (bypassing the DO), as if the organiser deleted it after
+    // booking — the reminder key is left stale, as with a stray cancellation above.
+    await deletePage(db, pageId, ownerId)
     await putStorage(stub, `reminder:${bookingId}`, Date.now() - 1000)
 
     const sent: MailMessage[] = []

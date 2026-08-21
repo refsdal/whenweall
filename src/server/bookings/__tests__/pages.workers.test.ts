@@ -146,9 +146,35 @@ describe('getPublicPage', () => {
     expect(page?.title).toBe('15 min intro')
     expect(page?.owner).toEqual({ name: 'Grace' })
     expect(page?.status).toBe('active')
+    expect(page?.handle).toBe('grace')
+    expect(page?.slug).toBe('intro-call')
     // no owner id / email leak to the public view
     expect(page).not.toHaveProperty('ownerId')
     expect(page).not.toHaveProperty('email')
+  })
+
+  it('only exposes fields the public client actually uses (no availability/buffers/minNotice)', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db, { name: 'Iris' })
+    await setUserHandle(db, ownerId, 'iris')
+    await createPage(db, ownerId, baseInput())
+
+    const page = await getPublicPage(db, 'iris', 'intro-call')
+    expect(page && Object.keys(page).sort()).toEqual(
+      [
+        'id',
+        'handle',
+        'slug',
+        'title',
+        'description',
+        'location',
+        'timezone',
+        'slotDurationMin',
+        'maxDaysAhead',
+        'status',
+        'owner',
+      ].sort(),
+    )
   })
 
   it('still returns a paused page (so the route can show a paused message)', async () => {

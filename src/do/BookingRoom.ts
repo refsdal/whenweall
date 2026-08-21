@@ -210,7 +210,9 @@ export class BookingRoom extends DurableObject<Env> {
     const page = await db.query.bookingPages.findFirst({
       where: eq(bookingPages.id, booking.pageId),
     })
-    if (!page || !page.reminders) return
+    // A soft-deleted page (deletePage) is treated the same as "reminders off" — nothing left to
+    // remind anyone about once the page itself is gone.
+    if (!page || !page.reminders || page.deletedAt) return
 
     await sendBookingEmails(this.env, 'reminder', bookingId, { db, mailer: this.mailer })
   }

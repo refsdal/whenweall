@@ -77,7 +77,6 @@ export const Route = createFileRoute('/book/$handle/$slug')({
           handle: params.handle,
           slug: params.slug,
           ...monthWindow(value),
-          timezone: deps.tz ?? 'UTC',
         },
       })
 

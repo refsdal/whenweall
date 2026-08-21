@@ -34,21 +34,23 @@ export type PageView = {
   updatedAt: string
 }
 
-/** What a visitor sees at `/book/<handle>/<slug>` — no owner id, no email. */
+/**
+ * What a visitor sees at `/book/<handle>/<slug>` — trimmed to exactly the fields the public
+ * client (PublicBookingPage, RescheduleDialog) renders. No owner id, no email, and — unlike
+ * `PageView` — no availability/dateOverrides/buffers/minNotice: slot generation runs server-side
+ * against the raw `BookingPage` row (see `computeBusy`/`generateSlots` in bookings.functions.ts),
+ * so those scheduling rules never need to reach the browser.
+ */
 export type PublicPageView = {
   id: string
+  handle: string
   slug: string
   title: string
   description: string | null
   location: string | null
   timezone: string
   slotDurationMin: number
-  bufferBeforeMin: number
-  bufferAfterMin: number
-  minNoticeMin: number
   maxDaysAhead: number
-  availability: Availability
-  dateOverrides: DateOverrides | null
   status: BookingPageStatus
   owner: { name: string }
 }

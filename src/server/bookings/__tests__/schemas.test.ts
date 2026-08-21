@@ -6,12 +6,14 @@ import {
   dateOverridesSchema,
   handleSchema,
   manageBookingSchema,
+  pageIdSchema,
   publicAvailabilityQuerySchema,
   rescheduleSchema,
   slugSchema,
   timeRangeSchema,
   updateBookingPageSchema,
 } from '#/server/bookings/schemas'
+import { newId } from '#/lib/ids'
 
 describe('handleSchema / slugSchema', () => {
   it('accepts valid handles', () => {
@@ -33,6 +35,18 @@ describe('handleSchema / slugSchema', () => {
   it('slugSchema follows the same rules', () => {
     expect(slugSchema.safeParse('intro-call').success).toBe(true)
     expect(slugSchema.safeParse('IntroCall').success).toBe(false)
+  })
+})
+
+describe('pageIdSchema', () => {
+  it('accepts a real newId() (16-char nanoid)', () => {
+    expect(pageIdSchema.safeParse(newId()).success).toBe(true)
+  })
+
+  it('rejects the wrong length and non-nanoid characters', () => {
+    expect(pageIdSchema.safeParse('too-short').success).toBe(false)
+    expect(pageIdSchema.safeParse('a'.repeat(17)).success).toBe(false)
+    expect(pageIdSchema.safeParse('not a valid id!!').success).toBe(false)
   })
 })
 
@@ -184,7 +198,6 @@ describe('publicAvailabilityQuerySchema', () => {
   const base = {
     handle: 'anders',
     slug: 'intro-call',
-    timezone: 'Europe/Oslo',
   }
 
   it('accepts a window of 62 days or less', () => {

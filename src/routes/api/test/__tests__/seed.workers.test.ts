@@ -24,7 +24,6 @@ describe('POST /api/test/seed — withBookingPage', () => {
     expect(page!.id).toBe(body.pageId)
     expect(page!.slotDurationMin).toBe(30)
     expect(page!.timezone).toBe('Europe/Oslo')
-    expect(page!.availability['1']).toEqual([{ start: '09:00', end: '17:00' }])
     expect(page!.status).toBe('active')
   })
 

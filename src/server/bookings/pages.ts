@@ -192,18 +192,14 @@ export async function getPublicPage(
 
   return {
     id: page.id,
+    handle: owner.handle ?? handle,
     slug: page.slug,
     title: page.title,
     description: page.description,
     location: page.location,
     timezone: page.timezone,
     slotDurationMin: page.slotDurationMin,
-    bufferBeforeMin: page.bufferBeforeMin,
-    bufferAfterMin: page.bufferAfterMin,
-    minNoticeMin: page.minNoticeMin,
     maxDaysAhead: page.maxDaysAhead,
-    availability: JSON.parse(page.availability),
-    dateOverrides: page.dateOverrides ? JSON.parse(page.dateOverrides) : null,
     status: page.status,
     owner: { name: owner.name },
   }

@@ -72,7 +72,7 @@ export function RescheduleDialog({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void availability({ data: { handle, slug, ...monthWindow(month), timezone: timeZone } })
+    void availability({ data: { handle, slug, ...monthWindow(month) } })
       .then((result) => {
         if (cancelled) return
         setLoaded({ month, page: result?.page ?? null, slots: result?.slots ?? [] })
