@@ -11,7 +11,7 @@ import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { authErrorMessage } from '#/lib/auth-errors'
 import { getLocale, m } from '#/lib/i18n'
-import { nextSearchSchema } from '#/lib/search'
+import { nextSearchSchema, safeNext } from '#/lib/search'
 import { cn } from '#/lib/utils'
 import { authClient } from '#/server/auth/client'
 
@@ -21,7 +21,7 @@ export const Route = createFileRoute('/signup')({
     if (context.session) {
       // `/dashboard` doesn't exist yet (arrives with task 19); until then, an already-signed-in
       // visitor lands on the home page instead of the poll list.
-      throw redirect({ href: search.next ?? '/' })
+      throw redirect({ href: safeNext(search.next) })
     }
   },
   component: SignupPage,
@@ -208,7 +208,7 @@ function SignupPage() {
             <span className="text-xs text-muted-foreground uppercase">{m.auth_or()}</span>
             <Separator className="flex-1" />
           </div>
-          <GoogleButton next={next ?? '/'} />
+          <GoogleButton next={safeNext(next)} />
         </>
       )}
     </AuthCard>

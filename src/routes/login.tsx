@@ -12,7 +12,7 @@ import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { authErrorMessage } from '#/lib/auth-errors'
 import { m } from '#/lib/i18n'
-import { nextSearchSchema } from '#/lib/search'
+import { nextSearchSchema, safeNext } from '#/lib/search'
 import { authClient } from '#/server/auth/client'
 
 export const Route = createFileRoute('/login')({
@@ -21,7 +21,7 @@ export const Route = createFileRoute('/login')({
     if (context.session) {
       // `/dashboard` doesn't exist yet (arrives with task 19); until then, an already-signed-in
       // visitor lands on the home page instead of the poll list.
-      throw redirect({ href: search.next ?? '/' })
+      throw redirect({ href: safeNext(search.next) })
     }
   },
   component: LoginPage,
@@ -73,7 +73,7 @@ function LoginPage() {
         return
       }
       await router.invalidate()
-      await navigate({ href: next ?? '/' })
+      await navigate({ href: safeNext(next) })
     } finally {
       setSubmitting(false)
     }
@@ -181,8 +181,8 @@ function LoginPage() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <PasskeySignInButton next={next ?? '/'} />
-        {publicConfig.googleEnabled && <GoogleButton next={next ?? '/'} />}
+        <PasskeySignInButton next={safeNext(next)} />
+        {publicConfig.googleEnabled && <GoogleButton next={safeNext(next)} />}
       </div>
     </AuthCard>
   )

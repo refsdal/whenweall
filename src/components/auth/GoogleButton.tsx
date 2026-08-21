@@ -1,12 +1,15 @@
 import type { SVGProps } from 'react'
 import { Button } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
+import { safeNext } from '#/lib/search'
 import { authClient } from '#/server/auth/client'
 
 /** Redirects to Google's consent screen; Better-Auth brings the user back to `next` on success. */
 export function GoogleButton({ next }: { next: string }) {
   async function handleClick() {
-    await authClient.signIn.social({ provider: 'google', callbackURL: next })
+    // Re-validated here too (defence in depth) even though callers already sanitize `next` —
+    // this component must never trust that upstream validation ran.
+    await authClient.signIn.social({ provider: 'google', callbackURL: safeNext(next) })
   }
 
   return (

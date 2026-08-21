@@ -3,6 +3,7 @@ import { Fingerprint } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
+import { safeNext } from '#/lib/search'
 import { authClient } from '#/server/auth/client'
 
 export function PasskeySignInButton({ next }: { next: string }) {
@@ -16,7 +17,9 @@ export function PasskeySignInButton({ next }: { next: string }) {
       return
     }
     await router.invalidate()
-    await navigate({ href: next })
+    // Re-validated here too (defence in depth) even though callers already sanitize `next` —
+    // this component must never trust that upstream validation ran.
+    await navigate({ href: safeNext(next) })
   }
 
   return (
