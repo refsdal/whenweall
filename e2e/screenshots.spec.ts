@@ -125,6 +125,7 @@ test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithS
   const guest = await context.newPage()
   try {
     await guest.goto(`/p/${pollId}`)
+    await waitForHydration(guest)
     await expect(guest.getByTestId('slot-board')).toBeVisible()
     await guest
       .getByTestId('slot-card')
@@ -143,6 +144,7 @@ test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithS
 
   await signIn(page, userWithSignup)
   await page.goto(`/p/${pollId}`)
+  await waitForHydration(page)
   await expect(page.getByTestId('slot-board')).toBeVisible()
   await shoot(page, 'signup')
 })
