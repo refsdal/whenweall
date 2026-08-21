@@ -1,4 +1,4 @@
-import { useRouteContext } from '@tanstack/react-router'
+import { Link, useRouteContext } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 import { buttonVariants } from '#/components/ui/button'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
@@ -19,14 +19,13 @@ export function Header() {
         <nav className="flex items-center gap-1.5 sm:gap-2.5">
           <LocaleSwitcher className="hidden sm:inline-flex" />
           <ThemeToggle />
-          {/* `/new` arrives with task 17; plain anchor until the route exists. */}
-          <a
-            href="/new"
+          <Link
+            to="/new"
             className={cn(buttonVariants({ size: 'sm' }), 'gap-1.5 pl-3.5 max-sm:h-9 max-sm:px-3')}
           >
             <Plus aria-hidden="true" />
             <span className="max-sm:sr-only">{m.nav_new_poll()}</span>
-          </a>
+          </Link>
           <UserMenu session={session} />
         </nav>
       </div>

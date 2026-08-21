@@ -1,4 +1,8 @@
-import { createMiddleware } from '@tanstack/react-start'
+/**
+ * The rate limiter itself. The middleware that wraps it lives in `rate-limit.middleware.ts`,
+ * apart from this module so that a client component importing a rate-limited server function
+ * never drags `cloudflare:workers` into the browser bundle.
+ */
 // Imported from this deep subpath (rather than '@tanstack/react-start/server') so this
 // module can be loaded inside the Workers vitest pool, which does not run the TanStack
 // Start Vite plugin: the barrel re-export chain for '@tanstack/react-start/server' eagerly
@@ -28,11 +32,4 @@ export async function enforceRateLimit(
   const rateLimitKey = `${action}:${key ?? clientIp()}`
   const { success } = await limiter.limit({ key: rateLimitKey })
   if (!success) throw new AppError('RATE_LIMITED')
-}
-
-export function rateLimitMiddleware(action: RateLimitAction) {
-  return createMiddleware({ type: 'function' }).server(async ({ next }) => {
-    await enforceRateLimit(action)
-    return next()
-  })
 }
