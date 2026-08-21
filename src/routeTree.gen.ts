@@ -11,6 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
+import { Route as PIdCalendarDoticsRouteImport } from './routes/p/$id/calendar[.]ics'
+import { Route as ApiPollsIdWsRouteImport } from './routes/api/polls/$id/ws'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +25,74 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTestSeedRoute = ApiTestSeedRouteImport.update({
+  id: '/api/test/seed',
+  path: '/api/test/seed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PIdCalendarDoticsRoute = PIdCalendarDoticsRouteImport.update({
+  id: '/p/$id/calendar.ics',
+  path: '/p/$id/calendar.ics',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPollsIdWsRoute = ApiPollsIdWsRouteImport.update({
+  id: '/api/polls/$id/ws',
+  path: '/api/polls/$id/ws',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/test/seed': typeof ApiTestSeedRoute
+  '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/test/seed': typeof ApiTestSeedRoute
+  '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/test/seed': typeof ApiTestSeedRoute
+  '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/auth/$'
+  fullPaths:
+    | '/'
+    | '/api/auth/$'
+    | '/api/test/seed'
+    | '/p/$id/calendar.ics'
+    | '/api/polls/$id/ws'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/auth/$'
-  id: '__root__' | '/' | '/api/auth/$'
+  to:
+    | '/'
+    | '/api/auth/$'
+    | '/api/test/seed'
+    | '/p/$id/calendar.ics'
+    | '/api/polls/$id/ws'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/auth/$'
+    | '/api/test/seed'
+    | '/p/$id/calendar.ics'
+    | '/api/polls/$id/ws'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiTestSeedRoute: typeof ApiTestSeedRoute
+  PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
+  ApiPollsIdWsRoute: typeof ApiPollsIdWsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,22 +111,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/test/seed': {
+      id: '/api/test/seed'
+      path: '/api/test/seed'
+      fullPath: '/api/test/seed'
+      preLoaderRoute: typeof ApiTestSeedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/p/$id/calendar.ics': {
+      id: '/p/$id/calendar.ics'
+      path: '/p/$id/calendar.ics'
+      fullPath: '/p/$id/calendar.ics'
+      preLoaderRoute: typeof PIdCalendarDoticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/polls/$id/ws': {
+      id: '/api/polls/$id/ws'
+      path: '/api/polls/$id/ws'
+      fullPath: '/api/polls/$id/ws'
+      preLoaderRoute: typeof ApiPollsIdWsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiTestSeedRoute: ApiTestSeedRoute,
+  PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
+  ApiPollsIdWsRoute: ApiPollsIdWsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
+import type { startInstance } from './start.ts'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }

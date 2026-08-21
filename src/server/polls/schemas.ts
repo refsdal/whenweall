@@ -154,6 +154,8 @@ export const addCommentSchema = z.object({
   authorName: z.string().trim().min(1).max(LIMITS.name),
   body: z.string().trim().min(1).max(LIMITS.comment),
   turnstileToken: z.string().optional(),
+  participantId: z.string().optional(),
+  editToken: z.string().optional(),
 })
 
 export type AddCommentInput = z.infer<typeof addCommentSchema>
