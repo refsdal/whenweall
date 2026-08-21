@@ -143,7 +143,8 @@ export function AdminBar({
         <Button
           type="button"
           size="sm"
-          disabled={busy || poll.options.length === 0}
+          // Re-finalizing is a conflict on the server, so a decided poll offers no pick button.
+          disabled={busy || poll.options.length === 0 || poll.status === 'finalized'}
           onClick={() => setFinalizeOpen(true)}
         >
           <Crown aria-hidden="true" />
