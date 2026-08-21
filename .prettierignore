@@ -1,0 +1,10 @@
+worker-configuration.d.ts
+src/routeTree.gen.ts
+src/paraglide/
+drizzle/
+bun.lock
+dist/
+.wrangler/
+playwright-report/
+test-results/
+.superpowers/

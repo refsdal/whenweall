@@ -6,11 +6,11 @@ Date: 2026-08-20 · Working name: **samla** (Norwegian "gathered"; branding isol
 
 Anders wants a free, public Doodle/Rallly-style app that runs **natively** on Cloudflare Workers with D1, using Better-Auth, a modern React full-stack framework, Tailwind, and a UI that is very fast and genuinely fun to use. This spec covers **v1**; the architecture deliberately leaves room for later stages, each of which gets its own spec → plan → build cycle:
 
-| Stage | Scope |
-|---|---|
+| Stage              | Scope                                                                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **v1 (this spec)** | Group date/time polls + generic option polls (one "poll" engine), organiser accounts, guest voting, comments, deadline, finalise, live updates, email notifications, en + nb |
-| v2 | Sign-up sheets (options gain `capacity`; participants *claim* instead of vote) |
-| v3 | 1:1 booking pages (availability engine, Google Calendar sync) |
+| v2                 | Sign-up sheets (options gain `capacity`; participants _claim_ instead of vote)                                                                                               |
+| v3                 | 1:1 booking pages (availability engine, Google Calendar sync)                                                                                                                |
 
 ## Decisions made (with the user)
 
@@ -40,6 +40,7 @@ Browser ──SSR HTML / server fns──▶ Worker (TanStack Start, Vite + @clo
 ```
 
 Principles:
+
 - **D1 owns all durable poll data.** Server functions write to D1 (atomic via `batch()`), then call the poll's DO best-effort. DO failure never fails a user request.
 - **DO owns only ephemeral/coordination state**: connected sockets, pending digest events, scheduled alarm timestamps.
 - Bindings accessed via `import { env } from "cloudflare:workers"` in server code.
@@ -63,18 +64,18 @@ Deletion: polls are soft-deleted (`deleted_at`) and excluded from all public que
 
 ## 3. Routes and flows
 
-| Route | Access | Purpose |
-|---|---|---|
-| `/` | public | Landing (value prop, CTA, language toggle) |
-| `/new` | signed-in (else `/login?next=/new`) | 3-step creator: (1) type + title/description/location, (2) options — date picker with multi-select days and optional time slots (datetime polls) or a free-text list (option polls), (3) settings — deadline, allow if-need-be, allow comments, require participant email. Creates poll → `/p/:id` with share sheet open |
-| `/p/:id` | public | Poll page: grid (options × participants), "add yourself" row, best-option highlight, comments, deadline countdown, finalised banner with *Add to calendar*, presence count. Owner additionally sees an admin bar: Finalise, Close/Reopen, Edit, Delete, Share, notification toggles |
-| `/p/:id/edit` | owner | Edit details/options/settings. Removing an option with votes requires confirmation |
-| `/p/:id/calendar.ics` | public | iCal for the finalised option (server route; 404 if not finalised) |
-| `/dashboard` | signed-in | My polls: status, participant count, deadline, quick actions (open, duplicate, delete) |
-| `/login`, `/signup`, `/forgot-password`, `/reset-password`, `/verify-email` | public | Better-Auth UI incl. Turnstile, Google button, passkey sign-in |
-| `/settings` | signed-in | Name, passkeys (add/remove), language, delete account |
-| `/api/auth/*` | — | Better-Auth handler (server route) |
-| `/api/polls/:id/ws` | public | WebSocket upgrade forwarded to the poll's DO |
+| Route                                                                       | Access                              | Purpose                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/`                                                                         | public                              | Landing (value prop, CTA, language toggle)                                                                                                                                                                                                                                                                               |
+| `/new`                                                                      | signed-in (else `/login?next=/new`) | 3-step creator: (1) type + title/description/location, (2) options — date picker with multi-select days and optional time slots (datetime polls) or a free-text list (option polls), (3) settings — deadline, allow if-need-be, allow comments, require participant email. Creates poll → `/p/:id` with share sheet open |
+| `/p/:id`                                                                    | public                              | Poll page: grid (options × participants), "add yourself" row, best-option highlight, comments, deadline countdown, finalised banner with _Add to calendar_, presence count. Owner additionally sees an admin bar: Finalise, Close/Reopen, Edit, Delete, Share, notification toggles                                      |
+| `/p/:id/edit`                                                               | owner                               | Edit details/options/settings. Removing an option with votes requires confirmation                                                                                                                                                                                                                                       |
+| `/p/:id/calendar.ics`                                                       | public                              | iCal for the finalised option (server route; 404 if not finalised)                                                                                                                                                                                                                                                       |
+| `/dashboard`                                                                | signed-in                           | My polls: status, participant count, deadline, quick actions (open, duplicate, delete)                                                                                                                                                                                                                                   |
+| `/login`, `/signup`, `/forgot-password`, `/reset-password`, `/verify-email` | public                              | Better-Auth UI incl. Turnstile, Google button, passkey sign-in                                                                                                                                                                                                                                                           |
+| `/settings`                                                                 | signed-in                           | Name, passkeys (add/remove), language, delete account                                                                                                                                                                                                                                                                    |
+| `/api/auth/*`                                                               | —                                   | Better-Auth handler (server route)                                                                                                                                                                                                                                                                                       |
+| `/api/polls/:id/ws`                                                         | public                              | WebSocket upgrade forwarded to the poll's DO                                                                                                                                                                                                                                                                             |
 
 **Server functions** (TanStack `createServerFn`, Zod 4 input schemas shared with the client, in `src/server/polls/*`):
 `createPoll`, `updatePoll`, `deletePoll`, `duplicatePoll`, `closePoll`/`reopenPoll`, `finalizePoll(optionId)`, `getPoll(id)` (public view model: hides emails and tokens), `listMyPolls`, `addParticipant(name, email?, answers[], turnstileToken)`, `updateParticipant(participantId, editToken|session, name?, answers[])`, `removeParticipant` (owner), `addComment(body, authorName, turnstileToken)`, `deleteComment` (owner or author), `updateNotificationPrefs`.
@@ -89,14 +90,18 @@ Deletion: polls are soft-deleted (`deleted_at`) and excluded from all public que
 
 ```ts
 betterAuth({
-  database: drizzleAdapter(db, { provider: "sqlite" }),   // db = drizzle(env.DB) from drizzle-orm/d1
-  emailAndPassword: { enabled: true, requireEmailVerification: true, sendResetPassword, },
+  database: drizzleAdapter(db, { provider: 'sqlite' }), // db = drizzle(env.DB) from drizzle-orm/d1
+  emailAndPassword: { enabled: true, requireEmailVerification: true, sendResetPassword },
   emailVerification: { sendVerificationEmail, sendOnSignUp: true },
   socialProviders: { google: { clientId, clientSecret } },
-  plugins: [passkey({ rpID, rpName, origin }), captcha({ provider: "cloudflare-turnstile", secretKey })],
-  user: { additionalFields: { locale: { type: "string", required: false } } },
+  plugins: [
+    passkey({ rpID, rpName, origin }),
+    captcha({ provider: 'cloudflare-turnstile', secretKey }),
+  ],
+  user: { additionalFields: { locale: { type: 'string', required: false } } },
 })
 ```
+
 - `provider: "sqlite"` is the dialect; D1 is SQLite. Drizzle adapter chosen (over native `database: env.DB`) so auth + app tables share one schema and one migration pipeline.
 - Client: `createAuthClient({ plugins: [passkeyClient()] })`. Route guards in `beforeLoad` using a per-request cached `getSession` server fn.
 - Authorization helpers in `src/server/auth/guards.ts`: `requireSession()`, `requireOwner(pollId)`, `verifyEditToken(participantId, token)`.
@@ -178,4 +183,3 @@ Known risks with "latest": TypeScript 7 is the Go-native compiler — if any too
 ## 11. Out of scope for v1 (explicit)
 
 Hidden votes/participants, vote reminders to invitees, deadline-approaching reminders, sign-up capacity, 1:1 booking, calendar sync, paid tiers, admin/moderation console, hard-purge job for soft-deleted polls, magic-link sign-in.
-
