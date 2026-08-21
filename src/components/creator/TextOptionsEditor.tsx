@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 import { Plus, X } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import { CapacityField } from '#/components/creator/CapacityField'
 import type { DraftTextOption } from '#/components/creator/creator-state'
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
@@ -22,20 +23,27 @@ import { LIMITS } from '#/server/polls/schemas'
  */
 const enter = { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 }, transition: spring }
 
-/** Trims a row's label and drops its `id` key entirely when there isn't one, for clean equality. */
+/**
+ * Trims a row's label and drops its `id`/`capacity` keys entirely when there isn't one, for clean
+ * equality.
+ */
 function clean(option: DraftTextOption): DraftTextOption {
   const label = option.label.trim()
-  return option.id ? { id: option.id, label } : { label }
+  const base: DraftTextOption = option.id ? { id: option.id, label } : { label }
+  return option.capacity !== undefined ? { ...base, capacity: option.capacity } : base
 }
 
 export function TextOptionsEditor({
   value,
   onChange,
   max = LIMITS.options,
+  showCapacity = false,
 }: {
   value: DraftTextOption[]
   onChange: (options: DraftTextOption[]) => void
   max?: number
+  /** Signup only: shows a capacity field per option. */
+  showCapacity?: boolean
 }) {
   const reduceMotion = useReducedMotion()
   const [rows, setRows] = useState<DraftTextOption[]>(() =>
@@ -67,6 +75,10 @@ export function TextOptionsEditor({
     if (rows.length <= 1) return
     commit(rows.filter((_, i) => i !== index))
     focusRow.current = Math.max(index - 1, 0)
+  }
+
+  function setCapacityAt(index: number, capacity: number | null) {
+    commit(rows.map((r, i) => (i === index ? { ...r, capacity } : r)))
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>, index: number) {
@@ -111,6 +123,14 @@ export function TextOptionsEditor({
               onKeyDown={(e) => handleKeyDown(e, index)}
               className="h-10"
             />
+            {showCapacity && (
+              <CapacityField
+                id={`text-option-capacity-${index}`}
+                size="sm"
+                value={row.capacity ?? 1}
+                onChange={(capacity) => setCapacityAt(index, capacity)}
+              />
+            )}
             {rows.length > 1 && (
               <Button
                 type="button"

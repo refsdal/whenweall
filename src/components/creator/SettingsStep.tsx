@@ -1,11 +1,12 @@
 import { useMemo, useState, type Dispatch } from 'react'
-import { CalendarClock, CircleHelp, MapPin, MessageSquare, Mail } from 'lucide-react'
+import { CalendarClock, CircleHelp, MapPin, MessageSquare, Mail, Users } from 'lucide-react'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Switch } from '#/components/ui/switch'
 import { optionCountLabel } from '#/components/creator/OptionsStep'
 import {
   countOptions,
+  signupCapacitySummary,
   type CreatorAction,
   type CreatorDraft,
 } from '#/components/creator/creator-state'
@@ -59,12 +60,14 @@ export function SettingsStep({
 }) {
   const locale = getLocale()
   const stored = draft.deadlineAt ? utcIsoToLocalParts(draft.deadlineAt, draft.timezone) : null
+  const isSignup = draft.type === 'signup'
 
   const [enabled, setEnabled] = useState(draft.deadlineAt !== null)
   const [date, setDate] = useState(stored?.date ?? defaultDeadlineDate(draft))
   const [time, setTime] = useState(stored?.time ?? '12:00')
 
   const count = countOptions(draft)
+  const { slots, spots } = signupCapacitySummary(draft)
 
   const deadlineText = useMemo(() => {
     if (!draft.deadlineAt) return m.creator_deadline_none()
@@ -154,15 +157,45 @@ export function SettingsStep({
         )}
       </section>
 
+      {isSignup && (
+        <section className="flex flex-col gap-1.5 rounded-xl border border-border bg-card p-4">
+          <div className="flex items-start gap-3">
+            <Users aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <Label htmlFor="creator-max-claims">{m.creator_signup_maxclaims_label()}</Label>
+              <p className="text-sm text-muted-foreground">{m.creator_signup_maxclaims_desc()}</p>
+            </div>
+          </div>
+          <Input
+            id="creator-max-claims"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={100}
+            step={1}
+            value={draft.signupMaxClaims}
+            className="ml-7 h-9 w-24 tabular-nums"
+            onChange={(e) => {
+              const parsed = Number(e.target.value)
+              if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 100) {
+                setField('signupMaxClaims', parsed)
+              }
+            }}
+          />
+        </section>
+      )}
+
       <section className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card px-4">
-        <SettingRow
-          id="creator-ifneedbe"
-          icon={CircleHelp}
-          label={m.creator_allow_ifneedbe_label()}
-          description={m.creator_allow_ifneedbe_desc()}
-          checked={draft.allowIfNeedBe}
-          onCheckedChange={(next) => setField('allowIfNeedBe', next)}
-        />
+        {!isSignup && (
+          <SettingRow
+            id="creator-ifneedbe"
+            icon={CircleHelp}
+            label={m.creator_allow_ifneedbe_label()}
+            description={m.creator_allow_ifneedbe_desc()}
+            checked={draft.allowIfNeedBe}
+            onCheckedChange={(next) => setField('allowIfNeedBe', next)}
+          />
+        )}
         <SettingRow
           id="creator-comments"
           icon={MessageSquare}
@@ -189,9 +222,15 @@ export function SettingsStep({
         <p className="text-sm text-muted-foreground">
           {draft.type === 'datetime'
             ? m.creator_summary_type_datetime()
-            : m.creator_summary_type_options()}
+            : draft.type === 'options'
+              ? m.creator_summary_type_options()
+              : m.creator_summary_type_signup()}
           {' · '}
-          {optionCountLabel(count)}
+          {isSignup
+            ? spots === null
+              ? m.creator_summary_spots_unlimited({ slots })
+              : m.creator_summary_spots_total({ slots, spots })
+            : optionCountLabel(count)}
           {' · '}
           {deadlineText}
         </p>

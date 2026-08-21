@@ -158,6 +158,71 @@ describe('creatorReducer / applySlotsToAll', () => {
   })
 })
 
+describe('creatorReducer / signup capacity actions', () => {
+  it('sets a slot capacity by index without touching other slots', () => {
+    let d = creatorReducer(draft({ type: 'signup' }), { type: 'toggleDate', date: '2026-06-15' })
+    d = creatorReducer(d, { type: 'addSlot', date: '2026-06-15', start: '09:00', end: null })
+    d = creatorReducer(d, { type: 'addSlot', date: '2026-06-15', start: '13:00', end: null })
+
+    d = creatorReducer(d, { type: 'setSlotCapacity', date: '2026-06-15', index: 1, capacity: 5 })
+
+    expect(d.dates[0]?.slots).toEqual([
+      { start: '09:00', end: null },
+      { start: '13:00', end: null, capacity: 5 },
+    ])
+  })
+
+  it('sets a slot capacity to unlimited (null)', () => {
+    let d = creatorReducer(draft({ type: 'signup' }), { type: 'toggleDate', date: '2026-06-15' })
+    d = creatorReducer(d, { type: 'addSlot', date: '2026-06-15', start: '09:00', end: null })
+
+    d = creatorReducer(d, { type: 'setSlotCapacity', date: '2026-06-15', index: 0, capacity: null })
+
+    expect(d.dates[0]?.slots).toEqual([{ start: '09:00', end: null, capacity: null }])
+  })
+
+  it('sets an all-day date capacity', () => {
+    let d = creatorReducer(draft({ type: 'signup' }), { type: 'toggleDate', date: '2026-06-15' })
+
+    d = creatorReducer(d, { type: 'setDateCapacity', date: '2026-06-15', capacity: 3 })
+
+    expect(d.dates[0]).toEqual({ date: '2026-06-15', slots: [], capacity: 3 })
+  })
+
+  it('sets a text option capacity by index', () => {
+    const d = creatorReducer(
+      draft({ type: 'signup', textOptions: [{ label: 'Setup' }, { label: 'Cleanup' }] }),
+      {
+        type: 'setTextOptionCapacity',
+        index: 0,
+        capacity: 2,
+      },
+    )
+
+    expect(d.textOptions).toEqual([{ label: 'Setup', capacity: 2 }, { label: 'Cleanup' }])
+  })
+})
+
+describe('creatorReducer / applySlotsToAll (signup capacity)', () => {
+  it('copies slot capacity to every other day, but not ids', () => {
+    let d = draft({ type: 'signup' })
+    for (const date of ['2026-06-15', '2026-06-16']) {
+      d = creatorReducer(d, { type: 'toggleDate', date })
+    }
+    d = creatorReducer(d, { type: 'addSlot', date: '2026-06-15', start: '09:00', end: null })
+    d = creatorReducer(d, {
+      type: 'setSlotCapacity',
+      date: '2026-06-15',
+      index: 0,
+      capacity: 4,
+    })
+
+    d = creatorReducer(d, { type: 'applySlotsToAll', fromDate: '2026-06-15' })
+
+    expect(d.dates[1]?.slots).toEqual([{ start: '09:00', end: null, capacity: 4 }])
+  })
+})
+
 describe('creatorReducer / setTextOptions', () => {
   it('replaces the option list', () => {
     const d = creatorReducer(draft({ type: 'options' }), {
@@ -400,6 +465,93 @@ describe('draftToInput', () => {
     expect(input.allowComments).toBe(false)
     expect(input.requireParticipantEmail).toBe(true)
   })
+
+  it('omits capacity and signupMaxClaims for non-signup polls', () => {
+    const input = draftToInput(
+      draft({
+        title: 'Team lunch',
+        dates: [{ date: '2026-06-15', slots: [{ start: '09:00', end: null, capacity: 5 }] }],
+      }),
+    )
+
+    expect(input.options[0]).not.toHaveProperty('capacity')
+    expect(input).not.toHaveProperty('signupMaxClaims')
+  })
+
+  it('emits capacity on every option for a signup poll, defaulting an unset slot to 1', () => {
+    const input = draftToInput(
+      draft({
+        type: 'signup',
+        title: 'Bake sale',
+        signupMaxClaims: 2,
+        dates: [
+          {
+            date: '2026-06-15',
+            slots: [
+              { start: '09:00', end: null, capacity: 3 },
+              { start: '13:00', end: null },
+              { start: '18:00', end: null, capacity: null },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(input.options.map((o) => o.capacity)).toEqual([3, 1, null])
+    expect(input.signupMaxClaims).toBe(2)
+  })
+
+  it('sets allowIfNeedBe to false for a signup poll regardless of the draft value', () => {
+    const input = draftToInput(
+      draft({
+        type: 'signup',
+        title: 'Bake sale',
+        allowIfNeedBe: true,
+        dates: [{ date: '2026-06-15', slots: [] }],
+      }),
+    )
+
+    expect(input.allowIfNeedBe).toBe(false)
+  })
+
+  it('emits capacity for a signup poll with text options, defaulting unset ones to 1', () => {
+    const input = draftToInput(
+      draft({
+        type: 'signup',
+        title: 'Potluck',
+        textOptions: [
+          { label: 'Starter', capacity: 1 },
+          { label: 'Main', capacity: null },
+          { label: 'Dessert' },
+        ],
+      }),
+    )
+
+    expect(input.type).toBe('signup')
+    expect(input.options).toEqual([
+      { kind: 'text', label: 'Starter', capacity: 1 },
+      { kind: 'text', label: 'Main', capacity: null },
+      { kind: 'text', label: 'Dessert', capacity: 1 },
+    ])
+  })
+
+  it('sets an all-day signup date option capacity, defaulting to 1 when unset', () => {
+    const input = draftToInput(
+      draft({
+        type: 'signup',
+        title: 'Volunteer day',
+        dates: [
+          { date: '2026-06-15', slots: [], capacity: 5 },
+          { date: '2026-06-16', slots: [] },
+        ],
+      }),
+    )
+
+    expect(input.options).toEqual([
+      { kind: 'date', date: '2026-06-15', capacity: 5 },
+      { kind: 'date', date: '2026-06-16', capacity: 1 },
+    ])
+  })
 })
 
 function pollView(overrides: Partial<PollView> = {}): PollView {
@@ -524,6 +676,112 @@ describe('draftFromPoll', () => {
     expect(input.options).toEqual([
       { kind: 'text', label: 'Pizza', id: 'opt-1' },
       { kind: 'text', label: 'Sushi', id: 'opt-2' },
+    ])
+  })
+
+  it('round-trips a signup poll with per-slot capacities, including unlimited', () => {
+    const poll = pollView({
+      type: 'signup',
+      settings: {
+        requireParticipantEmail: false,
+        allowComments: true,
+        allowIfNeedBe: false,
+        signupMaxClaims: 3,
+      },
+      options: [
+        {
+          id: 'opt-1',
+          position: 0,
+          kind: 'datetime',
+          startAt: '2026-06-15T07:00:00.000Z',
+          endAt: null,
+          label: null,
+          capacity: 1,
+        },
+        {
+          id: 'opt-2',
+          position: 1,
+          kind: 'datetime',
+          startAt: '2026-06-15T16:00:00.000Z',
+          endAt: null,
+          label: null,
+          capacity: null,
+        },
+        {
+          id: 'opt-3',
+          position: 2,
+          kind: 'datetime',
+          startAt: '2026-06-16T07:00:00.000Z',
+          endAt: null,
+          label: null,
+          capacity: 5,
+        },
+      ],
+    })
+
+    const d = draftFromPoll(poll)
+
+    expect(d.type).toBe('signup')
+    expect(d.signupMaxClaims).toBe(3)
+    expect(d.dates).toEqual([
+      {
+        date: '2026-06-15',
+        slots: [
+          { id: 'opt-1', start: '09:00', end: null, capacity: 1 },
+          { id: 'opt-2', start: '18:00', end: null, capacity: null },
+        ],
+      },
+      { date: '2026-06-16', slots: [{ id: 'opt-3', start: '09:00', end: null, capacity: 5 }] },
+    ])
+
+    const input = draftToInput(d)
+    expect(input.options.map((o) => o.capacity)).toEqual([1, null, 5])
+    expect(input.signupMaxClaims).toBe(3)
+    expect(input.allowIfNeedBe).toBe(false)
+  })
+
+  it('round-trips a signup poll with text options and capacities', () => {
+    const poll = pollView({
+      type: 'signup',
+      settings: {
+        requireParticipantEmail: false,
+        allowComments: true,
+        allowIfNeedBe: false,
+        signupMaxClaims: 1,
+      },
+      options: [
+        {
+          id: 'opt-1',
+          position: 0,
+          kind: 'text',
+          startAt: null,
+          endAt: null,
+          label: 'Setup',
+          capacity: 2,
+        },
+        {
+          id: 'opt-2',
+          position: 1,
+          kind: 'text',
+          startAt: null,
+          endAt: null,
+          label: 'Cleanup',
+          capacity: null,
+        },
+      ],
+    })
+
+    const d = draftFromPoll(poll)
+
+    expect(d.textOptions).toEqual([
+      { id: 'opt-1', label: 'Setup', capacity: 2 },
+      { id: 'opt-2', label: 'Cleanup', capacity: null },
+    ])
+
+    const input = draftToInput(d)
+    expect(input.options).toEqual([
+      { kind: 'text', label: 'Setup', id: 'opt-1', capacity: 2 },
+      { kind: 'text', label: 'Cleanup', id: 'opt-2', capacity: null },
     ])
   })
 })
