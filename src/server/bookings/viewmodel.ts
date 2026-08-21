@@ -68,7 +68,11 @@ export type BookingView = {
   createdAt: string
 }
 
-/** `getBookingForManage`'s return: the booking plus enough of its page to render a manage page. */
+/**
+ * `getBookingForManage`'s return: the booking plus enough of its page to render a manage page.
+ * Deliberately omits the page's `ownerId` — a token-authenticated visitor gets this same shape as
+ * an authenticated owner, and nothing in this codebase reads the owner's internal id off it.
+ */
 export type BookingForManage = BookingView & {
   page: {
     id: string
@@ -76,6 +80,5 @@ export type BookingForManage = BookingView & {
     title: string
     location: string | null
     timezone: string
-    ownerId: string
   }
 }

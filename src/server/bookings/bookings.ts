@@ -44,11 +44,12 @@ function toBookingView(b: Booking): BookingView {
 }
 
 /**
- * Confirmed bookings on `page` overlapping `[range.from, range.to)`, expanded by the page's own
- * buffers. Bookings are stored in the DB *without* buffers applied (`start_at`/`end_at` are the
- * bare slot); the buffer is added here on read so that `generateSlots`/`isSlotAvailable` — which
- * independently pads whichever *candidate* slot it's checking by the same buffers — ends up
- * enforcing a consistent gap around every booking, whichever side of the comparison it's on.
+ * Confirmed bookings on `page` overlapping `[range.from, range.to)`, as their *raw* stored
+ * `[start_at, end_at)` — no buffer applied here. `generateSlots`/`isSlotAvailable` is the single
+ * place page buffers are applied (it independently pads whichever *candidate* slot it's checking
+ * by `bufferBeforeMin`/`bufferAfterMin` before comparing against the busy list): expanding a
+ * booking's interval by the buffer here too would double it — a slot exactly `bufferAfterMin`
+ * after a booking's end would need `2×bufferAfterMin` of clearance instead of the configured one.
  * `excludeBookingId` drops one booking (its own prior interval) so a reschedule doesn't collide
  * with the slot it's moving away from.
  */
@@ -69,10 +70,7 @@ async function bookedIntervalsForPage(
 
   return rows
     .filter((b) => b.id !== excludeBookingId)
-    .map((b) => ({
-      start: new Date(new Date(b.startAt).getTime() - page.bufferBeforeMin * 60_000).toISOString(),
-      end: new Date(new Date(b.endAt).getTime() + page.bufferAfterMin * 60_000).toISOString(),
-    }))
+    .map((b) => ({ start: b.startAt, end: b.endAt }))
 }
 
 export async function bookedIntervals(
@@ -228,7 +226,6 @@ export async function getBookingForManage(
       title: page.title,
       location: page.location,
       timezone: page.timezone,
-      ownerId: page.ownerId,
     },
   }
 }

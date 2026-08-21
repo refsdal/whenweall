@@ -91,14 +91,17 @@ describe('createBooking', () => {
     ).rejects.toMatchObject(new AppError('SLOT_UNAVAILABLE'))
   })
 
-  it('throws SLOT_UNAVAILABLE when it collides with an existing booking plus buffer', async () => {
+  it('throws SLOT_UNAVAILABLE when the candidate collides with an existing booking plus buffer', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { bufferAfterMin: 15 })
+    const { id: pageId } = await makeBookingPage(db, ownerId, {
+      bufferBeforeMin: 15,
+      bufferAfterMin: 15,
+    })
     await makeBooking(db, pageId, TUE_9AM, { endAt: TUE_930AM })
 
-    // Adjacent slot: 09:30–10:00 collides with the 09:00–09:30 booking's 15-min after-buffer
-    // (blocked until 09:45).
+    // Adjacent slot: 09:30–10:00 — its own 15-min bufferBeforeMin pads it back to 09:15, which
+    // collides with the (unbuffered, stored-raw) 09:00–09:30 booking.
     await expect(
       createBooking(
         db,
@@ -108,6 +111,59 @@ describe('createBooking', () => {
         NOW,
       ),
     ).rejects.toMatchObject(new AppError('SLOT_UNAVAILABLE'))
+  })
+
+  it('buffers apply once (via the candidate), not twice via the stored busy interval', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    // 15-min slots so 09:30/09:45/10:30/10:45 (quarter-hour offsets from the 10:00 booking) are
+    // all valid slot starts on the generateSlots grid — the existing 10:00–10:30 booking itself
+    // is seeded as a raw row via makeBooking, so it doesn't need to be grid-aligned.
+    const { id: pageId } = await makeBookingPage(db, ownerId, {
+      slotDurationMin: 15,
+      bufferBeforeMin: 15,
+      bufferAfterMin: 15,
+    })
+    const tenAm = localToUtcIso('2026-08-25', '10:00', 'Europe/Oslo')
+    const tenThirtyAm = localToUtcIso('2026-08-25', '10:30', 'Europe/Oslo')
+    await makeBooking(db, pageId, tenAm, { endAt: tenThirtyAm })
+
+    async function attempt(time: string, email: string) {
+      return createBooking(
+        db,
+        pageId,
+        {
+          startAt: localToUtcIso('2026-08-25', time, 'Europe/Oslo'),
+          name: 'Visitor',
+          email,
+          timezone: 'Europe/Oslo',
+        },
+        [],
+        NOW,
+      )
+    }
+
+    // A 15-min gap after the booking's end is exactly the configured bufferAfterMin, so a slot
+    // starting there succeeds — if buffers were double-applied (once on the stored interval via
+    // bookedIntervals, once again on the candidate in generateSlots) this would need a 30-min gap
+    // and wrongly fail.
+    await expect(attempt('10:45', 'a@example.com')).resolves.toMatchObject({
+      bookingId: expect.any(String),
+    })
+    // Touching the booking's end (no gap) still fails: the candidate's own 15-min
+    // bufferBeforeMin pads it back into the existing booking.
+    await expect(attempt('10:30', 'b@example.com')).rejects.toMatchObject(
+      new AppError('SLOT_UNAVAILABLE'),
+    )
+
+    // Symmetric on the other side: a 15-min gap *before* the booking's start succeeds...
+    await expect(attempt('09:30', 'c@example.com')).resolves.toMatchObject({
+      bookingId: expect.any(String),
+    })
+    // ...but touching the booking's start (no gap) does not.
+    await expect(attempt('09:45', 'd@example.com')).rejects.toMatchObject(
+      new AppError('SLOT_UNAVAILABLE'),
+    )
   })
 
   it('rejects a slot blocked by a caller-supplied busy interval (e.g. Google Calendar)', async () => {
@@ -128,9 +184,12 @@ describe('createBooking', () => {
 })
 
 describe('bookedIntervals', () => {
-  it('expands confirmed bookings by the page buffers and excludes cancelled ones', async () => {
+  it('returns confirmed bookings as raw [start, end) intervals (no buffer applied) and excludes cancelled ones', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db)
+    // Buffers configured but must NOT show up in the returned intervals — generateSlots is the
+    // single place buffers apply (applied to whichever candidate slot it's checking), so
+    // expanding the stored interval here too would double-apply them.
     const { id: pageId } = await makeBookingPage(db, ownerId, {
       bufferBeforeMin: 5,
       bufferAfterMin: 10,
@@ -143,11 +202,7 @@ describe('bookedIntervals', () => {
       to: new Date('2026-08-26T00:00:00Z'),
     })
 
-    expect(intervals).toHaveLength(1)
-    expect(intervals[0]).toEqual({
-      start: new Date(new Date(TUE_9AM).getTime() - 5 * 60_000).toISOString(),
-      end: new Date(new Date(TUE_930AM).getTime() + 10 * 60_000).toISOString(),
-    })
+    expect(intervals).toEqual([{ start: TUE_9AM, end: TUE_930AM }])
   })
 })
 
