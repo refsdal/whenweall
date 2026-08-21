@@ -1,4 +1,5 @@
 import { Button, Heading, Text } from '@react-email/components'
+import { asLocaleOptions } from '#/lib/i18n'
 import * as m from '#/paraglide/messages'
 import { Layout } from './_Layout'
 
@@ -17,7 +18,7 @@ export function Finalized({
   recipientName,
   locale,
 }: FinalizedProps) {
-  const t = { locale } as { locale: 'en' | 'nb' }
+  const t = asLocaleOptions(locale)
   return (
     <Layout preview={m.email_finalized_subject({ title: pollTitle }, t)} locale={locale}>
       <Heading style={{ fontSize: '20px', margin: '0 0 16px' }}>

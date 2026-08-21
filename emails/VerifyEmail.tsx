@@ -1,11 +1,12 @@
 import { Button, Heading, Text } from '@react-email/components'
+import { asLocaleOptions } from '#/lib/i18n'
 import * as m from '#/paraglide/messages'
 import { Layout } from './_Layout'
 
 export type VerifyEmailProps = { name: string; url: string; locale: string }
 
 export function VerifyEmail({ name, url, locale }: VerifyEmailProps) {
-  const t = { locale } as { locale: 'en' | 'nb' }
+  const t = asLocaleOptions(locale)
   return (
     <Layout preview={m.email_verify_subject({}, t)} locale={locale}>
       <Heading style={{ fontSize: '20px', margin: '0 0 16px' }}>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import { AnimatePresence, motion } from 'motion/react'
 import { MessageSquare, Trash2 } from 'lucide-react'
@@ -49,11 +49,17 @@ export function Comments({
   const [submitting, setSubmitting] = useState(false)
 
   const isGuest = session === null
-  const formatter = new Intl.DateTimeFormat(intlLocale(viewer.locale), {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: viewer.timeZone,
-  })
+  // `Intl.DateTimeFormat` construction is the expensive part; the comment list re-renders on
+  // every keystroke in the composer, so build it once per locale/time-zone pair.
+  const formatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(intlLocale(viewer.locale), {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        timeZone: viewer.timeZone,
+      }),
+    [viewer.locale, viewer.timeZone],
+  )
 
   function canDelete(comment: CommentView): boolean {
     if (poll.isOwner) return true

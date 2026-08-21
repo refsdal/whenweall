@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Body, Container, Head, Hr, Html, Preview, Text } from '@react-email/components'
 import { appConfig } from '#/app.config'
+import { asLocaleOptions } from '#/lib/i18n'
 import * as m from '#/paraglide/messages'
 
 export const ACCENT_COLOR = '#e8572a'
@@ -38,7 +39,7 @@ export function Layout({ preview, locale, children }: LayoutProps) {
           {children}
           <Hr style={{ borderColor: '#e4e4e7', margin: '32px 0 16px' }} />
           <Text style={{ color: '#71717a', fontSize: '12px', lineHeight: '18px' }}>
-            {m.email_footer({ name: appConfig.name }, { locale } as { locale: 'en' | 'nb' })}
+            {m.email_footer({ name: appConfig.name }, asLocaleOptions(locale))}
             {' · '}
             {appConfig.supportEmail}
           </Text>

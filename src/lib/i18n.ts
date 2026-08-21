@@ -1,5 +1,5 @@
 import { getLocale } from '#/paraglide/runtime'
-import type { AppLocale } from '#/app.config'
+import { appConfig, type AppLocale } from '#/app.config'
 
 export { m } from '#/paraglide/messages'
 export { baseLocale, getLocale, locales, setLocale } from '#/paraglide/runtime'
@@ -21,4 +21,18 @@ export function intlLocale(locale: string): string {
  */
 export function localeFromRequest(): AppLocale {
   return getLocale()
+}
+
+/** Narrows an arbitrary string to a locale this app actually ships messages for. */
+export function isAppLocale(value: string): value is AppLocale {
+  return (appConfig.locales as readonly string[]).includes(value)
+}
+
+/**
+ * Builds the `options` argument Paraglide message functions take, from a locale that is only
+ * known as a `string` at runtime (a database column, an email recipient's preference, ...).
+ * Unknown locales fall back to the base locale rather than rendering an untranslated key.
+ */
+export function asLocaleOptions(locale: string): { locale: AppLocale } {
+  return { locale: isAppLocale(locale) ? locale : appConfig.defaultLocale }
 }

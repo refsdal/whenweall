@@ -1,4 +1,5 @@
 import { Button, Heading, Text } from '@react-email/components'
+import { asLocaleOptions } from '#/lib/i18n'
 import * as m from '#/paraglide/messages'
 import { Layout } from './_Layout'
 
@@ -11,7 +12,7 @@ export type DigestProps = {
 }
 
 export function Digest({ pollTitle, pollUrl, newVoters, newComments, locale }: DigestProps) {
-  const t = { locale } as { locale: 'en' | 'nb' }
+  const t = asLocaleOptions(locale)
   return (
     <Layout preview={m.email_digest_subject({ title: pollTitle }, t)} locale={locale}>
       <Heading style={{ fontSize: '20px', margin: '0 0 16px' }}>

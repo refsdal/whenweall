@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 import { motion } from 'motion/react'
 import { ArrowRight, CalendarPlus, Check, Link2, Sparkles, Users } from 'lucide-react'
 import { appConfig } from '#/app.config'
@@ -59,14 +59,13 @@ function Hero() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            {/* `/new` arrives with task 17; plain anchor until the route exists. */}
-            <a href="/new" className={cn(buttonVariants({ size: 'lg' }), 'group')}>
+            <Link to="/new" className={cn(buttonVariants({ size: 'lg' }), 'group')}>
               {m.landing_cta()}
               <ArrowRight
                 className="transition-transform duration-200 group-hover:translate-x-0.5"
                 aria-hidden="true"
               />
-            </a>
+            </Link>
             <a href="#how" className={cn(buttonVariants({ variant: 'outline', size: 'lg' }))}>
               {m.landing_cta_secondary()}
             </a>
@@ -149,14 +148,13 @@ function Outro() {
             {m.landing_outro_title()}
           </h2>
           <p className="mx-auto mt-3 max-w-md text-muted-foreground">{m.landing_outro_body()}</p>
-          {/* `/new` arrives with task 17; plain anchor until the route exists. */}
-          <a href="/new" className={cn(buttonVariants({ size: 'lg' }), 'group mt-7')}>
+          <Link to="/new" className={cn(buttonVariants({ size: 'lg' }), 'group mt-7')}>
             {m.landing_cta()}
             <ArrowRight
               className="transition-transform duration-200 group-hover:translate-x-0.5"
               aria-hidden="true"
             />
-          </a>
+          </Link>
         </div>
       </div>
     </section>
