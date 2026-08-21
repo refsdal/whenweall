@@ -163,21 +163,21 @@ Public values live in `wrangler.jsonc` under `vars`. Secrets live in `.dev.vars`
 and in Cloudflare's secret store in production (`bunx wrangler secret put NAME`). Never
 commit `.dev.vars` — it is git-ignored.
 
-| Name                   | Kind                | Where it is set                                     | Purpose                                                                                 |
-| ---------------------- | ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `APP_URL`              | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.         |
-| `APP_ENV`              | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.        |
-| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `samla <no-reply@example.com>`.                   |
-| `TURNSTILE_SITE_KEY`   | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                          |
-| `BETTER_AUTH_SECRET`   | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                              |
-| `TURNSTILE_SECRET_KEY` | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                         |
-| `GOOGLE_CLIENT_ID`     | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                    |
-| `GOOGLE_CLIENT_SECRET` | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                             |
-| `ENABLE_TEST_ROUTES`   | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`. |
-| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`samla-db`). Holds every durable row.                                  |
-| `POLL_ROOM`            | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                   |
-| `EMAIL`                | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.    |
-| `RATE_LIMITER`         | binding             | `wrangler.jsonc` → `ratelimits`                     | 20 requests / 60 s, keyed by `action:ip` across create, vote, comment and auth.         |
+| Name                   | Kind                | Where it is set                                     | Purpose                                                                                          |
+| ---------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `APP_URL`              | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.                  |
+| `APP_ENV`              | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.                 |
+| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `samla <no-reply@example.com>`.                            |
+| `TURNSTILE_SITE_KEY`   | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                                   |
+| `BETTER_AUTH_SECRET`   | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                                       |
+| `TURNSTILE_SECRET_KEY` | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                                  |
+| `GOOGLE_CLIENT_ID`     | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                             |
+| `GOOGLE_CLIENT_SECRET` | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                                      |
+| `ENABLE_TEST_ROUTES`   | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`.          |
+| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`samla-db`). Holds every durable row.                                           |
+| `POLL_ROOM`            | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                            |
+| `EMAIL`                | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.             |
+| `RATE_LIMITER`         | binding             | `wrangler.jsonc` → `ratelimits`                     | 20 requests / 60 s per action, keyed by `action:ip` across poll creation, voting and commenting. |
 
 CI and the deploy workflow additionally need two GitHub secrets — see
 [Deploying](#deploying).

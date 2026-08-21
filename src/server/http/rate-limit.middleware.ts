@@ -27,6 +27,8 @@ const commentLimit = createMiddleware({ type: 'function' }).server(async ({ next
   return next()
 })
 
+// Reserved for future use: Better-Auth's own handler owns `/api/auth/*`, so no server function
+// currently takes this one. Kept so auth endpoints can be limited without re-deriving the shape.
 const authLimit = createMiddleware({ type: 'function' }).server(async ({ next }) => {
   await enforceRateLimit('auth')
   return next()
