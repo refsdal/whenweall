@@ -27,19 +27,24 @@ watching the page over a WebSocket, so the grid fills in live. When the organise
 finalises an option, every participant who left an e-mail gets a note with an `.ics`
 attachment.
 
+The same engine also runs **sign-up sheets**: slots with a capacity that people _claim_
+instead of vote on — volunteer shifts, parent-teacher meetings, bring-a-dish lists — with
+the same guest flow, live updates and e-mails as a scheduling poll.
+
 The whole thing is one Worker, one D1 database and one Durable Object class. There is no
 Node server, no container and no queue: it deploys with `bun run deploy` and costs the
 $5/month Workers Paid plan.
 
-> **Status.** v1 is feature-complete and passes its full test suite, but there is no
-> public hosted instance yet — deploy your own with the [Cloudflare setup](#cloudflare-setup)
-> below.
+> **Status.** v1 and v2 (sign-up sheets) are feature-complete and pass their full test
+> suite, but there is no public hosted instance yet — deploy your own with the
+> [Cloudflare setup](#cloudflare-setup) below.
 
 ## Screenshots
 
 There is no hosted instance yet, so no screenshots ship in this repo. Run
 `bun run screenshots` ([`e2e/screenshots.spec.ts`](./e2e/screenshots.spec.ts)) against your own
-checkout to generate them from the real app — see
+checkout to generate them from the real app, including the landing page, a poll, the creator,
+the dashboard and a sign-up sheet — see
 [`docs/screenshots/README.md`](./docs/screenshots/README.md) for what gets captured and where it
 lands. CI never generates or commits them, so they only appear once someone deliberately runs
 that script.
@@ -62,6 +67,9 @@ that script.
 - **Edit after publishing**, including a confirmation when removing an option that already
   has votes on it.
 - **Sign in** with e-mail + password (verified), Google, or a passkey.
+- **Sign-up sheets** — a third poll kind whose options are slots: set a **capacity** per
+  slot (or leave it unlimited) and a **max sign-ups per person** for the whole sheet, then
+  export a **roster CSV** of who claimed what, with e-mails, from the admin bar.
 
 ### For participants
 
@@ -76,6 +84,9 @@ that script.
 - **Calendar export** — `.ics` download and an add-to-Google link once a poll is finalised.
 - **English and Norwegian (bokmål)**, light and dark, keyboard-navigable, and gentle about
   `prefers-reduced-motion`.
+- **Sign-up sheets, participant side** — one-click claims on a slot board, live spot
+  counts as other people claim or leave, a "Full" state once capacity is reached, and a
+  confirmation e-mail (with `.ics` for date/time slots) on your first claim.
 
 ### Under the hood
 
@@ -91,7 +102,7 @@ that script.
 - **CSP with inline scripts allowed** (required by TanStack Start hydration), HSTS in
   production, `nosniff`, `Referrer-Policy` and a `Permissions-Policy` applied by a request
   middleware to every response.
-- **322 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
+- **436 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
   with a real D1 and Durable Object, and Playwright end-to-end flows.
 
 ## Architecture
@@ -128,6 +139,16 @@ after D1 has committed does it call `env.POLL_ROOM.getByName(pollId)` to `broadc
 receives `poll.changed` and invalidates its route, which refetches the poll from D1 — so what
 everyone sees is always what the database says, and no delta bookkeeping can drift.
 If the Durable Object call throws, the vote is still saved and the request still succeeds.
+
+**A claim, end to end.** Sign-up sheets are a third `polls.type`, `'signup'`, whose
+options carry a `capacity` (`null` = unlimited). A claim is just a `votes` row with
+`answer = 'yes'` — the same table, participants and edit tokens as v1 — so `getPollView`,
+comments and the digest emails all keep working unchanged; the view additionally exposes a
+`claims` map (`{ count, capacity, full }` per option) instead of scores. Unlike a vote, a
+claim is **not** written directly from the server function: because two people can claim
+the last spot in the same instant, `claimSlot` routes the write through the poll's
+`PollRoom` Durable Object (a `claim` RPC), which is single-threaded per poll, so
+"count current claims → compare to capacity → insert" can never race across two requests.
 
 The DO owns only ephemeral state: connected sockets, the pending digest buffer and the
 next alarm time. Alarms fire the organiser digest (at most one per poll per 10 minutes,
@@ -297,8 +318,8 @@ bunx wrangler deploy --dry-run --outdir /tmp/samla-dryrun
 Three layers, all runnable from a clean checkout:
 
 ```bash
-bun run test        # 42 files / 322 tests: unit (jsdom) + integration (workerd)
-bun run test:e2e    # 10 Playwright flows against the built Worker
+bun run test        # 51 files / 436 tests: unit (jsdom) + integration (workerd)
+bun run test:e2e    # 11 Playwright flows against the built Worker
 ```
 
 - **Unit** (`vitest --project unit`, jsdom) — scoring, time-zone and `.ics` formatting, edit
@@ -308,11 +329,13 @@ bun run test:e2e    # 10 Playwright flows against the built Worker
   `*.workers.test.ts` runs inside real workerd with a real D1 (migrations applied per run)
   and real Durable Objects. This is where server functions, ownership guards, edit-token
   checks, digest batching and the deadline alarm are proven.
-- **End-to-end** (Playwright, Chromium) — sign-up, sign-in, the full create → vote → edit →
-  finalise → `.ics` flow, a live update landing in a second browser context, dashboard
-  duplicate/delete and the locale switch. The suite builds the Worker and serves it with
-  `vite preview`, because `vite dev` intercepts the WebSocket upgrade before it reaches
-  workerd.
+- **End-to-end** (Playwright, Chromium) — account sign-up, sign-in, the full create → vote →
+  edit → finalise → `.ics` flow, a live update landing in a second browser context, dashboard
+  duplicate/delete, the locale switch, and the sign-up sheet journey: a guest claims a slot,
+  a second guest sees it full and claims another, the change appears live in the first
+  guest's tab, and the owner downloads the roster CSV. The suite builds the Worker and serves
+  it with `vite preview`, because `vite dev` intercepts the WebSocket upgrade before it
+  reaches workerd.
 
 Running just one thing:
 
@@ -343,22 +366,24 @@ src/
   router.tsx, routes/     file-based routes
     index.tsx             landing
     new.tsx               3-step poll creator
-    p/$id/                poll page, edit page, calendar.ics
+    p/$id/                poll page, edit page, calendar.ics, roster.csv (signup, owner-only)
     dashboard.tsx settings.tsx login.tsx signup.tsx …
     api/                  auth/$, polls/$id/ws, test/seed
   components/
     ui/                   shadcn primitives, restyled
     poll/                 VoteGrid, VoteCell, Comments, ShareSheet, FinalizeDialog, …
+    signup/               SlotBoard, SlotCard, CapacityBar, ClaimButton, IdentitySheet, …
     creator/              TypeStep, OptionsStep, SettingsStep, editors
     dashboard/ landing/ layout/ auth/
   server/
     db/                   Drizzle schema (app + Better-Auth tables), client
     auth/                 Better-Auth config, session/owner middleware, session server fns
-    polls/                server functions, service layer, Zod schemas, view models
+    polls/                server functions, service layer, Zod schemas, view models,
+                          claims.ts (capacity/limit rules), roster.ts (CSV builder)
     mailer/               transport over the send_email binding, template rendering
     notifications/        typed Durable Object client, finalise e-mails
     http/                 Turnstile verification, rate limiting
-  do/PollRoom.ts          sockets, digest buffer, alarms
+  do/PollRoom.ts          sockets, digest buffer, alarms, claim/unclaim RPC (serialised capacity)
   lib/                    scoring, time, ics, tokens, i18n, theme, motion helpers
   paraglide/              generated message functions (git-ignored)
 emails/                   react-email templates
@@ -398,9 +423,10 @@ needs touching.
 - **v1 — done.** Group date/time and free-text polls, organiser accounts (password, Google,
   passkeys), guest voting with later edits, comments, deadlines, finalising with `.ics`,
   live updates, e-mail notifications, English + Norwegian.
-- **v2 — sign-up sheets.** Options gain a capacity; participants _claim_ a slot instead of
-  voting on it. The `capacity` column already exists, unused, in the schema.
-- **v3 — 1:1 booking pages.** An availability engine and Google Calendar sync, for
+- **v2 — done.** Sign-up sheets: a `signup` poll type whose options are capacity-limited
+  slots, claimed (not voted on) by participants, with a per-person claim limit, DO-serialised
+  capacity enforcement, a claim confirmation e-mail and an owner-only roster CSV export.
+- **v3 — next.** 1:1 booking pages: an availability engine and Google Calendar sync, for
   "book 30 minutes with me" links.
 
 Deliberately out of scope for now: hidden votes, invitee reminders, paid tiers, a

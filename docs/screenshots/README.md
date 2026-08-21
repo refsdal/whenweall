@@ -18,6 +18,7 @@ poll through the test-only seed route, drives the real UI, and captures at 1280Ã
 | `poll.png`          | A poll with three participants voting, seen by the organiser |
 | `creator.png`       | Step 2 of the poll creator, with two days picked             |
 | `dashboard.png`     | The organiser's poll list                                    |
+| `signup.png`        | A sign-up sheet with a claimed slot, seen by the organiser   |
 
 The spec is excluded from `bun run test:e2e` and from CI (see `testIgnore` in
 `playwright.config.ts`), so the committed PNGs only ever change when a human deliberately

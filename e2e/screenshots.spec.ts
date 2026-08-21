@@ -103,3 +103,34 @@ test('dashboard', { tag: '@screenshots' }, async ({ page, userWithPoll }) => {
   await expect(page.locator('[data-testid="poll-card"]').first()).toBeVisible()
   await shoot(page, 'dashboard')
 })
+
+test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithSignup }) => {
+  test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
+  const pollId = userWithSignup.pollId!
+
+  // A guest claims a slot so the board has a claimant to show.
+  const context = await browser.newContext()
+  const guest = await context.newPage()
+  try {
+    await guest.goto(`/p/${pollId}`)
+    await expect(guest.getByTestId('slot-board')).toBeVisible()
+    await guest
+      .getByTestId('slot-card')
+      .filter({ hasText: 'Slot 1' })
+      .getByRole('button', { name: 'Claim a spot for Slot 1' })
+      .click()
+
+    const identityDialog = guest.getByRole('dialog', { name: "Who's taking the slot?" })
+    await identityDialog.getByLabel('Your name').fill('Kari')
+    await waitForTurnstile(guest)
+    await identityDialog.getByRole('button', { name: 'Sign me up' }).click()
+    await expect(identityDialog).toBeHidden()
+  } finally {
+    await context.close()
+  }
+
+  await signIn(page, userWithSignup)
+  await page.goto(`/p/${pollId}`)
+  await expect(page.getByTestId('slot-board')).toBeVisible()
+  await shoot(page, 'signup')
+})

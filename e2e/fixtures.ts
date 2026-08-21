@@ -10,10 +10,14 @@ export type SeededUser = {
 
 async function seed(
   request: APIRequestContext,
-  opts: { name?: string; withPoll?: boolean } = {},
+  opts: { name?: string; withPoll?: boolean; withSignup?: boolean } = {},
 ): Promise<SeededUser> {
   const response = await request.post('/api/test/seed', {
-    data: { name: opts.name ?? 'E2E User', withPoll: opts.withPoll ?? false },
+    data: {
+      name: opts.name ?? 'E2E User',
+      withPoll: opts.withPoll ?? false,
+      withSignup: opts.withSignup ?? false,
+    },
   })
   if (!response.ok()) {
     throw new Error(
@@ -28,6 +32,8 @@ type Fixtures = {
   user: SeededUser
   /** A verified user that already owns one seeded two-option datetime poll. */
   userWithPoll: SeededUser
+  /** A verified user that already owns one seeded sign-up sheet (Slot 1 capacity 1, Slot 2 unlimited). */
+  userWithSignup: SeededUser
 }
 
 /**
@@ -44,6 +50,9 @@ export const test = base.extend<Fixtures>({
   },
   userWithPoll: async ({ request }, provide) => {
     await provide(await seed(request, { withPoll: true }))
+  },
+  userWithSignup: async ({ request }, provide) => {
+    await provide(await seed(request, { withSignup: true }))
   },
 })
 
