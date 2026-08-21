@@ -20,5 +20,8 @@
   "email_closed_subject": "Avstemningen for {title} er stengt",
   "email_closed_body": "Avstemningen ble stengt uten at et tidspunkt ble valgt. Se resultatene og følg opp med gruppen.",
   "email_closed_cta": "Se avstemningen",
-  "email_footer": "Du mottar denne e-posten fordi du har brukt {name}."
+  "email_footer": "Du mottar denne e-posten fordi du har brukt {name}.",
+  "locale_switch_label": "Språk",
+  "locale_en": "EN",
+  "locale_nb": "NO"
 }

@@ -20,5 +20,8 @@
   "email_closed_subject": "Voting for {title} is closed",
   "email_closed_body": "The poll closed without a winning time. Check the results and follow up with the group.",
   "email_closed_cta": "View poll",
-  "email_footer": "You're receiving this email because you used {name}."
+  "email_footer": "You're receiving this email because you used {name}.",
+  "locale_switch_label": "Language",
+  "locale_en": "EN",
+  "locale_nb": "NO"
 }
