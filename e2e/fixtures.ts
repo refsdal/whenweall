@@ -131,3 +131,25 @@ export async function pickTwoCalendarDays(page: Page): Promise<void> {
   await enabledDays.nth(0).click()
   await enabledDays.nth(1).click()
 }
+
+/**
+ * Picks the first enabled day on the public booking page's month picker (`MonthPicker`, built on
+ * the same `Calendar` primitive `pickTwoCalendarDays` drives for the poll creator), paging
+ * forward a month at a time if the visible month has none yet. The seeded page (weekday
+ * 09:00–17:00 Europe/Oslo, `min_notice_min: 0`) always has an enabled day within a couple of
+ * months, so this never depends on which day of the month the suite happens to run on.
+ */
+export async function pickFirstEnabledDay(page: Page): Promise<void> {
+  const calendar = page.locator('[data-slot="calendar"]')
+  await expect(calendar).toBeVisible()
+
+  const enabledDays = calendar.locator('button[data-day]:not([disabled])')
+  for (let guard = 0; guard < 6 && (await enabledDays.count()) < 1; guard++) {
+    await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
+  }
+  await expect(async () => {
+    expect(await enabledDays.count()).toBeGreaterThanOrEqual(1)
+  }).toPass({ timeout: 5_000 })
+
+  await enabledDays.first().click()
+}

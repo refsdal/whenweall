@@ -1,5 +1,12 @@
 import type { Page } from '@playwright/test'
-import { expect, pickTwoCalendarDays, signIn, test, waitForTurnstile } from './fixtures'
+import {
+  expect,
+  pickFirstEnabledDay,
+  pickTwoCalendarDays,
+  signIn,
+  test,
+  waitForTurnstile,
+} from './fixtures'
 
 /**
  * Captures the images the README links to, from the real app against real seeded data.
@@ -113,15 +120,7 @@ test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage
   await expect(page.getByTestId('booking-page')).toBeVisible()
 
   // Pick the first open day so the shot shows a real list of slot chips, not the empty state.
-  const calendar = page.locator('[data-slot="calendar"]')
-  const enabledDays = calendar.locator('button[data-day]:not([disabled])')
-  for (let guard = 0; guard < 6 && (await enabledDays.count()) < 1; guard++) {
-    await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
-  }
-  await expect(async () => {
-    expect(await enabledDays.count()).toBeGreaterThanOrEqual(1)
-  }).toPass({ timeout: 5_000 })
-  await enabledDays.first().click()
+  await pickFirstEnabledDay(page)
   await expect(page.getByTestId('slot-list')).toBeVisible()
 
   await shoot(page, 'booking')
