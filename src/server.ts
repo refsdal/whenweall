@@ -5,3 +5,5 @@ export default {
     return Promise.resolve(handler.fetch(request))
   },
 }
+
+export { PollRoom } from './do/PollRoom'
