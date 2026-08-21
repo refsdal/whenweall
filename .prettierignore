@@ -1,6 +1,9 @@
 worker-configuration.d.ts
 src/routeTree.gen.ts
 src/paraglide/
+project.inlang/cache/
+project.inlang/README.md
+project.inlang/.meta.json
 drizzle/
 bun.lock
 dist/

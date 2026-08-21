@@ -6,6 +6,7 @@
     "#/*": "./src/*"
   },
   "scripts": {
+    "postinstall": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide",
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "preview": "bun run build && vite preview",
