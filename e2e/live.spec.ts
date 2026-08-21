@@ -27,7 +27,7 @@ test('a guest vote appears live in another tab, and the presence pill shows two 
 
     // Guest votes...
     const guestName = `Live Guest ${Date.now()}`
-    await guestPage.getByLabel('Your name').fill(guestName)
+    await guestPage.getByTestId('add-yourself-row').getByLabel('Your name').fill(guestName)
     await guestPage.locator('[data-testid="add-yourself-row"] button[data-answer]').first().click()
     await waitForTurnstile(guestPage)
     await guestPage.getByRole('button', { name: 'Save my answer' }).click()

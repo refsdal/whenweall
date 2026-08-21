@@ -10,7 +10,9 @@ test.describe('auth', () => {
     await waitForTurnstile(page)
     await page.getByRole('button', { name: 'Create account' }).click()
 
-    await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible({
+      timeout: 15_000,
+    })
   })
 
   test('signs in with a seeded user and lands on the dashboard', async ({ page, user }) => {

@@ -61,7 +61,7 @@ test('poll page with votes', { tag: '@screenshots' }, async ({ page, browser, us
     const guest = await context.newPage()
     try {
       await guest.goto(`/p/${pollId}`)
-      await guest.getByLabel('Your name').fill(name)
+      await guest.getByTestId('add-yourself-row').getByLabel('Your name').fill(name)
       const cells = guest.locator('[data-testid="add-yourself-row"] button[data-answer]')
       await expect(cells).toHaveCount(2)
       // One tap = yes, two = if-need-be, three = no (VoteCell cycles through the answers).
@@ -90,7 +90,7 @@ test('poll creator', { tag: '@screenshots' }, async ({ page, user }) => {
   await expect(page.getByTestId('creator-wizard')).toBeVisible()
 
   await page.locator('#creator-title').fill('Team offsite planning')
-  await page.getByRole('button', { name: 'Next' }).click()
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
 
   await pickTwoCalendarDays(page)
   await expect(page.getByText('2 options')).toBeVisible()
