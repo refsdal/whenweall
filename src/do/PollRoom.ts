@@ -135,7 +135,9 @@ export class PollRoom extends DurableObject<Env> {
     } catch {
       // Already closed/closing — ignore.
     }
-    void this.#broadcastPresence()
+    // `ws` can still be present in `ctx.getWebSockets()` at this point, so exclude it explicitly —
+    // otherwise the closing socket's own count is briefly broadcast to everyone else too.
+    void this.#broadcastPresence(ws)
   }
 
   webSocketError(ws: WebSocket, _error: unknown): void {
@@ -165,8 +167,11 @@ export class PollRoom extends DurableObject<Env> {
     return count
   }
 
-  async #broadcastPresence(): Promise<void> {
-    this.#send({ type: 'presence', count: this.ctx.getWebSockets().length })
+  async #broadcastPresence(exclude?: WebSocket): Promise<void> {
+    const count = exclude
+      ? this.ctx.getWebSockets().filter((s) => s !== exclude).length
+      : this.ctx.getWebSockets().length
+    this.#send({ type: 'presence', count })
   }
 
   async #processDeadline(db: ReturnType<typeof createDb>, pollId: string): Promise<void> {

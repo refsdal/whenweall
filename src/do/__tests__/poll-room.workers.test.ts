@@ -342,4 +342,44 @@ describe('websocket fan-out', () => {
     await waitForMessage(1)
     expect(messages[1]).toEqual(event)
   })
+
+  it('excludes the closing socket from the presence count broadcast on close', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makePoll(db, ownerId)
+    const stub = stubFor(pollId)
+
+    async function connect() {
+      const res = await stub.fetch(`https://do/ws?pollId=${pollId}`, {
+        headers: { Upgrade: 'websocket' },
+      })
+      const client = res.webSocket!
+      const messages: PollEvent[] = []
+      const waiters: Array<() => void> = []
+      client.addEventListener('message', (event: MessageEvent) => {
+        messages.push(JSON.parse(event.data as string) as PollEvent)
+        waiters.shift()?.()
+      })
+      client.accept()
+      function waitForMessage(index: number): Promise<void> {
+        if (messages.length > index) return Promise.resolve()
+        return new Promise((resolve) => waiters.push(resolve))
+      }
+      return { client, messages, waitForMessage }
+    }
+
+    const a = await connect()
+    await a.waitForMessage(0)
+    expect(a.messages[0]).toEqual({ type: 'presence', count: 1 })
+
+    const b = await connect()
+    await a.waitForMessage(1)
+    expect(a.messages[1]).toEqual({ type: 'presence', count: 2 })
+
+    // Closing b must broadcast a presence count that already excludes b, not the stale count
+    // that still includes the closing socket.
+    b.client.close()
+    await a.waitForMessage(2)
+    expect(a.messages[2]).toEqual({ type: 'presence', count: 1 })
+  })
 })
