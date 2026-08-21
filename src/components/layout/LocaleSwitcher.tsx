@@ -2,13 +2,14 @@ import { useRouteContext } from '@tanstack/react-router'
 import { appConfig, type AppLocale } from '#/app.config'
 import { getLocale, m, setLocale } from '#/lib/i18n'
 import { authClient } from '#/server/auth/client'
+import { cn } from '#/lib/utils'
 
 const LOCALE_LABELS: Record<AppLocale, () => string> = {
   en: m.locale_en,
   nb: m.locale_nb,
 }
 
-export function LocaleSwitcher() {
+export function LocaleSwitcher({ className }: { className?: string }) {
   const { session } = useRouteContext({ from: '__root__' })
   const activeLocale = getLocale()
 
@@ -24,14 +25,24 @@ export function LocaleSwitcher() {
   }
 
   return (
-    <div role="group" aria-label={m.locale_switch_label()} className="inline-flex gap-1">
+    <div
+      role="group"
+      aria-label={m.locale_switch_label()}
+      className={cn(
+        'inline-flex items-center gap-0.5 rounded-full border border-border/70 p-0.5',
+        className,
+      )}
+    >
       {appConfig.locales.map((locale) => (
         <button
           key={locale}
           type="button"
           aria-pressed={locale === activeLocale}
           onClick={() => handleSelect(locale)}
-          className="rounded-full border border-[var(--fg)]/20 px-3 py-1 text-sm font-medium transition-colors aria-pressed:bg-[var(--fg)] aria-pressed:text-[var(--bg)]"
+          className={cn(
+            'focus-ring rounded-full px-2.5 py-1 text-xs font-medium tracking-wide text-muted-foreground uppercase transition-colors',
+            'hover:text-foreground aria-pressed:bg-secondary aria-pressed:text-foreground',
+          )}
         >
           {LOCALE_LABELS[locale]()}
         </button>
