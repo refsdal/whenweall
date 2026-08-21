@@ -29,8 +29,19 @@ type OptionRowFields = {
   capacity: number | null
 }
 
-function optionRowFields(option: OptionInput, type: PollType): OptionRowFields {
-  const capacity = type === 'signup' ? (option.capacity === undefined ? 1 : option.capacity) : null
+/**
+ * `fallbackCapacity` is used only when `option.capacity` is omitted: `1` for a brand-new option
+ * (the default every signup slot is created with), or the existing row's own capacity when
+ * `updatePoll` is re-saving an option the caller didn't touch — an omitted field must retain
+ * whatever capacity was already there, not silently reset it to 1.
+ */
+function optionRowFields(
+  option: OptionInput,
+  type: PollType,
+  fallbackCapacity: number | null = 1,
+): OptionRowFields {
+  const capacity =
+    type === 'signup' ? (option.capacity === undefined ? fallbackCapacity : option.capacity) : null
   if (option.kind === 'date') {
     return { kind: 'date', startAt: option.date, endAt: null, label: null, capacity }
   }
@@ -181,7 +192,7 @@ export async function listMyPolls(db: Db, ownerId: string): Promise<PollSummary[
   const rows = await db.query.polls.findMany({
     where: and(eq(polls.ownerId, ownerId), isNull(polls.deletedAt)),
     orderBy: (p, { desc }) => [desc(p.createdAt)],
-    with: { participants: true },
+    with: { participants: { with: { votes: true } } },
   })
 
   return rows.map((p) => ({
@@ -191,6 +202,10 @@ export async function listMyPolls(db: Db, ownerId: string): Promise<PollSummary[
     status: p.status,
     deadlineAt: p.deadlineAt,
     participantCount: p.participants.length,
+    claimCount: p.participants.reduce(
+      (sum, participant) => sum + participant.votes.filter((v) => v.answer === 'yes').length,
+      0,
+    ),
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   }))
@@ -235,12 +250,14 @@ export async function updatePoll(
       where: eq(pollOptions.pollId, pollId),
     })
     const existingIds = new Set(existing.map((o) => o.id))
+    const existingById = new Map(existing.map((o) => [o.id, o]))
 
     if (poll.type === 'signup') {
       const counts = await countClaims(db, pollId)
       for (const option of input.options) {
         if (!option.id || !existingIds.has(option.id)) continue
-        const newCapacity = option.capacity === undefined ? 1 : option.capacity
+        const newCapacity =
+          option.capacity === undefined ? existingById.get(option.id)!.capacity : option.capacity
         const count = counts[option.id] ?? 0
         if (newCapacity !== null && newCapacity < count) {
           throw new AppError('CAPACITY_BELOW_CLAIMS')
@@ -254,7 +271,8 @@ export async function updatePoll(
       const existingId = option.id && existingIds.has(option.id) ? option.id : undefined
       const id = existingId ?? newId()
       keepIds.add(id)
-      const fields = optionRowFields(option, poll.type)
+      const fallbackCapacity = existingId ? existingById.get(existingId)!.capacity : 1
+      const fields = optionRowFields(option, poll.type, fallbackCapacity)
       if (existingId) {
         queries.push(
           db

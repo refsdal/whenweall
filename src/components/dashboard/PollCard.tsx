@@ -99,7 +99,10 @@ export function PollCard({
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
           <Users aria-hidden="true" className="size-3.5" />
-          {participantsLabel(poll.type, poll.participantCount)}
+          {participantsLabel(
+            poll.type,
+            poll.type === 'signup' ? poll.claimCount : poll.participantCount,
+          )}
         </span>
         {poll.deadlineAt ? (
           <DeadlineCountdown deadlineAt={poll.deadlineAt} />

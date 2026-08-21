@@ -59,10 +59,13 @@ function metaOptions(poll: PollView): string {
 }
 
 function metaPeople(poll: PollView): string {
-  const count = poll.participants.length
   if (poll.type === 'signup') {
+    // A sign-up count is claims, not participants — one person can hold several slots (up to
+    // `signupMaxClaims`), and each of those is a sign-up worth counting.
+    const count = Object.values(poll.claims).reduce((sum, claim) => sum + claim.count, 0)
     return count === 1 ? m.signup_meta_people_one() : m.signup_meta_people_other({ count })
   }
+  const count = poll.participants.length
   return count === 1 ? m.poll_meta_people_one() : m.poll_meta_people_other({ count })
 }
 

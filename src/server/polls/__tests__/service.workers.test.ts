@@ -236,6 +236,27 @@ describe('listMyPolls', () => {
     const second = list.find((p) => p.id === poll2)
     expect(second?.participantCount).toBe(0)
   })
+
+  it('reports claimCount as the sum of yes-votes, distinct from participantCount, for a sign-up sheet', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, {
+      capacities: [null, null],
+      maxClaims: 2,
+    })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot1, slot2] = view0!.options
+
+    // Alice claims both slots (one participant, two claims); Bob claims one.
+    const alice = await applyClaim(db, pollId, slot1!.id, { name: 'Alice', userId: null })
+    await applyClaim(db, pollId, slot2!.id, { participantId: alice.participantId })
+    await applyClaim(db, pollId, slot1!.id, { name: 'Bob', userId: null })
+
+    const list = await listMyPolls(db, ownerId)
+    const summary = list.find((p) => p.id === pollId)
+    expect(summary?.participantCount).toBe(2)
+    expect(summary?.claimCount).toBe(3)
+  })
 })
 
 describe('updatePoll', () => {
@@ -346,6 +367,42 @@ describe('updatePoll', () => {
 
     const view = await getPollView(db, pollId, { userId: ownerId })
     expect(view?.options[0]?.capacity).toBe(5)
+  })
+
+  it('keeps a retained option’s existing capacity when the update omits it', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [7] })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot] = view0!.options
+
+    // No `capacity` on the retained option — must keep 7, not reset to the create-time default of 1.
+    await updatePoll(db, pollId, ownerId, {
+      options: [{ id: slot!.id, kind: 'text', label: 'Renamed slot' }],
+    })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.options[0]?.capacity).toBe(7)
+    expect(view?.options[0]?.label).toBe('Renamed slot')
+  })
+
+  it('still defaults a brand-new option to capacity 1 when the update omits it', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [7] })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot] = view0!.options
+
+    await updatePoll(db, pollId, ownerId, {
+      options: [
+        { id: slot!.id, kind: 'text', label: 'Slot 1', capacity: 7 },
+        { kind: 'text', label: 'New slot' },
+      ],
+    })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const newSlot = view!.options.find((o) => o.label === 'New slot')
+    expect(newSlot?.capacity).toBe(1)
   })
 })
 

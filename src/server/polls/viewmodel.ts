@@ -64,6 +64,9 @@ export type PollSummary = {
   status: PollStatus
   deadlineAt: string | null
   participantCount: number
+  /** Sum of yes-votes across the poll's options — the sign-up count for a `signup` poll, where
+   * one person can hold several slots and `participantCount` alone would undercount sign-ups. */
+  claimCount: number
   createdAt: string
   updatedAt: string
 }
