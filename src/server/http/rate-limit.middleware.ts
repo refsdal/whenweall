@@ -34,11 +34,17 @@ const authLimit = createMiddleware({ type: 'function' }).server(async ({ next })
   return next()
 })
 
+const bookLimit = createMiddleware({ type: 'function' }).server(async ({ next }) => {
+  await enforceRateLimit('book')
+  return next()
+})
+
 const MIDDLEWARE = {
   create: createLimit,
   vote: voteLimit,
   comment: commentLimit,
   auth: authLimit,
+  book: bookLimit,
 } as const
 
 /** The rate-limit middleware for one action, e.g. `rateLimitMiddleware('vote')`. */

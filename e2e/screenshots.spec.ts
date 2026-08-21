@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test'
 import {
   expect,
+  pickFirstEnabledDay,
   pickTwoCalendarDays,
   signIn,
   test,
@@ -114,6 +115,22 @@ test('dashboard', { tag: '@screenshots' }, async ({ page, userWithPoll }) => {
   await waitForHydration(page)
   await expect(page.locator('[data-testid="poll-card"]').first()).toBeVisible()
   await shoot(page, 'dashboard')
+})
+
+test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage }) => {
+  test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
+  const handle = userWithBookingPage.handle!
+  const slug = userWithBookingPage.slug!
+
+  await page.goto(`/book/${handle}/${slug}`)
+  await waitForHydration(page)
+  await expect(page.getByTestId('booking-page')).toBeVisible()
+
+  // Pick the first open day so the shot shows a real list of slot chips, not the empty state.
+  await pickFirstEnabledDay(page)
+  await expect(page.getByTestId('slot-list')).toBeVisible()
+
+  await shoot(page, 'booking')
 })
 
 test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithSignup }) => {

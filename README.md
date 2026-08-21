@@ -31,20 +31,25 @@ The same engine also runs **sign-up sheets**: slots with a capacity that people 
 instead of vote on — volunteer shifts, parent-teacher meetings, bring-a-dish lists — with
 the same guest flow, live updates and e-mails as a scheduling poll.
 
-The whole thing is one Worker, one D1 database and one Durable Object class. There is no
-Node server, no container and no queue: it deploys with `bun run deploy` and costs the
-$5/month Workers Paid plan.
+The same Worker also runs **1:1 booking pages** (Calendly-style "book 30 minutes with
+me" links): an organiser sets weekly availability, and visitors pick an open slot in
+their own time zone and book it, with a confirmation e-mail, an `.ics`, and a manage
+link to cancel or reschedule.
 
-> **Status.** v1 and v2 (sign-up sheets) are feature-complete and pass their full test
-> suite, but there is no public hosted instance yet — deploy your own with the
-> [Cloudflare setup](#cloudflare-setup) below.
+The whole thing is one Worker, one D1 database and two Durable Object classes. There is
+no Node server, no container and no queue: it deploys with `bun run deploy` and costs
+the $5/month Workers Paid plan.
+
+> **Status.** v1, v2 (sign-up sheets) and v3 (booking pages) are feature-complete and
+> pass their full test suite, but there is no public hosted instance yet — deploy your
+> own with the [Cloudflare setup](#cloudflare-setup) below.
 
 ## Screenshots
 
 There is no hosted instance yet, so no screenshots ship in this repo. Run
 `bun run screenshots` ([`e2e/screenshots.spec.ts`](./e2e/screenshots.spec.ts)) against your own
 checkout to generate them from the real app, including the landing page, a poll, the creator,
-the dashboard and a sign-up sheet — see
+the dashboard, a sign-up sheet and a booking page — see
 [`docs/screenshots/README.md`](./docs/screenshots/README.md) for what gets captured and where it
 lands. CI never generates or commits them, so they only appear once someone deliberately runs
 that script.
@@ -88,22 +93,42 @@ that script.
   counts as other people claim or leave, a "Full" state once capacity is reached, and a
   confirmation e-mail (with `.ics` for date/time slots) on your first claim.
 
+### 1:1 booking pages
+
+- **For organisers** — publish a page at `/book/<handle>/<slug>` with a **weekly
+  availability grid** (per-weekday time ranges), slot duration, **buffers** before/after
+  each meeting, a **minimum notice** and a **booking horizon**, and **date overrides**
+  for one-off days off or extra hours. Optionally connect **Google Calendar**: busy
+  times block slots automatically, and every booking creates (and later removes) a real
+  event on your calendar. Turn on **reminder e-mails** 24 hours out, and see every
+  booking — upcoming and past, with cancel — on the page's own roster.
+- **For visitors** — pick an open slot in **your own time zone**, no account needed.
+  Booking gets you a confirmation e-mail with an `.ics` attachment and a **manage
+  link** to cancel or reschedule later, no sign-in required.
+
 ### Under the hood
 
 - **One Worker.** SSR, server functions, auth, the WebSocket endpoint and the `.ics` route
   are all the same deployment.
 - **D1 is the only source of truth.** Mutations write to D1 in a batch and _then_ poke the
   Durable Object best-effort; a DO or e-mail failure never fails a user request.
-- **Hibernating WebSockets.** `PollRoom` uses the hibernation API, so idle poll pages cost
-  nothing while staying connected.
+- **Hibernating WebSockets.** `PollRoom` and `BookingRoom` both use the hibernation API,
+  so idle poll and booking pages cost nothing while staying connected.
+- **A pure availability engine.** `lib/availability.ts` turns weekly rules, overrides,
+  buffers, notice, horizon and a list of busy intervals into the exact slots a visitor
+  can pick — deterministic, DST-safe and shared unchanged between the server function
+  that renders the public page and the one that validates a booking. `BookingRoom`
+  serialises every `book`/`cancel`/`reschedule` for one page the same way `PollRoom`
+  serialises claims, so two visitors racing for the same slot can't both win it, and
+  runs the reminder-e-mail alarm.
 - **Turnstile** on sign-up, sign-in and password reset (Better-Auth's captcha plugin) and on
-  guest voting and commenting; a Workers rate-limiter binding additionally caps poll creation,
-  voting and commenting per IP.
+  guest voting, commenting and booking; a Workers rate-limiter binding additionally caps
+  poll creation, voting, commenting and booking per IP.
 - **CSP with inline scripts allowed** (required by TanStack Start hydration), HSTS in
   production, `nosniff`, `Referrer-Policy` and a `Permissions-Policy` applied by a request
   middleware to every response.
-- **436 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
-  with a real D1 and Durable Object, and Playwright end-to-end flows.
+- **686 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
+  with a real D1 and Durable Objects, and Playwright end-to-end flows.
 
 ## Architecture
 
@@ -115,20 +140,29 @@ flowchart LR
     direction TB
     W["Worker — TanStack Start<br/>SSR · server functions · /api/*"]
     R["PollRoom<br/>Durable Object, hibernating"]
+    K["BookingRoom<br/>Durable Object, hibernating"]
     D[("D1 · samla-db<br/>Drizzle ORM")]
     E["Email Service<br/>send_email binding"]
     T["Turnstile"]
   end
 
+  G["Google Calendar API<br/>freebusy · events"]
+
   B -- "SSR document, server-function RPC" --> W
   B -. "WebSocket /api/polls/:id/ws" .-> R
   R -. "poll.changed · presence" .-> B
+  B -. "WebSocket /api/bookings/:pageId/ws" .-> K
+  K -. "page.changed" .-> B
   W -- "reads and writes: source of truth" --> D
   W -- "broadcast · enqueueDigest · syncDeadline" --> R
+  W -- "book · cancel · reschedule (serialised)" --> K
   W -- "verify captcha token" --> T
-  W -- "verification · reset · finalised" --> E
+  W -- "verification · reset · finalised · bookings" --> E
+  W -. "freebusy, create/delete event (optional)" .-> G
   R -- "alarms: digest, deadline auto-close" --> D
   R -- "digest · deadline-closed" --> E
+  K -- "reminder alarm" --> D
+  K -- "reminder e-mail" --> E
 ```
 
 **A vote, end to end.** The browser calls the `addParticipant` server function. The Worker
@@ -154,6 +188,21 @@ The DO owns only ephemeral state: connected sockets, the pending digest buffer a
 next alarm time. Alarms fire the organiser digest (at most one per poll per 10 minutes,
 retried up to 3 times) and the deadline auto-close.
 
+**A booking, end to end.** `lib/availability.ts` is a pure function: weekly rules, date
+overrides, slot duration, buffers, notice, horizon and a list of busy intervals in, a
+deterministic, DST-safe list of open slots out. The public page and the `bookSlot`
+server function call it with the same inputs — booked slots (with their buffers) plus,
+if the organiser connected Google Calendar, that account's freebusy over the requested
+range — so a slot the visitor is shown is always still bookable a moment later, short of
+someone else taking it first. That race is closed by `BookingRoom`: `bookSlot` routes
+the actual write through the page's Durable Object (a `book` RPC), single-threaded per
+page, so two visitors racing for the same slot can never both win it. A confirmed
+booking gets a hashed `manage_token` (the visitor's whole credential for the manage
+link) and, if Google Calendar is connected, a real calendar event; cancelling or
+rescheduling reverses both. `BookingRoom` also owns the reminder alarm — one armed to
+the earliest upcoming booking's start minus 24 hours, re-armed after every book, cancel
+or reschedule — which e-mails both parties when it fires.
+
 ## Quick start
 
 You need [bun](https://bun.sh/) 1.4+ (see [`.bun-version`](./.bun-version)). No Node
@@ -170,7 +219,7 @@ bun run db:migrate:local        # applies drizzle/ migrations to the local D1
 bun run dev                     # http://localhost:3000
 ```
 
-That is a fully working app: local D1, a local Durable Object, Turnstile's always-pass
+That is a fully working app: local D1, local Durable Objects, Turnstile's always-pass
 test keys and a console "mailer" that prints verification and reset links to the terminal
 instead of sending them. Sign up, click the link printed in your terminal, create a poll.
 
@@ -182,24 +231,37 @@ Public values live in `wrangler.jsonc` under `vars`. Secrets live in `.dev.vars`
 and in Cloudflare's secret store in production (`bunx wrangler secret put NAME`). Never
 commit `.dev.vars` — it is git-ignored.
 
-| Name                   | Kind                | Where it is set                                     | Purpose                                                                                          |
-| ---------------------- | ------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `APP_URL`              | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.                  |
-| `APP_ENV`              | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.                 |
-| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `samla <no-reply@example.com>`.                            |
-| `TURNSTILE_SITE_KEY`   | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                                   |
-| `BETTER_AUTH_SECRET`   | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                                       |
-| `TURNSTILE_SECRET_KEY` | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                                  |
-| `GOOGLE_CLIENT_ID`     | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                             |
-| `GOOGLE_CLIENT_SECRET` | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                                      |
-| `ENABLE_TEST_ROUTES`   | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`.          |
-| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`samla-db`). Holds every durable row.                                           |
-| `POLL_ROOM`            | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                            |
-| `EMAIL`                | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.             |
-| `RATE_LIMITER`         | binding             | `wrangler.jsonc` → `ratelimits`                     | 20 requests / 60 s per action, keyed by `action:ip` across poll creation, voting and commenting. |
+| Name                   | Kind                | Where it is set                                     | Purpose                                                                                                   |
+| ---------------------- | ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `APP_URL`              | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.                           |
+| `APP_ENV`              | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.                          |
+| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `samla <no-reply@example.com>`.                                     |
+| `TURNSTILE_SITE_KEY`   | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                                            |
+| `BETTER_AUTH_SECRET`   | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                                                |
+| `TURNSTILE_SECRET_KEY` | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                                           |
+| `GOOGLE_CLIENT_ID`     | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                                      |
+| `GOOGLE_CLIENT_SECRET` | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                                               |
+| `ENABLE_TEST_ROUTES`   | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`.                   |
+| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`samla-db`). Holds every durable row.                                                    |
+| `POLL_ROOM`            | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                                     |
+| `BOOKING_ROOM`         | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `BookingRoom` class: sockets, book/cancel/reschedule serialisation, reminder alarms.                  |
+| `EMAIL`                | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.                      |
+| `RATE_LIMITER`         | binding             | `wrangler.jsonc` → `ratelimits`                     | 20 requests / 60 s per action, keyed by `action:ip` across poll creation, voting, commenting and booking. |
 
 CI and the deploy workflow additionally need two GitHub secrets — see
 [Deploying](#deploying).
+
+**Google Calendar scopes.** The same `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` pair that
+enables "Continue with Google" also powers the optional Google Calendar sync on a
+booking page — there is no separate app or credential to create. Sign-in itself only
+ever requests the default profile/email scopes; an organiser who clicks "Connect Google
+Calendar" (see `GoogleCalendarCard`) triggers a second, incremental Better-Auth
+`linkSocial` consent request for `https://www.googleapis.com/auth/calendar.readonly`
+and `https://www.googleapis.com/auth/calendar.events` on their **existing** linked
+Google account. If your OAuth client's consent screen is in "Testing" publishing status,
+add both scopes under **OAuth consent screen → Data access** in the Google Cloud
+console, or the incremental consent prompt will fail for anyone outside your test user
+list.
 
 ## Cloudflare setup
 
@@ -261,9 +323,9 @@ the authorised redirect URI:
 https://<your-domain>/api/auth/callback/google
 ```
 
-**7. Durable Object migration.** Nothing to do — the `v1` migration that creates the
-SQLite-backed `PollRoom` class is already declared in `wrangler.jsonc` and is applied on
-first deploy.
+**7. Durable Object migration.** Nothing to do — the `v1` and `v2` migrations that
+create the SQLite-backed `PollRoom` and `BookingRoom` classes are already declared in
+`wrangler.jsonc` and are applied on first deploy.
 
 ### Deploying
 
@@ -318,24 +380,29 @@ bunx wrangler deploy --dry-run --outdir /tmp/samla-dryrun
 Three layers, all runnable from a clean checkout:
 
 ```bash
-bun run test        # 51 files / 436 tests: unit (jsdom) + integration (workerd)
-bun run test:e2e    # 11 Playwright flows against the built Worker
+bun run test        # 69 files / 686 tests: unit (jsdom) + integration (workerd)
+bun run test:e2e    # 12 Playwright flows against the built Worker
 ```
 
-- **Unit** (`vitest --project unit`, jsdom) — scoring, time-zone and `.ics` formatting, edit
-  tokens, Zod schemas, e-mail rendering, message-catalogue parity, and component behaviour
-  via Testing Library. Files: `src/**/*.test.ts(x)`, `emails/**`, `messages/**`.
+- **Unit** (`vitest --project unit`, jsdom) — scoring, time-zone, availability generation and
+  `.ics` formatting, edit tokens, Zod schemas, e-mail rendering, message-catalogue parity, and
+  component behaviour via Testing Library. Files: `src/**/*.test.ts(x)`, `emails/**`,
+  `messages/**`.
 - **Integration** (`vitest --project workers`, `@cloudflare/vitest-plugin`) — anything named
   `*.workers.test.ts` runs inside real workerd with a real D1 (migrations applied per run)
   and real Durable Objects. This is where server functions, ownership guards, edit-token
-  checks, digest batching and the deadline alarm are proven.
+  and manage-token checks, digest batching, the deadline alarm, double-booking races and
+  the reminder alarm are proven.
 - **End-to-end** (Playwright, Chromium) — account sign-up, sign-in, the full create → vote →
   edit → finalise → `.ics` flow, a live update landing in a second browser context, dashboard
-  duplicate/delete, the locale switch, and the sign-up sheet journey: a guest claims a slot,
-  a second guest sees it full and claims another, the change appears live in the first
-  guest's tab, and the owner downloads the roster CSV. The suite builds the Worker and serves
-  it with `vite preview`, because `vite dev` intercepts the WebSocket upgrade before it
-  reaches workerd.
+  duplicate/delete, the locale switch, the sign-up sheet journey (a guest claims a slot, a
+  second guest sees it full and claims another, the change appears live in the first guest's
+  tab, and the owner downloads the roster CSV), and the booking journey: a visitor picks an
+  open slot on `/book/<handle>/<slug>`, books it, gets a confirmation with a working `.ics`
+  link, the slot disappears live for a second visitor watching the same page, the organiser
+  sees the booking on `/bookings/<pageId>`, and cancelling via the manage link frees the slot
+  live again. The suite builds the Worker and serves it with `vite preview`, because
+  `vite dev` intercepts the WebSocket upgrade before it reaches workerd.
 
 Running just one thing:
 
@@ -360,7 +427,7 @@ The e2e suite seeds its data through `POST /api/test/seed`, which only answers w
 
 ```
 src/
-  server.ts               Worker entry: Paraglide middleware → TanStack Start, exports PollRoom
+  server.ts               Worker entry: Paraglide middleware → TanStack Start, exports PollRoom, BookingRoom
   start.ts                request middleware — CSP and the other security headers
   app.config.ts           name, tagline, brand colours, locales (rename the app here)
   router.tsx, routes/     file-based routes
@@ -368,11 +435,17 @@ src/
     new.tsx               3-step poll creator
     p/$id/                poll page, edit page, calendar.ics, roster.csv (signup, owner-only)
     dashboard.tsx settings.tsx login.tsx signup.tsx …
-    api/                  auth/$, polls/$id/ws, test/seed
+    bookings/              pages list, new, $id (roster + edit) — organiser
+    book/$handle/$slug     public booking page
+    booking/$id            manage a booking (cancel/reschedule), calendar.ics
+    api/                  auth/$, polls/$id/ws, bookings/$pageId/ws, test/seed
   components/
     ui/                   shadcn primitives, restyled
     poll/                 VoteGrid, VoteCell, Comments, ShareSheet, FinalizeDialog, …
     signup/               SlotBoard, SlotCard, CapacityBar, ClaimButton, IdentitySheet, …
+    booking/               PageEditor, AvailabilityEditor, DateOverridesEditor, PublicBookingPage,
+                          MonthPicker, SlotPicker/SlotList, BookingForm, BookingConfirmed,
+                          ManageBooking, RescheduleDialog, BookingsTable, GoogleCalendarCard, …
     creator/              TypeStep, OptionsStep, SettingsStep, editors
     dashboard/ landing/ layout/ auth/
   server/
@@ -380,11 +453,16 @@ src/
     auth/                 Better-Auth config, session/owner middleware, session server fns
     polls/                server functions, service layer, Zod schemas, view models,
                           claims.ts (capacity/limit rules), roster.ts (CSV builder)
+    bookings/              pages.ts/bookings.ts (service layer), *.functions.ts (server fns),
+                          schemas.ts, viewmodel.ts, emails.ts
+    google/calendar.ts    Google Calendar freebusy/create/delete event client (fetch-based)
     mailer/               transport over the send_email binding, template rendering
-    notifications/        typed Durable Object client, finalise e-mails
+    notifications/        typed Durable Object clients (poll, booking), finalise e-mails
     http/                 Turnstile verification, rate limiting
   do/PollRoom.ts          sockets, digest buffer, alarms, claim/unclaim RPC (serialised capacity)
+  do/BookingRoom.ts       sockets, book/cancel/reschedule RPC (serialised per page), reminder alarm
   lib/                    scoring, time, ics, tokens, i18n, theme, motion helpers
+  lib/availability.ts     pure slot generator: weekly rules, overrides, buffers, notice, horizon
   paraglide/              generated message functions (git-ignored)
 emails/                   react-email templates
 messages/en.json nb.json  the translation source of truth
@@ -426,11 +504,26 @@ needs touching.
 - **v2 — done.** Sign-up sheets: a `signup` poll type whose options are capacity-limited
   slots, claimed (not voted on) by participants, with a per-person claim limit, DO-serialised
   capacity enforcement, a claim confirmation e-mail and an owner-only roster CSV export.
-- **v3 — next.** 1:1 booking pages: an availability engine and Google Calendar sync, for
-  "book 30 minutes with me" links.
+- **v3 — done.** 1:1 booking pages: weekly availability with buffers, notice and a
+  booking horizon, date overrides, optional Google Calendar conflict-checking and
+  event sync, DO-serialised booking to prevent double-booking, visitor cancel/
+  reschedule via a manage link, reminder e-mails, and an organiser roster per page.
 
-Deliberately out of scope for now: hidden votes, invitee reminders, paid tiers, a
-moderation console and magic-link sign-in.
+### What's next
+
+No date attached yet — ideas under consideration, roughly in the order they'd build on
+what v3 shipped:
+
+- **Round-robin / team pages** — one link that distributes bookings across several
+  organisers' calendars.
+- **Google Meet links** — auto-attach a Meet link to the calendar event a booking
+  creates, instead of a plain text location.
+- **Waitlists** — let a visitor join a full or past-notice slot and get offered it if
+  it opens back up.
+
+Deliberately out of scope for now: hidden votes, invitee reminders on polls, paid
+tiers, a moderation console, magic-link sign-in, payments, and (for booking pages)
+Outlook/CalDAV sync and recurring bookings.
 
 ## Contributing
 

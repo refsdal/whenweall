@@ -1,12 +1,15 @@
-import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
+import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import { motion } from 'motion/react'
+import { ArrowRight, CalendarClock } from 'lucide-react'
 import { toast } from 'sonner'
 import { appConfig } from '#/app.config'
 import { EmptyState } from '#/components/dashboard/EmptyState'
 import { PollCard } from '#/components/dashboard/PollCard'
 import { m } from '#/lib/i18n'
+import { cn } from '#/lib/utils'
 import { staggerContainer, staggerItem } from '#/lib/motion'
+import { buttonVariants } from '#/components/ui/button'
 import { deletePoll, duplicatePoll, listMyPolls } from '#/server/polls/polls.functions'
 
 export const Route = createFileRoute('/dashboard')({
@@ -79,6 +82,31 @@ function DashboardPage() {
           ))}
         </motion.ul>
       )}
+
+      <BookingPagesCard />
     </div>
+  )
+}
+
+/** The doorway to v3's booking pages: a quiet card under the polls rather than a second nav item
+ * competing with "New poll". */
+function BookingPagesCard() {
+  return (
+    <section className="surface mt-2 flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-foreground">
+        <CalendarClock aria-hidden="true" className="size-4" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="font-medium">{m.dashboard_bookings_title()}</p>
+        <p className="text-sm text-pretty text-muted-foreground">{m.dashboard_bookings_body()}</p>
+      </div>
+      <Link
+        to="/bookings"
+        className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'shrink-0 gap-1.5')}
+      >
+        {m.dashboard_bookings_cta()}
+        <ArrowRight aria-hidden="true" />
+      </Link>
+    </section>
   )
 }
