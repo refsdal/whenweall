@@ -21,3 +21,6 @@ blob-report
 !.env.example
 
 src/paraglide
+
+# local scratch (SDD ledgers, briefs, reports)
+.superpowers/
