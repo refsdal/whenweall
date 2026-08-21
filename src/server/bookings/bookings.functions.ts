@@ -18,6 +18,7 @@ import {
   rescheduleViaRoom,
 } from '#/server/notifications/booking-client'
 import { sendBookingEmails } from './emails'
+import { syncGoogleEventCreate, syncGoogleEventDelete } from './google-sync'
 import { getPublicPage } from './pages'
 import * as bookingService from './bookings'
 import {
@@ -81,33 +82,6 @@ async function requireDbPage(db: Db, pageId: string): Promise<BookingPage> {
   return page
 }
 
-/** Best-effort Google Calendar event create for a freshly booked slot; stores the event id on the
- * booking so cancel/reschedule can clean it up later. Never throws — a sync failure must not
- * fail a booking that already succeeded (spec decision 3: "Failures degrade gracefully"). */
-async function syncGoogleEventCreate(
-  db: Db,
-  page: BookingPage,
-  bookingId: string,
-  input: { startAt: string; endAt: string; attendeeEmail: string },
-): Promise<void> {
-  if (!page.googleSync) return
-  try {
-    const token = await getGoogleAccessToken(page.ownerId)
-    if (!token) return
-    const { eventId } = await createCalendarClient().createEvent(token, {
-      summary: page.title,
-      description: page.description,
-      start: input.startAt,
-      end: input.endAt,
-      attendeeEmail: input.attendeeEmail,
-      timezone: page.timezone,
-    })
-    await bookingService.setGoogleEventId(db, bookingId, eventId)
-  } catch (err) {
-    console.error('[bookings.functions] Google event create failed', err)
-  }
-}
-
 export const getPublicAvailability = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.getPublicAvailability)
   .validator(publicAvailabilityQuerySchema)
@@ -158,7 +132,7 @@ export const bookSlot = createServerFn({ method: 'POST' })
     )
 
     const endAt = new Date(startMs + page.slotDurationMin * 60_000).toISOString()
-    await syncGoogleEventCreate(db, page, result.bookingId, {
+    await syncGoogleEventCreate(env, db, page, result.bookingId, {
       startAt: data.startAt,
       endAt,
       attendeeEmail: data.email,
@@ -214,13 +188,11 @@ export const cancelBooking = createServerFn({ method: 'POST' })
         const page = await db.query.bookingPages.findFirst({
           where: eq(bookingPages.id, view.page.id),
         })
+        // Delete unconditionally when there's a known event id — not gated on the page's current
+        // `googleSync` toggle (finding 7): the event was created while sync was on, so it still
+        // needs cleaning up even if sync has since been turned off.
         if (page) {
-          try {
-            const token = await getGoogleAccessToken(page.ownerId)
-            if (token) await createCalendarClient().deleteEvent(token, booking.googleEventId)
-          } catch (err) {
-            console.error('[bookings.functions] Google event delete failed', err)
-          }
+          await syncGoogleEventDelete(env, db, page, data.bookingId, booking.googleEventId)
         }
       }
 
@@ -250,26 +222,21 @@ export const rescheduleBooking = createServerFn({ method: 'POST' })
     const result = await rescheduleViaRoom(page.id, data.bookingId, data.startAt, busy)
 
     const booking = await db.query.bookings.findFirst({ where: eq(bookings.id, data.bookingId) })
-    if (page.googleSync && booking) {
-      try {
-        const token = await getGoogleAccessToken(page.ownerId)
-        if (token) {
-          const calendar = createCalendarClient()
-          if (booking.googleEventId) await calendar.deleteEvent(token, booking.googleEventId)
-
-          const endAt = new Date(startMs + page.slotDurationMin * 60_000).toISOString()
-          const { eventId } = await calendar.createEvent(token, {
-            summary: page.title,
-            description: page.description,
-            start: data.startAt,
-            end: endAt,
-            attendeeEmail: booking.visitorEmail,
-            timezone: page.timezone,
-          })
-          await bookingService.setGoogleEventId(db, data.bookingId, eventId)
-        }
-      } catch (err) {
-        console.error('[bookings.functions] Google event reschedule sync failed', err)
+    if (booking) {
+      // Always delete a known event, regardless of the page's current `googleSync` toggle — same
+      // reasoning as `cancelBooking` above (finding 7). Only the *create* of the new event is
+      // gated on `googleSync`: with sync off, `syncGoogleEventDelete` already clears
+      // `googleEventId` to `null`, so there's nothing left to create.
+      if (booking.googleEventId) {
+        await syncGoogleEventDelete(env, db, page, data.bookingId, booking.googleEventId)
+      }
+      if (page.googleSync) {
+        const endAt = new Date(startMs + page.slotDurationMin * 60_000).toISOString()
+        await syncGoogleEventCreate(env, db, page, data.bookingId, {
+          startAt: data.startAt,
+          endAt,
+          attendeeEmail: booking.visitorEmail,
+        })
       }
     }
 
@@ -277,7 +244,11 @@ export const rescheduleBooking = createServerFn({ method: 'POST' })
     // pass it along so the confirmation email's manage link keeps working. An owner-initiated
     // reschedule has no plaintext token to hand back (only its hash is stored), so the email falls
     // back to the bare booking URL (see `sendBookingEmails`'s doc comment).
-    await sendBookingEmails(env, 'rescheduled', data.bookingId, { db, manageToken: data.token })
+    await sendBookingEmails(env, 'rescheduled', data.bookingId, {
+      db,
+      manageToken: data.token,
+      previousStartAt: result.previousStartAt,
+    })
 
     return result
   })

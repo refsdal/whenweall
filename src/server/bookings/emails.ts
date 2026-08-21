@@ -5,6 +5,8 @@ import BookingCancelled from '../../../emails/BookingCancelled'
 import BookingConfirmed from '../../../emails/BookingConfirmed'
 import BookingOrganiserNotice from '../../../emails/BookingOrganiserNotice'
 import BookingReminder from '../../../emails/BookingReminder'
+import BookingRescheduled from '../../../emails/BookingRescheduled'
+import BookingSyncFailed from '../../../emails/BookingSyncFailed'
 import { buildIcs } from '#/lib/ics'
 import { asLocaleOptions } from '#/lib/i18n'
 import { formatOptionLabel } from '#/lib/time'
@@ -85,14 +87,52 @@ export async function renderBookingReminder(p: {
   )
 }
 
-type BookingEmailEnv = {
+export async function renderBookingRescheduled(p: {
+  visitorName: string
+  pageTitle: string
+  organiserName: string
+  previousWhen: string
+  when: string
+  location?: string | null
+  manageUrl: string
+  locale: string
+}): Promise<Rendered> {
+  const t = asLocaleOptions(p.locale)
+  return renderEmail(
+    m.email_booking_rescheduled_subject({ title: p.pageTitle }, t),
+    React.createElement(BookingRescheduled, p),
+  )
+}
+
+/** Best-effort organiser notice that a Google Calendar sync failed — see
+ * `sendGoogleSyncFailedNotice`, the caller that actually sends it. */
+export async function renderBookingSyncFailed(p: {
+  pageTitle: string
+  locale: string
+}): Promise<Rendered> {
+  const t = asLocaleOptions(p.locale)
+  return renderEmail(
+    m.email_booking_sync_failed_subject({ title: p.pageTitle }, t),
+    React.createElement(BookingSyncFailed, p),
+  )
+}
+
+export type BookingEmailEnv = {
   EMAIL?: SendEmail
   EMAIL_FROM: string
   APP_URL: string
   APP_ENV?: string
 }
 
-function bookingWhen(startAt: string, endAt: string, locale: string, timeZone: string): string {
+/** `endAt` is optional so a bare point in time (e.g. a reschedule's *previous* start, whose end
+ * was never recorded) can still be formatted — without it the label just omits the "– HH:mm"
+ * range tail (see `formatOptionLabel`). */
+function bookingWhen(
+  startAt: string,
+  endAt: string | null,
+  locale: string,
+  timeZone: string,
+): string {
   const label = formatOptionLabel(
     { kind: 'datetime', startAt, endAt, label: null },
     { locale, timeZone },
@@ -131,12 +171,16 @@ type MailAttachment = { filename: string; content: string; type: string }
  * `manage_token_hash` afterwards). Pass it for `confirmed`/`rescheduled` so the visitor's email
  * gets a working manage link; omit it for `cancelled`/`reminder` (e.g. a reminder fired later by
  * an alarm that only has the booking id) and the visitor link falls back to the bare booking URL.
+ *
+ * `previousStartAt` is required for `kind === 'rescheduled'` — it's `rescheduleBooking`'s own
+ * return value (the slot's start before the move) and isn't otherwise recoverable once the
+ * booking row has been updated to its new time.
  */
 export async function sendBookingEmails(
   env: BookingEmailEnv,
   kind: SendBookingEmailsKind,
   bookingId: string,
-  opts: { db: Db; mailer?: typeof sendMail; manageToken?: string },
+  opts: { db: Db; mailer?: typeof sendMail; manageToken?: string; previousStartAt?: string },
 ): Promise<{ sent: number; failed: number }> {
   const mailer = opts.mailer ?? sendMail
   const { db } = opts
@@ -181,7 +225,7 @@ export async function sendBookingEmails(
       ? `${env.APP_URL}/book/${owner.handle}/${page.slug}`
       : env.APP_URL
 
-    if (kind === 'confirmed' || kind === 'rescheduled') {
+    if (kind === 'confirmed') {
       const ics = bookingIcs(bookingId, page, booking.startAt, booking.endAt, env.APP_URL)
       const attachments: MailAttachment[] = [
         { filename: 'calendar.ics', content: ics, type: 'text/calendar' },
@@ -201,6 +245,53 @@ export async function sendBookingEmails(
         attachments,
       )
 
+      await deliver(
+        owner.email,
+        await renderBookingOrganiserNotice({
+          organiserName: owner.name,
+          pageTitle: page.title,
+          visitorName: booking.visitorName,
+          visitorEmail: booking.visitorEmail,
+          visitorNote: booking.visitorNote,
+          when: organiserWhen,
+          location: page.location,
+          viewUrl: dashboardUrl,
+          locale: organiserLocale,
+        }),
+        attachments,
+      )
+
+      return { sent, failed }
+    }
+
+    if (kind === 'rescheduled') {
+      const ics = bookingIcs(bookingId, page, booking.startAt, booking.endAt, env.APP_URL)
+      const attachments: MailAttachment[] = [
+        { filename: 'calendar.ics', content: ics, type: 'text/calendar' },
+      ]
+      const previousVisitorWhen = opts.previousStartAt
+        ? bookingWhen(opts.previousStartAt, null, visitorLocale, booking.visitorTimezone)
+        : visitorWhen
+
+      await deliver(
+        booking.visitorEmail,
+        await renderBookingRescheduled({
+          visitorName: booking.visitorName,
+          pageTitle: page.title,
+          organiserName: owner.name,
+          previousWhen: previousVisitorWhen,
+          when: visitorWhen,
+          location: page.location,
+          manageUrl,
+          locale: visitorLocale,
+        }),
+        attachments,
+      )
+
+      // The organiser side reuses the plain "new booking" notice (same as `confirmed`) rather
+      // than `BookingRescheduled` — that template's copy ("your booking with {organiser}") is
+      // written from the visitor's point of view; the organiser still sees the (new) time either
+      // way.
       await deliver(
         owner.email,
         await renderBookingOrganiserNotice({
@@ -280,5 +371,42 @@ export async function sendBookingEmails(
   } catch (err) {
     console.error('[booking-emails] failed to send', err)
     return { sent, failed: failed + 1 }
+  }
+}
+
+/**
+ * Best-effort organiser notice for a failed Google Calendar sync (create/reschedule/cancel — see
+ * the `syncGoogle*` helpers in `bookings.functions.ts`). Sent at most once per operation: the
+ * caller invokes this from its single `catch` block, and this function makes no retry attempt of
+ * its own — a failure to *send the notice* is swallowed the same way `sendBookingEmails` swallows
+ * one, since a notification about a sync failure must not itself become a hard failure.
+ */
+export async function sendGoogleSyncFailedNotice(
+  env: BookingEmailEnv,
+  bookingId: string,
+  opts: { db: Db; mailer?: typeof sendMail },
+): Promise<void> {
+  const mailer = opts.mailer ?? sendMail
+  const { db } = opts
+
+  try {
+    const booking = await db.query.bookings.findFirst({ where: eq(bookings.id, bookingId) })
+    if (!booking) return
+
+    const page = await db.query.bookingPages.findFirst({
+      where: eq(bookingPages.id, booking.pageId),
+    })
+    if (!page) return
+
+    const owner = await db.query.user.findFirst({ where: eq(user.id, page.ownerId) })
+    if (!owner) return
+
+    const rendered = await renderBookingSyncFailed({
+      pageTitle: page.title,
+      locale: owner.locale ?? 'en',
+    })
+    await mailer(env, { to: owner.email, ...rendered })
+  } catch (err) {
+    console.error('[booking-emails] failed to send Google sync-failed notice', err)
   }
 }

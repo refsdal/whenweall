@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it, vi } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { setUserHandle } from '#/server/bookings/pages'
-import { sendBookingEmails } from '#/server/bookings/emails'
+import { sendBookingEmails, sendGoogleSyncFailedNotice } from '#/server/bookings/emails'
 import { createBooking } from '#/server/bookings/bookings'
 import { makeBooking, makeBookingPage, makeUser } from '../../../../test/helpers'
 import { localToUtcIso } from '#/lib/time'
@@ -77,6 +77,36 @@ describe('sendBookingEmails', () => {
     expect(mailer).not.toHaveBeenCalled()
   })
 
+  it('sends rescheduled emails to visitor + owner, mentioning the previous and new time', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db, {
+      name: 'Ada',
+      email: 'ada-rescheduled@example.com',
+    })
+    await setUserHandle(db, ownerId, 'ada-rescheduled')
+    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const WED_10AM = localToUtcIso('2026-08-26', '10:00', 'Europe/Oslo')
+    const { id: bookingId } = await makeBooking(db, pageId, WED_10AM, {
+      visitorEmail: 'bob-rescheduled@example.com',
+    })
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    const result = await sendBookingEmails(testEnv, 'rescheduled', bookingId, {
+      db,
+      mailer,
+      previousStartAt: TUE_9AM,
+    })
+
+    expect(result).toEqual({ sent: 2, failed: 0 })
+    const [visitorCall, ownerCall] = mailer.mock.calls
+    expect(visitorCall?.[1].to).toBe('bob-rescheduled@example.com')
+    // Both the previous slot's date (25) and the new one's (26) show up in the visitor email.
+    expect(visitorCall?.[1].html).toContain('25')
+    expect(visitorCall?.[1].html).toContain('26')
+    expect(visitorCall?.[1].attachments?.[0]?.filename).toBe('calendar.ics')
+    expect(ownerCall?.[1].to).toBe('ada-rescheduled@example.com')
+  })
+
   it('counts a mailer failure without throwing', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-failure@example.com' })
@@ -90,5 +120,53 @@ describe('sendBookingEmails', () => {
     const result = await sendBookingEmails(testEnv, 'reminder', bookingId, { db, mailer })
 
     expect(result).toEqual({ sent: 0, failed: 2 })
+  })
+})
+
+describe('sendGoogleSyncFailedNotice', () => {
+  it('sends a best-effort notice to the organiser, mentioning the page title', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-sync@example.com' })
+    await setUserHandle(db, ownerId, 'ada-sync')
+    const { id: pageId } = await makeBookingPage(db, ownerId, { title: 'Coffee chat' })
+    const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM, {
+      visitorEmail: 'bob@example.com',
+    })
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    await sendGoogleSyncFailedNotice(testEnv, bookingId, { db, mailer })
+
+    expect(mailer).toHaveBeenCalledTimes(1)
+    const [, message] = mailer.mock.calls[0]!
+    expect(message.to).toBe('ada-sync@example.com')
+    expect(message.subject).toContain('Coffee chat')
+  })
+
+  it('is best-effort: does nothing (never throws) for an unknown booking', async () => {
+    const db = createDb(env.DB)
+    const mailer = vi.fn().mockResolvedValue(true)
+
+    await expect(
+      sendGoogleSyncFailedNotice(testEnv, 'missing-booking', { db, mailer }),
+    ).resolves.toBeUndefined()
+    expect(mailer).not.toHaveBeenCalled()
+  })
+
+  it('swallows a mailer failure without throwing', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db, {
+      name: 'Ada',
+      email: 'ada-sync-fail@example.com',
+    })
+    await setUserHandle(db, ownerId, 'ada-sync-fail')
+    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM, {
+      visitorEmail: 'bob@example.com',
+    })
+
+    const mailer = vi.fn().mockRejectedValue(new Error('smtp down'))
+    await expect(
+      sendGoogleSyncFailedNotice(testEnv, bookingId, { db, mailer }),
+    ).resolves.toBeUndefined()
   })
 })

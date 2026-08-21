@@ -237,8 +237,13 @@ export async function getBookingForManage(
 }
 
 /** Records the Google Calendar event id created for a booking (best-effort sync — see
- * `bookings.functions.ts`), or updates it after a reschedule re-creates the event. */
-export async function setGoogleEventId(db: Db, bookingId: string, eventId: string): Promise<void> {
+ * `bookings.functions.ts`), updates it after a reschedule re-creates the event, or clears it
+ * (`null`) once the event has been deleted (cancel, or a reschedule where sync is now off). */
+export async function setGoogleEventId(
+  db: Db,
+  bookingId: string,
+  eventId: string | null,
+): Promise<void> {
   await db
     .update(bookings)
     .set({ googleEventId: eventId, updatedAt: new Date().toISOString() })

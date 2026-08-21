@@ -12,6 +12,8 @@ import {
   renderBookingConfirmed,
   renderBookingOrganiserNotice,
   renderBookingReminder,
+  renderBookingRescheduled,
+  renderBookingSyncFailed,
 } from '#/server/bookings/emails'
 
 describe('renderVerifyEmail', () => {
@@ -262,5 +264,63 @@ describe('renderBookingReminder', () => {
     expect(html).toContain('Bob')
     expect(html).toContain('Wed 10 Sep, 09:00–09:15')
     expect(html).toContain('Zoom')
+  })
+})
+
+describe('renderBookingRescheduled', () => {
+  it('mentions both the previous and new time', async () => {
+    const { subject, html, text } = await renderBookingRescheduled({
+      visitorName: 'Bob',
+      pageTitle: '15 min intro',
+      organiserName: 'Ada',
+      previousWhen: 'Wed 10 Sep, 09:00',
+      when: 'Thu 11 Sep, 14:00–14:15',
+      manageUrl: 'https://x/booking/abc?t=tok',
+      locale: 'en',
+    })
+
+    expect(subject).toContain('Rescheduled')
+    expect(html).toContain('Bob')
+    expect(html).toContain('Wed 10 Sep, 09:00')
+    expect(html).toContain('Thu 11 Sep, 14:00–14:15')
+    expect(text).toContain('https://x/booking/abc?t=tok')
+  })
+
+  it('renders norwegian', async () => {
+    const { subject, html } = await renderBookingRescheduled({
+      visitorName: 'Bob',
+      pageTitle: '15 min intro',
+      organiserName: 'Ada',
+      previousWhen: 'ons 10. sep, 09:00',
+      when: 'tor 11. sep, 14:00–14:15',
+      manageUrl: 'https://x/booking/abc?t=tok',
+      locale: 'nb',
+    })
+
+    expect(subject).toContain('Flyttet')
+    expect(html).toContain('flyttet')
+  })
+})
+
+describe('renderBookingSyncFailed', () => {
+  it('mentions the page title and gives no false booking-specific detail', async () => {
+    const { subject, html } = await renderBookingSyncFailed({
+      pageTitle: '15 min intro',
+      locale: 'en',
+    })
+
+    expect(subject).toContain('15 min intro')
+    expect(html).toContain('15 min intro')
+    expect(html).toContain('update your Google Calendar')
+  })
+
+  it('renders norwegian', async () => {
+    const { subject, html } = await renderBookingSyncFailed({
+      pageTitle: '15 min intro',
+      locale: 'nb',
+    })
+
+    expect(subject).toContain('synkronisering')
+    expect(html).toContain('kalenderen din')
   })
 })
