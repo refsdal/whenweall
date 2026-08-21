@@ -72,6 +72,15 @@ export async function waitForTurnstile(page: Page): Promise<void> {
 }
 
 /**
+ * Waits until the React tree has hydrated (the root layout sets `data-hydrated` on <html> after
+ * mount). Typing into an SSR'd controlled input before that point is silently discarded when
+ * React attaches, which is the classic source of "I filled it but it's empty" flakes.
+ */
+export async function waitForHydration(page: Page): Promise<void> {
+  await page.locator('html[data-hydrated="true"]').waitFor({ state: 'attached', timeout: 15_000 })
+}
+
+/**
  * Signs in through the real login form (fills the fields, waits out the Turnstile test widget,
  * submits) and waits for the post-login redirect.
  */
@@ -81,6 +90,7 @@ export async function signIn(
   opts: { next?: string } = {},
 ): Promise<void> {
   await page.goto(opts.next ? `/login?next=${encodeURIComponent(opts.next)}` : '/login')
+  await waitForHydration(page)
   await page.locator('#login-email').fill(user.email)
   await page.locator('#login-password').fill(user.password)
   await waitForTurnstile(page)

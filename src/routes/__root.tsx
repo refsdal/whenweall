@@ -5,6 +5,7 @@ import {
   createRootRoute,
   type ErrorComponentProps,
 } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { MotionConfig } from 'motion/react'
 import appCss from '../styles.css?url'
 import { appConfig } from '#/app.config'
@@ -71,6 +72,12 @@ function RootError({ error, reset }: ErrorComponentProps) {
  * `Header`/`Footer` can read the root route context (session, locale).
  */
 function RootLayout() {
+  // Marks the document as hydrated so e2e tests can wait before typing into SSR'd inputs
+  // (a controlled input typed into before React attaches would be reset on hydration).
+  useEffect(() => {
+    document.documentElement.dataset.hydrated = 'true'
+  }, [])
+
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex min-h-dvh flex-col">

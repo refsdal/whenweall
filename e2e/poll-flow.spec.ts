@@ -1,4 +1,11 @@
-import { expect, pickTwoCalendarDays, signIn, test, waitForTurnstile } from './fixtures'
+import {
+  expect,
+  pickTwoCalendarDays,
+  signIn,
+  test,
+  waitForHydration,
+  waitForTurnstile,
+} from './fixtures'
 
 test('create a poll, guest votes, edits their answer, owner finalizes, .ics downloads', async ({
   page,
@@ -10,6 +17,7 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
 
   // --- creator wizard: title -> two future days -> defaults -> create ---
   await page.goto('/new')
+  await waitForHydration(page)
   await expect(page.getByTestId('creator-wizard')).toBeVisible()
 
   const title = `E2E poll ${Date.now()}`
@@ -40,6 +48,7 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
   const guestPage = await guestContext.newPage()
   try {
     await guestPage.goto(baseUrl)
+    await waitForHydration(guestPage)
     await expect(guestPage.getByTestId('vote-grid')).toBeVisible()
 
     const guestName = `Guest ${Date.now()}`
