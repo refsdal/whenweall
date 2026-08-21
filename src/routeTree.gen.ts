@@ -19,6 +19,7 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
+import { Route as PIdIndexRouteImport } from './routes/p/$id/index'
 import { Route as PIdCalendarDoticsRouteImport } from './routes/p/$id/calendar[.]ics'
 import { Route as ApiPollsIdWsRouteImport } from './routes/api/polls/$id/ws'
 
@@ -72,6 +73,11 @@ const ApiTestSeedRoute = ApiTestSeedRouteImport.update({
   path: '/api/test/seed',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PIdIndexRoute = PIdIndexRouteImport.update({
+  id: '/p/$id/',
+  path: '/p/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PIdCalendarDoticsRoute = PIdCalendarDoticsRouteImport.update({
   id: '/p/$id/calendar.ics',
   path: '/p/$id/calendar.ics',
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/p/$id/': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesByTo {
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/p/$id': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesById {
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/p/$id/': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRouteTypes {
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
+    | '/p/$id/'
     | '/api/polls/$id/ws'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
+    | '/p/$id'
     | '/api/polls/$id/ws'
   id:
     | '__root__'
@@ -168,6 +179,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
+    | '/p/$id/'
     | '/api/polls/$id/ws'
   fileRoutesById: FileRoutesById
 }
@@ -183,6 +195,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiTestSeedRoute: typeof ApiTestSeedRoute
   PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
+  PIdIndexRoute: typeof PIdIndexRoute
   ApiPollsIdWsRoute: typeof ApiPollsIdWsRoute
 }
 
@@ -258,6 +271,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTestSeedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/p/$id/': {
+      id: '/p/$id/'
+      path: '/p/$id'
+      fullPath: '/p/$id/'
+      preLoaderRoute: typeof PIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/p/$id/calendar.ics': {
       id: '/p/$id/calendar.ics'
       path: '/p/$id/calendar.ics'
@@ -287,6 +307,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiTestSeedRoute: ApiTestSeedRoute,
   PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
+  PIdIndexRoute: PIdIndexRoute,
   ApiPollsIdWsRoute: ApiPollsIdWsRoute,
 }
 export const routeTree = rootRouteImport
