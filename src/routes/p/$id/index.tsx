@@ -1,10 +1,9 @@
 import { useCallback } from 'react'
-import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
-import { SearchX } from 'lucide-react'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import * as z from 'zod'
 import { appConfig } from '#/app.config'
+import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { PollPage } from '#/components/poll/PollPage'
-import { Button } from '#/components/ui/button'
 import type { PollEvent } from '#/do/protocol'
 import { m } from '#/lib/i18n'
 import { useLivePoll } from '#/lib/use-live-poll'
@@ -70,15 +69,10 @@ function PollRoute() {
 
 function PollNotFound() {
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col items-center gap-4 px-5 py-24 text-center">
-      <span className="inline-flex size-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
-        <SearchX aria-hidden="true" className="size-5" />
-      </span>
-      <h1 className="display text-2xl">{m.poll_not_found_title()}</h1>
-      <p className="text-sm text-muted-foreground">{m.poll_not_found_body()}</p>
-      <Button asChild variant="outline">
-        <Link to="/">{m.poll_not_found_cta()}</Link>
-      </Button>
-    </div>
+    <NotFoundCard
+      title={m.poll_not_found_title()}
+      body={m.poll_not_found_body()}
+      ctaLabel={m.poll_not_found_cta()}
+    />
   )
 }

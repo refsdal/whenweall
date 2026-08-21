@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 import {
   Bell,
@@ -218,12 +218,11 @@ export function AdminBar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {/* The edit page is a separate route; a plain link keeps this working before it ships. */}
             <DropdownMenuItem asChild>
-              <a href={`/p/${poll.id}/edit`}>
+              <Link to="/p/$id/edit" params={{ id: poll.id }}>
                 <Pencil aria-hidden="true" />
                 {m.poll_edit()}
-              </a>
+              </Link>
             </DropdownMenuItem>
             <DropdownMenuItem disabled={busy} onSelect={() => void duplicate()}>
               <Copy aria-hidden="true" />

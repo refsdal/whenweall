@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as NewRouteImport } from './routes/new'
@@ -21,11 +22,17 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
 import { Route as PIdIndexRouteImport } from './routes/p/$id/index'
 import { Route as PIdCalendarDoticsRouteImport } from './routes/p/$id/calendar[.]ics'
+import { Route as PIdEditRouteImport } from './routes/p/$id/edit'
 import { Route as ApiPollsIdWsRouteImport } from './routes/api/polls/$id/ws'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -83,6 +90,11 @@ const PIdCalendarDoticsRoute = PIdCalendarDoticsRouteImport.update({
   path: '/p/$id/calendar.ics',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PIdEditRoute = PIdEditRouteImport.update({
+  id: '/p/$id/edit',
+  path: '/p/$id/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPollsIdWsRoute = ApiPollsIdWsRouteImport.update({
   id: '/api/polls/$id/ws',
   path: '/api/polls/$id/ws',
@@ -91,6 +103,7 @@ const ApiPollsIdWsRoute = ApiPollsIdWsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/new': typeof NewRoute
@@ -101,11 +114,13 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/new': typeof NewRoute
@@ -116,12 +131,14 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/p/$id/edit': typeof PIdEditRoute
   '/p/$id': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/new': typeof NewRoute
@@ -132,6 +149,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
+  '/p/$id/edit': typeof PIdEditRoute
   '/p/$id/': typeof PIdIndexRoute
   '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
@@ -139,6 +157,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/dashboard'
     | '/forgot-password'
     | '/login'
     | '/new'
@@ -149,11 +168,13 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
+    | '/p/$id/edit'
     | '/p/$id/'
     | '/api/polls/$id/ws'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/dashboard'
     | '/forgot-password'
     | '/login'
     | '/new'
@@ -164,11 +185,13 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
+    | '/p/$id/edit'
     | '/p/$id'
     | '/api/polls/$id/ws'
   id:
     | '__root__'
     | '/'
+    | '/dashboard'
     | '/forgot-password'
     | '/login'
     | '/new'
@@ -179,12 +202,14 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/test/seed'
     | '/p/$id/calendar.ics'
+    | '/p/$id/edit'
     | '/p/$id/'
     | '/api/polls/$id/ws'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DashboardRoute: typeof DashboardRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
   NewRoute: typeof NewRoute
@@ -195,6 +220,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiTestSeedRoute: typeof ApiTestSeedRoute
   PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
+  PIdEditRoute: typeof PIdEditRoute
   PIdIndexRoute: typeof PIdIndexRoute
   ApiPollsIdWsRoute: typeof ApiPollsIdWsRoute
 }
@@ -206,6 +232,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/forgot-password': {
@@ -285,6 +318,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PIdCalendarDoticsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/p/$id/edit': {
+      id: '/p/$id/edit'
+      path: '/p/$id/edit'
+      fullPath: '/p/$id/edit'
+      preLoaderRoute: typeof PIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/polls/$id/ws': {
       id: '/api/polls/$id/ws'
       path: '/api/polls/$id/ws'
@@ -297,6 +337,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DashboardRoute: DashboardRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
   NewRoute: NewRoute,
@@ -307,6 +348,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiTestSeedRoute: ApiTestSeedRoute,
   PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
+  PIdEditRoute: PIdEditRoute,
   PIdIndexRoute: PIdIndexRoute,
   ApiPollsIdWsRoute: ApiPollsIdWsRoute,
 }

@@ -68,8 +68,7 @@ export function CreatorWizard() {
     try {
       const { id } = await createPollFn({ data: input })
       toast.success(m.creator_created())
-      // `/p/$id` lands in task 18, so this navigates by href rather than by route id.
-      await navigate({ href: `/p/${id}?created=1` })
+      await navigate({ to: '/p/$id', params: { id }, search: { created: true } })
     } catch (error) {
       const code = errorCode(error)
       if (code === 'RATE_LIMITED') {

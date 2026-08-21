@@ -57,7 +57,7 @@ describe('draftToInput against the real createPoll', () => {
     }
     draft = creatorReducer(draft, {
       type: 'setTextOptions',
-      options: ['  Pizza ', '', 'Sushi'],
+      options: [{ label: '  Pizza ' }, { label: '' }, { label: 'Sushi' }],
     })
 
     const input = draftToInput(draft)

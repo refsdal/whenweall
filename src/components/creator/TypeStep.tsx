@@ -62,10 +62,13 @@ export function TypeStep({
   draft,
   dispatch,
   onNext,
+  showTypeCards = true,
 }: {
   draft: CreatorDraft
   dispatch: Dispatch<CreatorAction>
   onNext: () => void
+  /** The edit page can't change a poll's type once it has options, so it hides these cards. */
+  showTypeCards?: boolean
 }) {
   const timezones = useMemo(() => {
     const zones: string[] = [...COMMON_TIMEZONES]
@@ -89,46 +92,48 @@ export function TypeStep({
 
   return (
     <div className="flex flex-col gap-7">
-      <fieldset className="flex flex-col gap-3">
-        <legend className="mb-3 text-sm font-medium">{m.creator_type_legend()}</legend>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {TYPE_CARDS.map((card) => {
-            const selected = draft.type === card.type
-            const Icon = card.icon
+      {showTypeCards && (
+        <fieldset className="flex flex-col gap-3">
+          <legend className="mb-3 text-sm font-medium">{m.creator_type_legend()}</legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {TYPE_CARDS.map((card) => {
+              const selected = draft.type === card.type
+              const Icon = card.icon
 
-            return (
-              <button
-                key={card.type}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => setType(card.type)}
-                className={cn(
-                  'focus-ring group flex flex-col items-start gap-2 rounded-xl border p-4 text-left transition-all duration-200',
-                  'hover:-translate-y-px hover:border-foreground/25',
-                  selected
-                    ? 'border-primary bg-accent-soft/60 shadow-[0_10px_26px_-18px_var(--primary)]'
-                    : 'border-border bg-card',
-                )}
-              >
-                <span
+              return (
+                <button
+                  key={card.type}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setType(card.type)}
                   className={cn(
-                    'flex size-9 items-center justify-center rounded-full transition-colors',
+                    'focus-ring group flex flex-col items-start gap-2 rounded-xl border p-4 text-left transition-all duration-200',
+                    'hover:-translate-y-px hover:border-foreground/25',
                     selected
-                      ? 'bg-primary-strong text-primary-foreground'
-                      : 'bg-muted text-muted-foreground group-hover:text-foreground',
+                      ? 'border-primary bg-accent-soft/60 shadow-[0_10px_26px_-18px_var(--primary)]'
+                      : 'border-border bg-card',
                   )}
                 >
-                  <Icon aria-hidden="true" className="size-4.5" />
-                </span>
-                <span className="font-medium">{card.title()}</span>
-                <span className="text-sm leading-snug text-muted-foreground text-pretty">
-                  {card.description()}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </fieldset>
+                  <span
+                    className={cn(
+                      'flex size-9 items-center justify-center rounded-full transition-colors',
+                      selected
+                        ? 'bg-primary-strong text-primary-foreground'
+                        : 'bg-muted text-muted-foreground group-hover:text-foreground',
+                    )}
+                  >
+                    <Icon aria-hidden="true" className="size-4.5" />
+                  </span>
+                  <span className="font-medium">{card.title()}</span>
+                  <span className="text-sm leading-snug text-muted-foreground text-pretty">
+                    {card.description()}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </fieldset>
+      )}
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">

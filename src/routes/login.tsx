@@ -19,9 +19,7 @@ export const Route = createFileRoute('/login')({
   validateSearch: nextSearchSchema,
   beforeLoad: ({ context, search }) => {
     if (context.session) {
-      // `/dashboard` doesn't exist yet (arrives with task 19); until then, an already-signed-in
-      // visitor lands on the home page instead of the poll list.
-      throw redirect({ href: safeNext(search.next) })
+      throw redirect({ href: safeNext(search.next, '/dashboard') })
     }
   },
   component: LoginPage,

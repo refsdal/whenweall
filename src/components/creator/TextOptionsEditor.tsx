@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 import { Plus, X } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import type { DraftTextOption } from '#/components/creator/creator-state'
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
 import { LIMITS } from '#/server/polls/schemas'
@@ -21,17 +22,25 @@ import { LIMITS } from '#/server/polls/schemas'
  */
 const enter = { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 }, transition: spring }
 
+/** Trims a row's label and drops its `id` key entirely when there isn't one, for clean equality. */
+function clean(option: DraftTextOption): DraftTextOption {
+  const label = option.label.trim()
+  return option.id ? { id: option.id, label } : { label }
+}
+
 export function TextOptionsEditor({
   value,
   onChange,
   max = LIMITS.options,
 }: {
-  value: string[]
-  onChange: (options: string[]) => void
+  value: DraftTextOption[]
+  onChange: (options: DraftTextOption[]) => void
   max?: number
 }) {
   const reduceMotion = useReducedMotion()
-  const [rows, setRows] = useState<string[]>(() => (value.length > 0 ? value : ['', '']))
+  const [rows, setRows] = useState<DraftTextOption[]>(() =>
+    value.length > 0 ? value : [{ label: '' }, { label: '' }],
+  )
   const inputs = useRef<(HTMLInputElement | null)[]>([])
   const focusRow = useRef<number | null>(null)
 
@@ -43,14 +52,14 @@ export function TextOptionsEditor({
     focusRow.current = null
   })
 
-  function commit(next: string[]) {
+  function commit(next: DraftTextOption[]) {
     setRows(next)
-    onChange(next.map((option) => option.trim()).filter((option) => option.length > 0))
+    onChange(next.map(clean).filter((option) => option.label.length > 0))
   }
 
   function insertAfter(index: number) {
     if (rows.length >= max) return
-    commit([...rows.slice(0, index + 1), '', ...rows.slice(index + 1)])
+    commit([...rows.slice(0, index + 1), { label: '' }, ...rows.slice(index + 1)])
     focusRow.current = index + 1
   }
 
@@ -66,7 +75,7 @@ export function TextOptionsEditor({
       insertAfter(index)
       return
     }
-    if (event.key === 'Backspace' && rows[index] === '' && rows.length > 1) {
+    if (event.key === 'Backspace' && rows[index]?.label === '' && rows.length > 1) {
       event.preventDefault()
       removeAt(index)
     }
@@ -92,11 +101,13 @@ export function TextOptionsEditor({
               ref={(el) => {
                 inputs.current[index] = el
               }}
-              value={row}
+              value={row.label}
               aria-label={m.creator_text_label({ index: index + 1 })}
               placeholder={index === 0 ? m.creator_text_placeholder() : undefined}
               maxLength={LIMITS.optionLabel}
-              onChange={(e) => commit(rows.map((r, i) => (i === index ? e.target.value : r)))}
+              onChange={(e) =>
+                commit(rows.map((r, i) => (i === index ? { ...r, label: e.target.value } : r)))
+              }
               onKeyDown={(e) => handleKeyDown(e, index)}
               className="h-10"
             />

@@ -16,7 +16,9 @@
     {
       "binding": "DB",
       "database_name": "samla-db",
-      "database_id": "REPLACE_WITH_WRANGLER_D1_CREATE_OUTPUT",
+      // Placeholder UUID so `wrangler dev` works locally without a real D1 database. Replace
+      // with the id printed by `wrangler d1 create samla-db` before deploying.
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "drizzle",
     },
   ],

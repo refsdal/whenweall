@@ -1,11 +1,19 @@
-import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
+import {
+  HeadContent,
+  Outlet,
+  Scripts,
+  createRootRoute,
+  type ErrorComponentProps,
+} from '@tanstack/react-router'
 import { MotionConfig } from 'motion/react'
 import appCss from '../styles.css?url'
 import { appConfig } from '#/app.config'
+import { ErrorCard } from '#/components/layout/ErrorCard'
 import { Header } from '#/components/layout/Header'
 import { Footer } from '#/components/layout/Footer'
+import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { Toaster } from '#/components/ui/sonner'
-import { getLocale } from '#/lib/i18n'
+import { getLocale, m } from '#/lib/i18n'
 import { themeInitScript } from '#/lib/theme'
 import { getSession } from '#/server/auth/session.functions'
 import { getPublicConfig } from '#/server/config.functions'
@@ -35,9 +43,25 @@ export const Route = createRootRoute({
     locale: getLocale(),
     publicConfig: await getPublicConfig(),
   }),
+  notFoundComponent: RootNotFound,
+  errorComponent: RootError,
   shellComponent: RootDocument,
   component: RootLayout,
 })
+
+function RootNotFound() {
+  return (
+    <NotFoundCard
+      title={m.error_404_title()}
+      body={m.error_404_body()}
+      ctaLabel={m.error_404_cta()}
+    />
+  )
+}
+
+function RootError({ error, reset }: ErrorComponentProps) {
+  return <ErrorCard error={error} onRetry={reset} />
+}
 
 /**
  * The chrome around every page. Lives in `component` rather than `shellComponent` so that

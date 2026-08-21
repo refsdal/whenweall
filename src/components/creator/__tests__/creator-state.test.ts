@@ -3,10 +3,12 @@ import {
   canAdvance,
   countOptions,
   creatorReducer,
+  draftFromPoll,
   draftToInput,
   initialDraft,
   type CreatorDraft,
 } from '#/components/creator/creator-state'
+import type { PollView } from '#/server/polls/viewmodel'
 
 const OSLO = 'Europe/Oslo'
 
@@ -160,10 +162,10 @@ describe('creatorReducer / setTextOptions', () => {
   it('replaces the option list', () => {
     const d = creatorReducer(draft({ type: 'options' }), {
       type: 'setTextOptions',
-      options: ['Pizza', 'Sushi'],
+      options: [{ label: 'Pizza' }, { label: 'Sushi' }],
     })
 
-    expect(d.textOptions).toEqual(['Pizza', 'Sushi'])
+    expect(d.textOptions).toEqual([{ label: 'Pizza' }, { label: 'Sushi' }])
   })
 })
 
@@ -202,12 +204,16 @@ describe('canAdvance', () => {
   it('requires at least one option on step 1', () => {
     expect(canAdvance(draft({ step: 1 }))).toBe(false)
     expect(canAdvance(draft({ step: 1, dates: [{ date: '2026-06-15', slots: [] }] }))).toBe(true)
-    expect(canAdvance(draft({ step: 1, type: 'options', textOptions: ['  '] }))).toBe(false)
-    expect(canAdvance(draft({ step: 1, type: 'options', textOptions: ['Pizza'] }))).toBe(true)
+    expect(canAdvance(draft({ step: 1, type: 'options', textOptions: [{ label: '  ' }] }))).toBe(
+      false,
+    )
+    expect(canAdvance(draft({ step: 1, type: 'options', textOptions: [{ label: 'Pizza' }] }))).toBe(
+      true,
+    )
   })
 
   it('rejects more options than the server allows', () => {
-    const many = Array.from({ length: 101 }, (_, i) => `Option ${i}`)
+    const many = Array.from({ length: 101 }, (_, i) => ({ label: `Option ${i}` }))
 
     expect(canAdvance(draft({ step: 1, type: 'options', textOptions: many }))).toBe(false)
   })
@@ -236,7 +242,14 @@ describe('countOptions', () => {
   })
 
   it('counts only non-blank text options', () => {
-    expect(countOptions(draft({ type: 'options', textOptions: ['Pizza', '  ', 'Sushi'] }))).toBe(2)
+    expect(
+      countOptions(
+        draft({
+          type: 'options',
+          textOptions: [{ label: 'Pizza' }, { label: '  ' }, { label: 'Sushi' }],
+        }),
+      ),
+    ).toBe(2)
   })
 })
 
@@ -311,12 +324,31 @@ describe('draftToInput', () => {
 
   it('trims text options and drops the blank ones', () => {
     const input = draftToInput(
-      draft({ type: 'options', title: 'Dinner', textOptions: ['  Pizza ', '', '   ', 'Sushi'] }),
+      draft({
+        type: 'options',
+        title: 'Dinner',
+        textOptions: [{ label: '  Pizza ' }, { label: '' }, { label: '   ' }, { label: 'Sushi' }],
+      }),
     )
 
     expect(input.type).toBe('options')
     expect(input.options).toEqual([
       { kind: 'text', label: 'Pizza' },
+      { kind: 'text', label: 'Sushi' },
+    ])
+  })
+
+  it('carries an existing option id through so its votes are preserved', () => {
+    const input = draftToInput(
+      draft({
+        type: 'options',
+        title: 'Dinner',
+        textOptions: [{ id: 'opt-1', label: 'Pizza' }, { label: 'Sushi' }],
+      }),
+    )
+
+    expect(input.options).toEqual([
+      { kind: 'text', label: 'Pizza', id: 'opt-1' },
       { kind: 'text', label: 'Sushi' },
     ])
   })
@@ -367,5 +399,107 @@ describe('draftToInput', () => {
     expect(input.allowIfNeedBe).toBe(false)
     expect(input.allowComments).toBe(false)
     expect(input.requireParticipantEmail).toBe(true)
+  })
+})
+
+function pollView(overrides: Partial<PollView> = {}): PollView {
+  return {
+    id: 'poll1',
+    type: 'datetime',
+    title: 'Team lunch',
+    description: 'Bring cash',
+    location: 'Kaffebrenneriet',
+    timezone: OSLO,
+    status: 'open',
+    deadlineAt: '2026-06-14T10:00:00.000Z',
+    finalizedOptionId: null,
+    createdAt: '2026-06-01T00:00:00.000Z',
+    settings: { requireParticipantEmail: true, allowComments: false, allowIfNeedBe: false },
+    notifications: null,
+    owner: { id: 'user1', name: 'Ada' },
+    isOwner: true,
+    options: [],
+    participants: [],
+    comments: [],
+    scores: {},
+    bestOptionId: null,
+    ...overrides,
+  }
+}
+
+describe('draftFromPoll', () => {
+  it('round-trips a datetime poll with one all-day and one time-slot option', () => {
+    const poll = pollView({
+      options: [
+        {
+          id: 'opt-date',
+          position: 0,
+          kind: 'date',
+          startAt: '2026-06-15',
+          endAt: null,
+          label: null,
+        },
+        {
+          id: 'opt-slot',
+          position: 1,
+          kind: 'datetime',
+          // 09:00–10:30 Europe/Oslo on 2026-06-16 (CEST, UTC+2).
+          startAt: '2026-06-16T07:00:00.000Z',
+          endAt: '2026-06-16T08:30:00.000Z',
+          label: null,
+        },
+      ],
+    })
+
+    const d = draftFromPoll(poll)
+
+    expect(d.type).toBe('datetime')
+    expect(d.title).toBe('Team lunch')
+    expect(d.description).toBe('Bring cash')
+    expect(d.location).toBe('Kaffebrenneriet')
+    expect(d.timezone).toBe(OSLO)
+    expect(d.deadlineAt).toBe('2026-06-14T10:00:00.000Z')
+    expect(d.requireParticipantEmail).toBe(true)
+    expect(d.allowComments).toBe(false)
+    expect(d.allowIfNeedBe).toBe(false)
+    expect(d.dates).toEqual([
+      { id: 'opt-date', date: '2026-06-15', slots: [] },
+      { date: '2026-06-16', slots: [{ id: 'opt-slot', start: '09:00', end: '10:30' }] },
+    ])
+
+    const input = draftToInput(d)
+    expect(input.options).toEqual([
+      { kind: 'date', date: '2026-06-15', id: 'opt-date' },
+      {
+        kind: 'datetime',
+        startAt: '2026-06-16T07:00:00.000Z',
+        endAt: '2026-06-16T08:30:00.000Z',
+        id: 'opt-slot',
+      },
+    ])
+  })
+
+  it('round-trips a text-options poll', () => {
+    const poll = pollView({
+      type: 'options',
+      options: [
+        { id: 'opt-1', position: 0, kind: 'text', startAt: null, endAt: null, label: 'Pizza' },
+        { id: 'opt-2', position: 1, kind: 'text', startAt: null, endAt: null, label: 'Sushi' },
+      ],
+    })
+
+    const d = draftFromPoll(poll)
+
+    expect(d.type).toBe('options')
+    expect(d.textOptions).toEqual([
+      { id: 'opt-1', label: 'Pizza' },
+      { id: 'opt-2', label: 'Sushi' },
+    ])
+
+    const input = draftToInput(d)
+    expect(input.options).toEqual([
+      { kind: 'text', label: 'Pizza', id: 'opt-1' },
+      { kind: 'text', label: 'Sushi', id: 'opt-2' },
+    ])
   })
 })

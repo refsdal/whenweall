@@ -56,12 +56,11 @@ export function UserMenu({ session }: { session: ClientSession }) {
           <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {/* `/dashboard` arrives with task 18-19; plain anchor until then. */}
         <DropdownMenuItem asChild>
-          <a href="/dashboard">
+          <Link to="/dashboard">
             <LayoutDashboard aria-hidden="true" />
             {m.nav_dashboard()}
-          </a>
+          </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link to="/settings">
