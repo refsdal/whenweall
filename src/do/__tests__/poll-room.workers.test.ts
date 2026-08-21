@@ -66,6 +66,10 @@ function recordingMailer(result: boolean) {
   }
 }
 
+async function throwingMailer(): Promise<boolean> {
+  throw new Error('mailer boom')
+}
+
 describe('enqueueDigest', () => {
   it('schedules the digest alarm ~10 minutes out and accumulates items', async () => {
     const db = createDb(env.DB)
@@ -211,6 +215,66 @@ describe('alarm — deadline', () => {
 
     await stub.syncDeadline(pollId, null)
     expect(await getAlarm(stub)).toBeNull()
+  })
+})
+
+describe('alarm — branch isolation', () => {
+  it('does not reject when the deadline mailer throws, closes the poll, and still arms a pending digest afterwards', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const past = new Date(Date.now() - 60_000).toISOString()
+    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: past })
+    const stub = stubFor(pollId)
+
+    const future = new Date(Date.now() + 60_000).toISOString()
+    await stub.syncDeadline(pollId, future)
+
+    // A pending digest, left due in the future — the deadline mailer throwing must not prevent
+    // this from getting armed by the alarm's `finally`.
+    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+    const digestAt = await getStorage<number>(stub, 'digest:at')
+
+    // Force due *after* both RPCs above have finished re-arming (each re-arm reads current
+    // storage) — otherwise the forced-past `deadline:at` would get picked up by `enqueueDigest`'s
+    // own re-arm and scheduled for real, letting miniflare auto-fire it early with the *real*
+    // mailer before `installMailer` below ever runs.
+    await forceDue(stub, 'deadline:at')
+    await installMailer(stub, throwingMailer)
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true)
+
+    const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
+    expect(poll?.status).toBe('closed')
+    expect(await getStorage(stub, 'deadline:at')).toBeUndefined()
+
+    expect(await getAlarm(stub)).toBe(digestAt)
+  })
+
+  it('still runs the deadline branch when the digest mailer throws, and applies digest retry bookkeeping', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const past = new Date(Date.now() - 60_000).toISOString()
+    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: past })
+    const stub = stubFor(pollId)
+
+    const future = new Date(Date.now() + 60_000).toISOString()
+    await stub.syncDeadline(pollId, future)
+    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+
+    // Force both due only after both RPCs above have finished re-arming — see the comment in the
+    // previous test for why ordering matters here.
+    await forceDue(stub, 'deadline:at')
+    await forceDue(stub, 'digest:at')
+    await installMailer(stub, throwingMailer)
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true)
+
+    const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
+    expect(poll?.status).toBe('closed')
+    expect(await getStorage(stub, 'deadline:at')).toBeUndefined()
+
+    expect(await getStorage(stub, 'retry:count')).toBe(1)
+    expect(await getStorage(stub, 'digest:items')).toHaveLength(1)
   })
 })
 

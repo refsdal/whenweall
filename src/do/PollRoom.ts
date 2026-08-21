@@ -93,18 +93,30 @@ export class PollRoom extends DurableObject<Env> {
     const now = Date.now()
     const db = createDb(this.env.DB)
 
-    const deadlineAt = await this.ctx.storage.get<number>(DEADLINE_AT_KEY)
-    if (deadlineAt !== undefined && deadlineAt <= now) {
-      await this.#processDeadline(db, pollId)
-      await this.ctx.storage.delete(DEADLINE_AT_KEY)
-    }
+    try {
+      // Each branch is isolated: a failure in one must not block the other, and both must not
+      // prevent re-arming (see the `finally` below) — otherwise a stuck poll could silently stop
+      // getting alarm ticks at all.
+      try {
+        const deadlineAt = await this.ctx.storage.get<number>(DEADLINE_AT_KEY)
+        if (deadlineAt !== undefined && deadlineAt <= now) {
+          await this.#processDeadline(db, pollId)
+        }
+      } catch (err) {
+        console.error('[PollRoom] deadline step failed', err)
+      }
 
-    const digestAt = await this.ctx.storage.get<number>(DIGEST_AT_KEY)
-    if (digestAt !== undefined && digestAt <= now) {
-      await this.#processDigest(db, pollId, now)
+      try {
+        const digestAt = await this.ctx.storage.get<number>(DIGEST_AT_KEY)
+        if (digestAt !== undefined && digestAt <= now) {
+          await this.#processDigest(db, pollId, now)
+        }
+      } catch (err) {
+        console.error('[PollRoom] digest step failed', err)
+      }
+    } finally {
+      await this.#rearm()
     }
-
-    await this.#rearm()
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
@@ -159,22 +171,33 @@ export class PollRoom extends DurableObject<Env> {
 
   async #processDeadline(db: ReturnType<typeof createDb>, pollId: string): Promise<void> {
     const changed = await closeExpiredPoll(db, pollId)
-    if (!changed) return
 
-    this.#send({ type: 'poll.changed', entity: 'poll' })
+    if (changed) {
+      // Broadcast first: connected clients should see the poll flip to closed even if the
+      // owner-notification mail below fails.
+      this.#send({ type: 'poll.changed', entity: 'poll' })
 
-    const poll = await db.query.polls.findFirst({
-      where: eq(polls.id, pollId),
-      with: { owner: true },
-    })
-    if (!poll) return
+      // Best-effort notification: the poll is already closed, so a failure here must not stop us
+      // from deleting `deadline:at` below (there's nothing to retry — the close already happened).
+      try {
+        const poll = await db.query.polls.findFirst({
+          where: eq(polls.id, pollId),
+          with: { owner: true },
+        })
+        if (poll) {
+          const rendered = await renderClosed({
+            pollTitle: poll.title,
+            pollUrl: `${this.env.APP_URL}/p/${pollId}`,
+            locale: poll.owner.locale ?? 'en',
+          })
+          await this.mailer(this.env, { to: poll.owner.email, ...rendered })
+        }
+      } catch (err) {
+        console.error('[PollRoom] deadline notification failed', err)
+      }
+    }
 
-    const rendered = await renderClosed({
-      pollTitle: poll.title,
-      pollUrl: `${this.env.APP_URL}/p/${pollId}`,
-      locale: poll.owner.locale ?? 'en',
-    })
-    await this.mailer(this.env, { to: poll.owner.email, ...rendered })
+    await this.ctx.storage.delete(DEADLINE_AT_KEY)
   }
 
   async #processDigest(
@@ -207,7 +230,12 @@ export class PollRoom extends DurableObject<Env> {
       newComments,
       locale: poll.owner.locale ?? 'en',
     })
-    const ok = await this.mailer(this.env, { to: poll.owner.email, ...rendered })
+    let ok = false
+    try {
+      ok = await this.mailer(this.env, { to: poll.owner.email, ...rendered })
+    } catch (err) {
+      console.error('[PollRoom] digest mail threw', err)
+    }
 
     if (!ok) {
       const currentRetries = (await this.ctx.storage.get<number>(RETRY_COUNT_KEY)) ?? 0
