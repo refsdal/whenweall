@@ -4,7 +4,7 @@ import { createDb } from '#/server/db/client'
 import { getAuth } from '#/server/auth/auth'
 import { applyClaim } from '#/server/polls/claims'
 import { getPollView } from '#/server/polls/service'
-import { makeSignupPoll, makeUser } from '../../../../../test/helpers'
+import { makePoll, makeSignupPoll, makeUser } from '../../../../../test/helpers'
 import { rosterResponse } from '../roster[.]csv'
 
 const captchaHeaders = { 'x-captcha-response': 'test-token' }
@@ -62,6 +62,18 @@ describe('GET /p/$id/roster.csv', () => {
       pollId,
     )
     expect(res.status).toBe(403)
+  })
+
+  it('returns 400 for the poll owner when the poll is not a sign-up sheet', async () => {
+    const db = createDb(env.DB)
+    const owner = await makeVerifiedOwner()
+    const { id: pollId } = await makePoll(db, owner.id)
+
+    const res = await rosterResponse(
+      new Request('https://x', { headers: { cookie: owner.cookie } }),
+      pollId,
+    )
+    expect(res.status).toBe(400)
   })
 
   it('returns 200 with the CSV for the poll owner', async () => {

@@ -21,11 +21,16 @@ export async function rosterResponse(request: Request, id: string): Promise<Resp
 
   const poll = await getDb().query.polls.findFirst({
     where: eq(polls.id, id),
-    columns: { ownerId: true, deletedAt: true },
+    columns: { ownerId: true, deletedAt: true, type: true },
   })
   if (!poll || poll.deletedAt) return new Response('Not found', { status: 404 })
   if (!session || session.user.id !== poll.ownerId) {
     return new Response('Forbidden', { status: 403 })
+  }
+  // Owner-only past this point, so there's no information to leak either way — a plain 400 is
+  // simpler than pretending the route doesn't exist for a poll type that just has no roster.
+  if (poll.type !== 'signup') {
+    return new Response('Not a sign-up sheet', { status: 400 })
   }
 
   const csv = await buildRosterCsv(getDb(), id, { locale: getLocale() })

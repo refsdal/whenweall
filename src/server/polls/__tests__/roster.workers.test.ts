@@ -68,6 +68,24 @@ describe('buildRosterCsv', () => {
     expect(body).toContain('"Bob, Jr."')
   })
 
+  it.each(['=1+1', '+1+1', '-1+1', '@SUM(A1)'])(
+    'prefixes a formula-looking name (%s) with a single quote to defuse CSV formula injection',
+    async (name) => {
+      const db = createDb(env.DB)
+      const { id: ownerId } = await makeUser(db)
+      const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+      const view = await getPollView(db, pollId, { userId: ownerId })
+      const [slot] = view!.options
+
+      await applyClaim(db, pollId, slot!.id, { name, userId: null })
+
+      const csv = await buildRosterCsv(db, pollId, { locale: 'en' })
+      const lines = csv.replace(/^\uFEFF/, '').split('\r\n')
+
+      expect(lines.some((line) => line.includes(`,'${name}`))).toBe(true)
+    },
+  )
+
   it('leaves capacity empty for unlimited slots and prints the number for capped slots', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db)

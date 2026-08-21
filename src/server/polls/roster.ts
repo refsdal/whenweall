@@ -6,8 +6,21 @@ import { formatOptionLabel } from '#/lib/time'
 
 const BOM = '﻿'
 
+/**
+ * A field starting with `= + - @` (or a tab/CR, which some spreadsheet apps also treat as a
+ * formula prefix once leading whitespace is trimmed) gets read as a formula by Excel/Sheets/
+ * LibreOffice when the CSV is opened — a participant-supplied name like `=HYPERLINK(...)` would
+ * otherwise execute in the poll owner's spreadsheet. Prefixing with a single quote defuses it; a
+ * quote already forces text interpretation in every mainstream spreadsheet app and is invisible in
+ * a normal cell.
+ */
+function escapeFormula(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
+}
+
 /** RFC 4180 field quoting: quote whenever the field contains a comma, quote, or line break. */
-function csvField(value: string): string {
+function csvField(rawValue: string): string {
+  const value = escapeFormula(rawValue)
   if (/[",\r\n]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`
   }
