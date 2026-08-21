@@ -18,6 +18,7 @@ import {
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
+import { cn } from '#/lib/utils'
 import { createPollSchema } from '#/server/polls/schemas'
 import { createPoll } from '#/server/polls/polls.functions'
 
@@ -89,7 +90,12 @@ export function CreatorWizard() {
   return (
     <div
       data-testid="creator-wizard"
-      className="mx-auto flex w-full max-w-3xl flex-col px-5 py-10 sm:py-14"
+      className={cn(
+        'mx-auto flex w-full max-w-3xl flex-col px-5 py-10 transition-[max-width] duration-300 sm:py-14',
+        // The calendar and the day list sit side by side on step 2, which needs more room than
+        // a column of form fields does.
+        draft.step === 1 && draft.type === 'datetime' && 'lg:max-w-5xl',
+      )}
     >
       <header className="flex flex-col gap-1">
         <h1 className="display text-3xl">{m.creator_page_title()}</h1>
