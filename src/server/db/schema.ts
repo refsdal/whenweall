@@ -4,7 +4,7 @@ import { user } from './auth-schema'
 
 export * from './auth-schema'
 
-export const POLL_TYPES = ['datetime', 'options'] as const
+export const POLL_TYPES = ['datetime', 'options', 'signup'] as const
 export const POLL_STATUSES = ['open', 'closed', 'finalized'] as const
 export const OPTION_KINDS = ['date', 'datetime', 'text'] as const
 export const ANSWERS = ['yes', 'ifneedbe', 'no'] as const
@@ -36,6 +36,7 @@ export const polls = sqliteTable(
     allowIfNeedBe: bool('allow_if_need_be', true),
     notifyOnVote: bool('notify_on_vote', true),
     notifyOnComment: bool('notify_on_comment', true),
+    signupMaxClaims: integer('signup_max_claims').notNull().default(1),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),

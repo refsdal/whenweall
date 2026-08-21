@@ -41,6 +41,8 @@ describe('participants.functions module graph', () => {
     'removeParticipant',
     'addComment',
     'deleteComment',
+    'claimSlot',
+    'unclaimSlot',
   ] as const)('exports a callable %s server function', (name) => {
     expect(typeof participantsFunctions[name]).toBe('function')
   })
@@ -106,6 +108,13 @@ describe('participants.functions middleware wiring', () => {
   it('deleteComment only requires a session lookup', () => {
     expect(M.deleteComment).toContain(sessionMiddleware)
     expect(M.deleteComment).toHaveLength(1)
+  })
+
+  it('claimSlot and unclaimSlot are both vote-rate-limited', () => {
+    expect(M.claimSlot).toContain(sessionMiddleware)
+    expect(M.claimSlot).toContain(rateLimitMiddleware('vote'))
+    expect(M.unclaimSlot).toContain(sessionMiddleware)
+    expect(M.unclaimSlot).toContain(rateLimitMiddleware('vote'))
   })
 })
 

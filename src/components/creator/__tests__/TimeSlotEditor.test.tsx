@@ -115,3 +115,57 @@ describe('TimeSlotEditor', () => {
     expect(onApplyToAll).toHaveBeenCalled()
   })
 })
+
+describe('TimeSlotEditor / showCapacity', () => {
+  it('does not show a capacity field or pass a capacity to onAdd by default', async () => {
+    const user = userEvent.setup()
+    const { onAdd } = renderEditor()
+
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0)
+
+    setTime(/start/i, '09:00')
+    await user.click(screen.getByRole('button', { name: /add time/i }))
+
+    expect(onAdd).toHaveBeenCalledWith('09:00', null)
+  })
+
+  it('includes a capacity (defaulting to 1) in onAdd when showCapacity is set', async () => {
+    const user = userEvent.setup()
+    const onAdd = vi.fn()
+    render(
+      <TimeSlotEditor date="2026-06-15" slots={[]} onAdd={onAdd} onRemove={vi.fn()} showCapacity />,
+    )
+
+    setTime(/start/i, '09:00')
+    await user.click(screen.getByRole('button', { name: /add time/i }))
+
+    expect(onAdd).toHaveBeenCalledWith('09:00', null, 1)
+  })
+
+  it('shows a capacity field per existing slot and reports changes by index', () => {
+    const onSetCapacity = vi.fn()
+    render(
+      <TimeSlotEditor
+        date="2026-06-15"
+        slots={[
+          { start: '09:00', end: null, capacity: 2 },
+          { start: '13:00', end: null },
+        ]}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+        onSetCapacity={onSetCapacity}
+        showCapacity
+      />,
+    )
+
+    const spinbuttons = screen.getAllByRole('spinbutton')
+    // One per existing slot, plus the add-form's own capacity field.
+    expect(spinbuttons).toHaveLength(3)
+    expect(spinbuttons[0]).toHaveValue(2)
+    expect(spinbuttons[1]).toHaveValue(1)
+
+    fireEvent.change(spinbuttons[1] as HTMLElement, { target: { value: '5' } })
+
+    expect(onSetCapacity).toHaveBeenCalledWith(1, 5)
+  })
+})

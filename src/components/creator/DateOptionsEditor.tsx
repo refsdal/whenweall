@@ -5,6 +5,7 @@ import { CalendarDays, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 import { Calendar } from '#/components/ui/calendar'
+import { CapacityField } from '#/components/creator/CapacityField'
 import { TimeSlotEditor } from '#/components/creator/TimeSlotEditor'
 import { getLocale, intlLocale, m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
@@ -36,6 +37,7 @@ export function DateOptionsEditor({
 }) {
   const reduceMotion = useReducedMotion()
   const locale = getLocale()
+  const isSignup = draft.type === 'signup'
 
   const selected = useMemo(() => draft.dates.map((day) => fromKey(day.date)), [draft.dates])
   const today = useMemo(() => {
@@ -102,25 +104,41 @@ export function DateOptionsEditor({
                         <span className="text-xs text-muted-foreground">{m.creator_allday()}</span>
                       )}
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={m.creator_day_remove({ day: label })}
-                      onClick={() => toggleDate(day.date)}
-                      className="-mt-1 -mr-1 shrink-0 text-muted-foreground hover:text-foreground"
-                    >
-                      <X aria-hidden="true" />
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {isSignup && day.slots.length === 0 && (
+                        <CapacityField
+                          id={`date-capacity-${day.date}`}
+                          size="sm"
+                          value={day.capacity ?? 1}
+                          onChange={(capacity) =>
+                            dispatch({ type: 'setDateCapacity', date: day.date, capacity })
+                          }
+                        />
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={m.creator_day_remove({ day: label })}
+                        onClick={() => toggleDate(day.date)}
+                        className="-mt-1 -mr-1 shrink-0 text-muted-foreground hover:text-foreground"
+                      >
+                        <X aria-hidden="true" />
+                      </Button>
+                    </div>
                   </div>
 
                   <TimeSlotEditor
                     date={day.date}
                     slots={day.slots}
-                    onAdd={(start, end) =>
-                      dispatch({ type: 'addSlot', date: day.date, start, end })
+                    onAdd={(start, end, capacity) =>
+                      dispatch({ type: 'addSlot', date: day.date, start, end, capacity })
                     }
                     onRemove={(index) => dispatch({ type: 'removeSlot', date: day.date, index })}
+                    onSetCapacity={(index, capacity) =>
+                      dispatch({ type: 'setSlotCapacity', date: day.date, index, capacity })
+                    }
+                    showCapacity={isSignup}
                     onApplyToAll={
                       draft.dates.length > 1
                         ? () => {

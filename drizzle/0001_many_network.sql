@@ -1,0 +1,1 @@
+ALTER TABLE `polls` ADD `signup_max_claims` integer DEFAULT 1 NOT NULL;

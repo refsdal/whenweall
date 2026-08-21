@@ -5,6 +5,7 @@ import {
   Bell,
   Copy,
   Crown,
+  Download,
   Lock,
   LockOpen,
   MoreHorizontal,
@@ -81,6 +82,9 @@ export function AdminBar({
   })
 
   const isClosed = poll.status !== 'open'
+  // A sign-up sheet has no winning option to pick — the organiser closes it instead, and takes the
+  // roster with them.
+  const isSignup = poll.type === 'signup'
 
   async function run(action: () => Promise<void>) {
     setBusy(true)
@@ -140,16 +144,27 @@ export function AdminBar({
           {m.poll_admin_title()}
         </span>
 
-        <Button
-          type="button"
-          size="sm"
-          // Re-finalizing is a conflict on the server, so a decided poll offers no pick button.
-          disabled={busy || poll.options.length === 0 || poll.status === 'finalized'}
-          onClick={() => setFinalizeOpen(true)}
-        >
-          <Crown aria-hidden="true" />
-          {m.poll_finalize()}
-        </Button>
+        {isSignup ? (
+          <Button asChild type="button" size="sm" variant="outline">
+            {/* A plain link, not a server function: the CSV comes straight from an owner-only
+                route, so the browser can stream it to disk. */}
+            <a href={`/p/${poll.id}/roster.csv`} download>
+              <Download aria-hidden="true" />
+              {m.admin_download_roster()}
+            </a>
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            // Re-finalizing is a conflict on the server, so a decided poll offers no pick button.
+            disabled={busy || poll.options.length === 0 || poll.status === 'finalized'}
+            onClick={() => setFinalizeOpen(true)}
+          >
+            <Crown aria-hidden="true" />
+            {m.poll_finalize()}
+          </Button>
+        )}
 
         <Button
           type="button"
@@ -237,14 +252,16 @@ export function AdminBar({
         </DropdownMenu>
       </div>
 
-      <FinalizeDialog
-        poll={poll}
-        open={finalizeOpen}
-        onOpenChange={setFinalizeOpen}
-        onFinalized={onChanged}
-        locale={locale}
-        timeZone={timeZone}
-      />
+      {!isSignup && (
+        <FinalizeDialog
+          poll={poll}
+          open={finalizeOpen}
+          onOpenChange={setFinalizeOpen}
+          onFinalized={onChanged}
+          locale={locale}
+          timeZone={timeZone}
+        />
+      )}
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-md">

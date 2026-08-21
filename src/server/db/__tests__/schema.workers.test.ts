@@ -49,4 +49,37 @@ describe('schema', () => {
     expect(await db.select().from(votes)).toHaveLength(0)
     expect(await db.select().from(pollOptions)).toHaveLength(0)
   })
+
+  it('inserts a signup poll with signupMaxClaims and an option with capacity, and reads them back', async () => {
+    const db = createDb(env.DB)
+    const now = new Date().toISOString()
+    await db.insert(polls).values({
+      id: 's'.repeat(12),
+      ownerId: 'u1',
+      type: 'signup',
+      title: 'Bring a dish',
+      timezone: 'Europe/Oslo',
+      signupMaxClaims: 3,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await db.insert(pollOptions).values([
+      {
+        id: 'so1',
+        pollId: 's'.repeat(12),
+        position: 0,
+        kind: 'text',
+        label: 'Salad',
+        capacity: 5,
+      },
+    ])
+
+    const loaded = await db.query.polls.findFirst({
+      where: eq(polls.id, 's'.repeat(12)),
+      with: { options: true },
+    })
+    expect(loaded?.type).toBe('signup')
+    expect(loaded?.signupMaxClaims).toBe(3)
+    expect(loaded?.options[0]?.capacity).toBe(5)
+  })
 })

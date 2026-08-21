@@ -4,10 +4,12 @@ import { eq } from 'drizzle-orm'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { polls } from '#/server/db/schema'
+import { errorCode } from '#/lib/errors'
 import type { MailMessage } from '#/server/mailer/mailer'
 import { DIGEST_DELAY_MS, MAX_RETRIES, PollRoom, RETRY_DELAY_MS } from '#/do/PollRoom'
 import type { PollEvent } from '#/do/protocol'
-import { makePoll, makeUser } from '../../../test/helpers'
+import { getPollView, setPollStatus } from '#/server/polls/service'
+import { makePoll, makeSignupPoll, makeUser } from '../../../test/helpers'
 
 // `vi.mock` cannot reach code running inside a Durable Object's own module graph in
 // @cloudflare/vitest-plugin 1.0 — `alarm()`/RPC methods load via a separate `importModule()` path
@@ -381,5 +383,156 @@ describe('websocket fan-out', () => {
     b.client.close()
     await a.waitForMessage(2)
     expect(a.messages[2]).toEqual({ type: 'presence', count: 1 })
+  })
+})
+
+describe('claim / unclaim RPC', () => {
+  async function connect(stub: ReturnType<typeof stubFor>, pollId: string) {
+    const res = await stub.fetch(`https://do/ws?pollId=${pollId}`, {
+      headers: { Upgrade: 'websocket' },
+    })
+    const client = res.webSocket!
+    const messages: PollEvent[] = []
+    const waiters: Array<() => void> = []
+    client.addEventListener('message', (event: MessageEvent) => {
+      messages.push(JSON.parse(event.data as string) as PollEvent)
+      waiters.shift()?.()
+    })
+    client.accept()
+    function waitForMessage(index: number): Promise<void> {
+      if (messages.length > index) return Promise.resolve()
+      return new Promise((resolve) => waiters.push(resolve))
+    }
+    return { messages, waitForMessage }
+  }
+
+  it('claims a slot inside the DO and broadcasts poll.changed vote', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+    const { messages, waitForMessage } = await connect(stub, pollId)
+    await waitForMessage(0) // presence
+
+    const result = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+    expect(result.created).toBe(true)
+    expect(result.claimedOptionIds).toEqual([slot.id])
+
+    await waitForMessage(1)
+    expect(messages[1]).toEqual({ type: 'poll.changed', entity: 'vote' })
+  })
+
+  it('does not broadcast when re-claiming a slot already held (changed: false)', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    const first = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+    expect(first.changed).toBe(true)
+
+    const { messages, waitForMessage } = await connect(stub, pollId)
+    await waitForMessage(0) // presence
+
+    const again = await stub.claim(pollId, slot.id, { participantId: first.participantId })
+    expect(again.changed).toBe(false)
+
+    // Prove nothing more ever arrives: a `broadcast` call after the re-claim is the next message
+    // this socket sees, so if the re-claim had (wrongly) broadcast too, this would land at index 2
+    // and the assertion below on index 1 would fail.
+    await stub.broadcast(pollId, { type: 'poll.changed', entity: 'poll' })
+    await waitForMessage(1)
+    expect(messages[1]).toEqual({ type: 'poll.changed', entity: 'poll' })
+  })
+
+  it('unclaims a slot inside the DO and broadcasts poll.changed vote', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    const claimed = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+    const { messages, waitForMessage } = await connect(stub, pollId)
+    await waitForMessage(0) // presence
+
+    const result = await stub.unclaim(pollId, slot.id, claimed.participantId)
+    expect(result.remainingOptionIds).toEqual([])
+
+    await waitForMessage(1)
+    expect(messages[1]).toEqual({ type: 'poll.changed', entity: 'vote' })
+  })
+
+  it('unclaims on a closed sheet when allowClosed is set, and rejects it otherwise', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    const claimed = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+    await setPollStatus(db, pollId, ownerId, 'closed')
+
+    let caught: unknown
+    try {
+      await stub.unclaim(pollId, slot.id, claimed.participantId)
+    } catch (err) {
+      caught = err
+    }
+    expect(errorCode(caught)).toBe('POLL_CLOSED')
+
+    const result = await stub.unclaim(pollId, slot.id, claimed.participantId, {
+      allowClosed: true,
+    })
+    expect(result.remainingOptionIds).toEqual([])
+  })
+
+  it('propagates an AppError code thrown inside the DO to the caller via errorCode()', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
+
+    let caught: unknown
+    try {
+      await stub.claim(pollId, slot.id, { name: 'Bob', userId: null })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeDefined()
+    expect(errorCode(caught)).toBe('SLOT_FULL')
+  })
+
+  it('serialises concurrent claims on a capacity-1 slot: exactly one succeeds', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const slot = view!.options[0]!
+    const stub = stubFor(pollId)
+
+    const results = await Promise.allSettled([
+      stub.claim(pollId, slot.id, { name: 'Alice', userId: null }),
+      stub.claim(pollId, slot.id, { name: 'Bob', userId: null }),
+    ])
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[]
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect(errorCode(rejected[0]!.reason)).toBe('SLOT_FULL')
+
+    const counts = await getPollView(db, pollId, { userId: ownerId })
+    expect(counts?.claims[slot.id]?.count).toBe(1)
   })
 })

@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
+import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { getPoll, updatePoll } from '#/server/polls/polls.functions'
 import { updatePollSchema, type OptionInput, type UpdatePollInput } from '#/server/polls/schemas'
@@ -85,6 +86,7 @@ function EditPollRoute() {
       allowComments: input.allowComments,
       allowIfNeedBe: input.allowIfNeedBe,
       options: input.options,
+      ...(input.signupMaxClaims !== undefined ? { signupMaxClaims: input.signupMaxClaims } : {}),
     }
     return updatePollSchema.safeParse(payload).success ? payload : null
   }
@@ -95,8 +97,12 @@ function EditPollRoute() {
       await updateFn({ data: payload })
       toast.success(m.editor_updated())
       await navigate({ to: '/p/$id', params: { id: poll.id } })
-    } catch {
-      toast.error(m.poll_error_generic())
+    } catch (error) {
+      toast.error(
+        errorCode(error) === 'CAPACITY_BELOW_CLAIMS'
+          ? m.editor_capacity_below_claims()
+          : m.poll_error_generic(),
+      )
     } finally {
       setSubmitting(false)
     }

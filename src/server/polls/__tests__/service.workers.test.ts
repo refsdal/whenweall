@@ -2,7 +2,8 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { AppError } from '#/lib/errors'
-import { makeParticipant, makePoll, makeUser } from '../../../../test/helpers'
+import { applyClaim } from '#/server/polls/claims'
+import { makeParticipant, makePoll, makeSignupPoll, makeUser } from '../../../../test/helpers'
 import {
   closeExpiredPoll,
   createPoll,
@@ -88,9 +89,49 @@ describe('createPoll', () => {
       requireParticipantEmail: false,
       allowComments: true,
       allowIfNeedBe: true,
+      signupMaxClaims: 1,
     })
     expect(view?.notifications).toEqual({ notifyOnVote: true, notifyOnComment: true })
     expect(view?.status).toBe('open')
+  })
+
+  it('persists per-option capacity and signupMaxClaims for a signup poll, forcing allowIfNeedBe false', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id } = await createPoll(db, ownerId, {
+      type: 'signup',
+      title: 'Bring a dish',
+      timezone: 'Europe/Oslo',
+      allowIfNeedBe: true,
+      signupMaxClaims: 3,
+      options: [
+        { kind: 'text', label: 'Starter', capacity: 2 },
+        { kind: 'text', label: 'Dessert', capacity: null },
+      ],
+    })
+
+    const view = await getPollView(db, id, { userId: ownerId })
+    expect(view?.settings.allowIfNeedBe).toBe(false)
+    expect(view?.settings.signupMaxClaims).toBe(3)
+    expect(view?.options.map((o) => ({ label: o.label, capacity: o.capacity }))).toEqual([
+      { label: 'Starter', capacity: 2 },
+      { label: 'Dessert', capacity: null },
+    ])
+  })
+
+  it('forces capacity to null and signupMaxClaims to 1 for a non-signup poll', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id } = await createPoll(db, ownerId, {
+      type: 'options',
+      title: 'Lunch spot',
+      timezone: 'Europe/Oslo',
+      options: [{ kind: 'text', label: 'Pizza' }],
+    })
+
+    const view = await getPollView(db, id, { userId: ownerId })
+    expect(view?.options[0]?.capacity).toBeNull()
+    expect(view?.settings.signupMaxClaims).toBe(1)
   })
 })
 
@@ -149,6 +190,26 @@ describe('getPollView', () => {
     await deletePoll(db, pollId, ownerId)
     expect(await getPollView(db, pollId, { userId: ownerId })).toBeNull()
   })
+
+  it('exposes a claims map with full flags and empty scores for a signup poll', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, {
+      capacities: [1, null],
+      maxClaims: 2,
+    })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot1, slot2] = view0!.options
+    await applyClaim(db, pollId, slot1!.id, { name: 'Alice', userId: null })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.claims).toEqual({
+      [slot1!.id]: { count: 1, capacity: 1, full: true },
+      [slot2!.id]: { count: 0, capacity: null, full: false },
+    })
+    expect(view?.scores).toEqual({})
+    expect(view?.bestOptionId).toBeNull()
+  })
 })
 
 describe('listMyPolls', () => {
@@ -174,6 +235,27 @@ describe('listMyPolls', () => {
     expect(first?.participantCount).toBe(2)
     const second = list.find((p) => p.id === poll2)
     expect(second?.participantCount).toBe(0)
+  })
+
+  it('reports claimCount as the sum of yes-votes, distinct from participantCount, for a sign-up sheet', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, {
+      capacities: [null, null],
+      maxClaims: 2,
+    })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot1, slot2] = view0!.options
+
+    // Alice claims both slots (one participant, two claims); Bob claims one.
+    const alice = await applyClaim(db, pollId, slot1!.id, { name: 'Alice', userId: null })
+    await applyClaim(db, pollId, slot2!.id, { participantId: alice.participantId })
+    await applyClaim(db, pollId, slot1!.id, { name: 'Bob', userId: null })
+
+    const list = await listMyPolls(db, ownerId)
+    const summary = list.find((p) => p.id === pollId)
+    expect(summary?.participantCount).toBe(2)
+    expect(summary?.claimCount).toBe(3)
   })
 })
 
@@ -253,6 +335,74 @@ describe('updatePoll', () => {
 
     const view = await getPollView(db, pollId, { userId: ownerId })
     expect(view?.deadlineAt).toBe(newDeadline)
+  })
+
+  it('throws CAPACITY_BELOW_CLAIMS when lowering a slot capacity under its current claim count', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot] = view0!.options
+    await applyClaim(db, pollId, slot!.id, { name: 'Alice', userId: null })
+    await applyClaim(db, pollId, slot!.id, { name: 'Bob', userId: null })
+
+    await expect(
+      updatePoll(db, pollId, ownerId, {
+        options: [{ id: slot!.id, kind: 'text', label: slot!.label!, capacity: 1 }],
+      }),
+    ).rejects.toMatchObject({ code: 'CAPACITY_BELOW_CLAIMS' })
+  })
+
+  it('allows raising a slot capacity to at or above its current claim count', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot] = view0!.options
+    await applyClaim(db, pollId, slot!.id, { name: 'Alice', userId: null })
+
+    await updatePoll(db, pollId, ownerId, {
+      options: [{ id: slot!.id, kind: 'text', label: slot!.label!, capacity: 5 }],
+    })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.options[0]?.capacity).toBe(5)
+  })
+
+  it('keeps a retained option’s existing capacity when the update omits it', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [7] })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot] = view0!.options
+
+    // No `capacity` on the retained option — must keep 7, not reset to the create-time default of 1.
+    await updatePoll(db, pollId, ownerId, {
+      options: [{ id: slot!.id, kind: 'text', label: 'Renamed slot' }],
+    })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.options[0]?.capacity).toBe(7)
+    expect(view?.options[0]?.label).toBe('Renamed slot')
+  })
+
+  it('still defaults a brand-new option to capacity 1 when the update omits it', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [7] })
+    const view0 = await getPollView(db, pollId, { userId: ownerId })
+    const [slot] = view0!.options
+
+    await updatePoll(db, pollId, ownerId, {
+      options: [
+        { id: slot!.id, kind: 'text', label: 'Slot 1', capacity: 7 },
+        { kind: 'text', label: 'New slot' },
+      ],
+    })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const newSlot = view!.options.find((o) => o.label === 'New slot')
+    expect(newSlot?.capacity).toBe(1)
   })
 })
 
@@ -358,6 +508,17 @@ describe('finalizePoll', () => {
     const after = await getPollView(db, pollId, { userId: ownerId })
     expect(after?.bestOptionId).toBe(opt1!.id)
     expect(after?.finalizedOptionId).toBe(opt2!.id)
+  })
+
+  it('throws VALIDATION for a signup poll', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const view = await getPollView(db, pollId, { userId: ownerId })
+
+    await expect(finalizePoll(db, pollId, ownerId, view!.options[0]!.id)).rejects.toMatchObject({
+      code: 'VALIDATION',
+    })
   })
 })
 

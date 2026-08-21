@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   addCommentSchema,
   addParticipantSchema,
+  claimSchema,
   createPollSchema,
+  unclaimSchema,
   updatePollSchema,
 } from '#/server/polls/schemas'
 
@@ -131,6 +133,79 @@ describe('createPollSchema', () => {
   })
 })
 
+describe('createPollSchema — signup', () => {
+  it('rejects a signup poll with mixed option kinds', () => {
+    const result = createPollSchema.safeParse({
+      type: 'signup',
+      title: 'Bring a dish',
+      timezone: 'Europe/Oslo',
+      options: [
+        { kind: 'text', label: 'Salad' },
+        { kind: 'date', date: '2026-09-01' },
+      ],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['options', 1])
+    }
+  })
+
+  it('rejects capacity on a datetime poll option', () => {
+    const result = createPollSchema.safeParse(
+      baseDatetimePoll({
+        options: [{ ...datetimeOption('2026-09-01T10:00:00.000Z'), capacity: 2 }],
+      }),
+    )
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['options', 0, 'capacity'])
+    }
+  })
+
+  it('rejects signupMaxClaims on a datetime poll', () => {
+    const result = createPollSchema.safeParse(baseDatetimePoll({ signupMaxClaims: 2 }))
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['signupMaxClaims'])
+    }
+  })
+
+  it('accepts a signup poll with capacities [1, null] (unlimited)', () => {
+    const result = createPollSchema.safeParse({
+      type: 'signup',
+      title: 'Bring a dish',
+      timezone: 'Europe/Oslo',
+      options: [
+        { kind: 'text', label: 'Salad', capacity: 1 },
+        { kind: 'text', label: 'Drinks', capacity: null },
+      ],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects signupMaxClaims of 0', () => {
+    const result = createPollSchema.safeParse({
+      type: 'signup',
+      title: 'Bring a dish',
+      timezone: 'Europe/Oslo',
+      options: [{ kind: 'text', label: 'Salad' }],
+      signupMaxClaims: 0,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects signupMaxClaims of 101', () => {
+    const result = createPollSchema.safeParse({
+      type: 'signup',
+      title: 'Bring a dish',
+      timezone: 'Europe/Oslo',
+      options: [{ kind: 'text', label: 'Salad' }],
+      signupMaxClaims: 101,
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
 describe('updatePollSchema', () => {
   it('requires pollId', () => {
     const result = updatePollSchema.safeParse({ title: 'New title' })
@@ -202,6 +277,33 @@ describe('addCommentSchema', () => {
       pollId: VALID_POLL_ID,
       authorName: 'Ada',
       body: 'Looks good!',
+    })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('claimSchema', () => {
+  it('accepts a minimal claim with just pollId and optionId', () => {
+    const result = claimSchema.safeParse({ pollId: VALID_POLL_ID, optionId: 'opt1' })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects an invalid email', () => {
+    const result = claimSchema.safeParse({
+      pollId: VALID_POLL_ID,
+      optionId: 'opt1',
+      email: 'nope',
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('unclaimSchema', () => {
+  it('accepts a minimal unclaim with pollId, optionId and participantId', () => {
+    const result = unclaimSchema.safeParse({
+      pollId: VALID_POLL_ID,
+      optionId: 'opt1',
+      participantId: 'pa1',
     })
     expect(result.success).toBe(true)
   })
