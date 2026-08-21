@@ -107,6 +107,35 @@ describe('sendBookingEmails', () => {
     expect(ownerCall?.[1].to).toBe('ada-rescheduled@example.com')
   })
 
+  it('sends the organiser a dedicated "booking moved" notice, not "New booking"', async () => {
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db, {
+      name: 'Ada',
+      email: 'ada-org-rescheduled@example.com',
+    })
+    await setUserHandle(db, ownerId, 'ada-org-rescheduled')
+    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const WED_10AM = localToUtcIso('2026-08-26', '10:00', 'Europe/Oslo')
+    const { id: bookingId } = await makeBooking(db, pageId, WED_10AM, {
+      visitorEmail: 'bob-org-rescheduled@example.com',
+    })
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    const result = await sendBookingEmails(testEnv, 'rescheduled', bookingId, {
+      db,
+      mailer,
+      previousStartAt: TUE_9AM,
+    })
+
+    expect(result).toEqual({ sent: 2, failed: 0 })
+    const [, ownerCall] = mailer.mock.calls
+    expect(ownerCall?.[1].to).toBe('ada-org-rescheduled@example.com')
+    expect(ownerCall?.[1].subject).not.toContain('New booking')
+    // Both the previous slot's date (25) and the new one's (26) show up for the organiser too.
+    expect(ownerCall?.[1].html).toContain('25')
+    expect(ownerCall?.[1].html).toContain('26')
+  })
+
   it('counts a mailer failure without throwing', async () => {
     const db = createDb(env.DB)
     const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-failure@example.com' })

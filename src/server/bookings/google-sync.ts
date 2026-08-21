@@ -60,6 +60,10 @@ export async function syncGoogleEventCreate(
  * either succeeds or the event was already gone (`deleteEvent` itself treats 404/410 as success).
  * On failure, sends the organiser a one-off best-effort notice and leaves `googleEventId` as-is
  * (nothing was actually cleaned up, so the id is still meaningful for a future retry/inspection).
+ *
+ * Returns `true` when the event was deleted or already gone (including "no usable Google token" —
+ * there's nothing to clean up), `false` on failure — `syncGoogleEventsForReschedule` uses this to
+ * decide whether it's safe to create the replacement event.
  */
 export async function syncGoogleEventDelete(
   env: BookingEmailEnv,
@@ -69,14 +73,53 @@ export async function syncGoogleEventDelete(
   googleEventId: string,
   fetchImpl: typeof fetch = fetch,
   mailer?: typeof sendMail,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const token = await getGoogleAccessToken(page.ownerId)
-    if (!token) return
+    if (!token) return true
     await createCalendarClient(fetchImpl).deleteEvent(token, googleEventId)
     await bookingService.setGoogleEventId(db, bookingId, null)
+    return true
   } catch (err) {
     console.error('[google-sync] Google event delete failed', err)
     await sendGoogleSyncFailedNotice(env, bookingId, { db, mailer })
+    return false
+  }
+}
+
+/**
+ * Google Calendar delete-then-recreate for a reschedule, sequenced so a booking never ends up
+ * pointing at a *new* Google event while the *old* one is still sitting on the organiser's
+ * calendar under a `googleEventId` samla no longer knows about. Deletes `previousGoogleEventId`
+ * (if any) via `syncGoogleEventDelete` and only creates the new event when that delete actually
+ * succeeded — a failed delete leaves the booking's `googleEventId` pointed at the (still real,
+ * still on the calendar) old event rather than overwriting it with an orphaned one, and relies on
+ * `syncGoogleEventDelete`'s own best-effort organiser notice to surface the problem (no second
+ * notice fires here for a create that was deliberately skipped).
+ */
+export async function syncGoogleEventsForReschedule(
+  env: BookingEmailEnv,
+  db: Db,
+  page: BookingPage,
+  bookingId: string,
+  previousGoogleEventId: string | null,
+  input: { startAt: string; endAt: string; attendeeEmail: string },
+  fetchImpl: typeof fetch = fetch,
+  mailer?: typeof sendMail,
+): Promise<void> {
+  const deleteOk = previousGoogleEventId
+    ? await syncGoogleEventDelete(
+        env,
+        db,
+        page,
+        bookingId,
+        previousGoogleEventId,
+        fetchImpl,
+        mailer,
+      )
+    : true
+
+  if (deleteOk && page.googleSync) {
+    await syncGoogleEventCreate(env, db, page, bookingId, input, fetchImpl, mailer)
   }
 }

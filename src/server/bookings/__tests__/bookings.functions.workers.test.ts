@@ -5,7 +5,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createDb } from '#/server/db/client'
 import { bookings } from '#/server/db/schema'
 import { eq } from 'drizzle-orm'
-import { syncGoogleEventCreate, syncGoogleEventDelete } from '#/server/bookings/google-sync'
+import {
+  syncGoogleEventCreate,
+  syncGoogleEventDelete,
+  syncGoogleEventsForReschedule,
+} from '#/server/bookings/google-sync'
 import { makeBooking, makeBookingPage, makeUser } from '../../../../test/helpers'
 
 const testEnv = {
@@ -177,5 +181,77 @@ describe('syncGoogleEventDelete', () => {
     const [, message] = mailer.mock.calls[0]!
     expect(message.to).toBe(ownerEmail)
     expect(message.subject).toContain('Delete-fail page')
+  })
+})
+
+describe('syncGoogleEventsForReschedule', () => {
+  it('does not create a new event when the delete fails, and leaves googleEventId unchanged', async () => {
+    network.use(http.delete(`${EVENTS_URL}/evt_old`, () => HttpResponse.json({}, { status: 500 })))
+    const createHandler = vi.fn(() => HttpResponse.json({ id: 'evt_new' }, { status: 200 }))
+    network.use(http.post(EVENTS_URL, createHandler))
+
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: true })
+    const page = await db.query.bookingPages.findFirst({
+      where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
+    })
+    const { id: bookingId } = await makeBooking(db, pageId, new Date().toISOString(), {
+      googleEventId: 'evt_old',
+    })
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    await syncGoogleEventsForReschedule(
+      testEnv,
+      db,
+      page!,
+      bookingId,
+      'evt_old',
+      {
+        startAt: new Date().toISOString(),
+        endAt: new Date().toISOString(),
+        attendeeEmail: 'b@x.com',
+      },
+      fetch,
+      mailer,
+    )
+
+    expect(createHandler).not.toHaveBeenCalled()
+    expect(await googleEventIdOf(db, bookingId)).toBe('evt_old')
+    expect(mailer).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates the new event and stores its id when the delete finds the old one already gone (404)', async () => {
+    network.use(http.delete(`${EVENTS_URL}/evt_gone`, () => HttpResponse.json({}, { status: 404 })))
+    network.use(http.post(EVENTS_URL, () => HttpResponse.json({ id: 'evt_new' }, { status: 200 })))
+
+    const db = createDb(env.DB)
+    const { id: ownerId } = await makeUser(db)
+    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: true })
+    const page = await db.query.bookingPages.findFirst({
+      where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
+    })
+    const { id: bookingId } = await makeBooking(db, pageId, new Date().toISOString(), {
+      googleEventId: 'evt_gone',
+    })
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    await syncGoogleEventsForReschedule(
+      testEnv,
+      db,
+      page!,
+      bookingId,
+      'evt_gone',
+      {
+        startAt: new Date().toISOString(),
+        endAt: new Date().toISOString(),
+        attendeeEmail: 'b@x.com',
+      },
+      fetch,
+      mailer,
+    )
+
+    expect(await googleEventIdOf(db, bookingId)).toBe('evt_new')
+    expect(mailer).not.toHaveBeenCalled()
   })
 })

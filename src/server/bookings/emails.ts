@@ -6,6 +6,7 @@ import BookingConfirmed from '../../../emails/BookingConfirmed'
 import BookingOrganiserNotice from '../../../emails/BookingOrganiserNotice'
 import BookingReminder from '../../../emails/BookingReminder'
 import BookingRescheduled from '../../../emails/BookingRescheduled'
+import BookingRescheduledOrganiser from '../../../emails/BookingRescheduledOrganiser'
 import BookingSyncFailed from '../../../emails/BookingSyncFailed'
 import { buildIcs } from '#/lib/ics'
 import { asLocaleOptions } from '#/lib/i18n'
@@ -101,6 +102,23 @@ export async function renderBookingRescheduled(p: {
   return renderEmail(
     m.email_booking_rescheduled_subject({ title: p.pageTitle }, t),
     React.createElement(BookingRescheduled, p),
+  )
+}
+
+export async function renderBookingRescheduledOrganiser(p: {
+  organiserName: string
+  pageTitle: string
+  visitorName: string
+  previousWhen: string
+  when: string
+  location?: string | null
+  viewUrl: string
+  locale: string
+}): Promise<Rendered> {
+  const t = asLocaleOptions(p.locale)
+  return renderEmail(
+    m.email_booking_rescheduled_org_subject({ title: p.pageTitle }, t),
+    React.createElement(BookingRescheduledOrganiser, p),
   )
 }
 
@@ -288,18 +306,20 @@ export async function sendBookingEmails(
         attachments,
       )
 
-      // The organiser side reuses the plain "new booking" notice (same as `confirmed`) rather
-      // than `BookingRescheduled` — that template's copy ("your booking with {organiser}") is
-      // written from the visitor's point of view; the organiser still sees the (new) time either
-      // way.
+      const previousOrganiserWhen = opts.previousStartAt
+        ? bookingWhen(opts.previousStartAt, null, organiserLocale, page.timezone)
+        : organiserWhen
+
+      // The organiser gets its own "booking moved" template rather than the plain "new booking"
+      // notice (`BookingOrganiserNotice`, reused for `confirmed`) — a reschedule is not a new
+      // booking, and the organiser needs the previous time alongside the new one.
       await deliver(
         owner.email,
-        await renderBookingOrganiserNotice({
+        await renderBookingRescheduledOrganiser({
           organiserName: owner.name,
           pageTitle: page.title,
           visitorName: booking.visitorName,
-          visitorEmail: booking.visitorEmail,
-          visitorNote: booking.visitorNote,
+          previousWhen: previousOrganiserWhen,
           when: organiserWhen,
           location: page.location,
           viewUrl: dashboardUrl,

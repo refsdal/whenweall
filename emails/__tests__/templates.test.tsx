@@ -13,6 +13,7 @@ import {
   renderBookingOrganiserNotice,
   renderBookingReminder,
   renderBookingRescheduled,
+  renderBookingRescheduledOrganiser,
   renderBookingSyncFailed,
 } from '#/server/bookings/emails'
 
@@ -298,6 +299,41 @@ describe('renderBookingRescheduled', () => {
     })
 
     expect(subject).toContain('Flyttet')
+    expect(html).toContain('flyttet')
+  })
+})
+
+describe('renderBookingRescheduledOrganiser', () => {
+  it('mentions the previous and new time, and never says "New booking"', async () => {
+    const { subject, html } = await renderBookingRescheduledOrganiser({
+      organiserName: 'Ada',
+      pageTitle: '15 min intro',
+      visitorName: 'Bob',
+      previousWhen: 'Wed 10 Sep, 09:00',
+      when: 'Thu 11 Sep, 14:00–14:15',
+      viewUrl: 'https://x/bookings/p1',
+      locale: 'en',
+    })
+
+    expect(subject).toContain('moved')
+    expect(subject).not.toContain('New booking')
+    expect(html).toContain('Bob')
+    expect(html).toContain('Wed 10 Sep, 09:00')
+    expect(html).toContain('Thu 11 Sep, 14:00–14:15')
+  })
+
+  it('renders norwegian', async () => {
+    const { subject, html } = await renderBookingRescheduledOrganiser({
+      organiserName: 'Ada',
+      pageTitle: '15 min intro',
+      visitorName: 'Bob',
+      previousWhen: 'ons 10. sep, 09:00',
+      when: 'tor 11. sep, 14:00–14:15',
+      viewUrl: 'https://x/bookings/p1',
+      locale: 'nb',
+    })
+
+    expect(subject).toContain('flyttet')
     expect(html).toContain('flyttet')
   })
 })

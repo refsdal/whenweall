@@ -18,7 +18,11 @@ import {
   rescheduleViaRoom,
 } from '#/server/notifications/booking-client'
 import { sendBookingEmails } from './emails'
-import { syncGoogleEventCreate, syncGoogleEventDelete } from './google-sync'
+import {
+  syncGoogleEventCreate,
+  syncGoogleEventDelete,
+  syncGoogleEventsForReschedule,
+} from './google-sync'
 import { getPublicPage } from './pages'
 import * as bookingService from './bookings'
 import {
@@ -224,20 +228,17 @@ export const rescheduleBooking = createServerFn({ method: 'POST' })
     const booking = await db.query.bookings.findFirst({ where: eq(bookings.id, data.bookingId) })
     if (booking) {
       // Always delete a known event, regardless of the page's current `googleSync` toggle — same
-      // reasoning as `cancelBooking` above (finding 7). Only the *create* of the new event is
-      // gated on `googleSync`: with sync off, `syncGoogleEventDelete` already clears
-      // `googleEventId` to `null`, so there's nothing left to create.
-      if (booking.googleEventId) {
-        await syncGoogleEventDelete(env, db, page, data.bookingId, booking.googleEventId)
-      }
-      if (page.googleSync) {
-        const endAt = new Date(startMs + page.slotDurationMin * 60_000).toISOString()
-        await syncGoogleEventCreate(env, db, page, data.bookingId, {
-          startAt: data.startAt,
-          endAt,
-          attendeeEmail: booking.visitorEmail,
-        })
-      }
+      // reasoning as `cancelBooking` above (finding 7). The *create* of the new event is gated on
+      // `googleSync` *and* on the delete having actually succeeded: creating a replacement event
+      // after a failed delete would leave two live Google events for one booking, with
+      // `googleEventId` overwritten to point at the new one and the old one orphaned on the
+      // organiser's calendar — see `syncGoogleEventsForReschedule`.
+      const endAt = new Date(startMs + page.slotDurationMin * 60_000).toISOString()
+      await syncGoogleEventsForReschedule(env, db, page, data.bookingId, booking.googleEventId, {
+        startAt: data.startAt,
+        endAt,
+        attendeeEmail: booking.visitorEmail,
+      })
     }
 
     // Reschedules initiated by the visitor still have their manage token in hand (`data.token`) —
