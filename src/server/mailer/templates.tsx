@@ -4,6 +4,7 @@ import ClaimConfirmation from '../../../emails/ClaimConfirmation'
 import Closed from '../../../emails/Closed'
 import Digest from '../../../emails/Digest'
 import Finalized from '../../../emails/Finalized'
+import OrgInvite from '../../../emails/OrgInvite'
 import ResetPassword from '../../../emails/ResetPassword'
 import VerifyEmail from '../../../emails/VerifyEmail'
 import { asLocaleOptions } from '#/lib/i18n'
@@ -32,6 +33,19 @@ export async function renderResetPassword(p: {
 }): Promise<Rendered> {
   const t = asLocaleOptions(p.locale)
   return renderEmail(m.email_reset_subject({}, t), <ResetPassword {...p} />)
+}
+
+export async function renderOrgInvite(p: {
+  orgName: string
+  inviterName: string
+  url: string
+  locale: string
+}): Promise<Rendered> {
+  const t = asLocaleOptions(p.locale)
+  return renderEmail(
+    m.email_org_invite_subject({ inviter: p.inviterName, org: p.orgName }, t),
+    <OrgInvite {...p} />,
+  )
 }
 
 export async function renderDigest(p: {

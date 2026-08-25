@@ -1,14 +1,17 @@
 import { betterAuth } from 'better-auth'
-import { captcha } from 'better-auth/plugins'
+import { captcha, organization } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
+import { eq } from 'drizzle-orm'
 import { env as workerEnv } from 'cloudflare:workers'
 import { createDb } from '#/server/db/client'
 import * as schema from '#/server/db/schema'
+import { member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
 import { sendMail } from '#/server/mailer/mailer'
-import { renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
+import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
+import { createPersonalOrganization } from './personal-org'
 
 type AuthEnv = Pick<
   Env,
@@ -64,8 +67,47 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       },
       deleteUser: { enabled: true },
     },
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (u) => {
+            await createPersonalOrganization(
+              createDb(d1),
+              u as { id: string; name: string; email: string },
+            )
+          },
+        },
+      },
+      session: {
+        create: {
+          before: async (s) => {
+            // Every session starts scoped to the user's first org (their personal one).
+            const m = await createDb(d1).query.member.findFirst({
+              where: eq(member.userId, s.userId),
+              orderBy: (mm, { asc }) => [asc(mm.createdAt)],
+            })
+            return { data: { ...s, activeOrganizationId: m?.organizationId ?? null } }
+          },
+        },
+      },
+    },
     plugins: [
       passkey({ rpID: url.hostname, rpName: appConfig.name, origin: env.APP_URL }),
+      organization({
+        creatorRole: 'owner',
+        sendInvitationEmail: async ({ email, organization: org, inviter, id }) => {
+          const locale = (inviter.user as { locale?: string }).locale ?? appConfig.defaultLocale
+          await sendMail(env, {
+            to: email,
+            ...(await renderOrgInvite({
+              orgName: org.name,
+              inviterName: inviter.user.name,
+              url: `${env.APP_URL}/accept-invitation/${id}`,
+              locale,
+            })),
+          })
+        },
+      }),
       captcha({
         provider: 'cloudflare-turnstile',
         secretKey: env.TURNSTILE_SECRET_KEY,

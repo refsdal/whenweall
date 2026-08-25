@@ -1,4 +1,5 @@
 import { betterAuth } from 'better-auth'
+import { organization } from 'better-auth/plugins'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
 import { drizzle } from 'drizzle-orm/d1'
@@ -10,7 +11,14 @@ export function createAuth(d1: D1Database) {
   return betterAuth({
     database: drizzleAdapter(drizzle(d1), { provider: 'sqlite' }),
     emailAndPassword: { enabled: true },
-    plugins: [passkey()],
+    plugins: [
+      passkey(),
+      organization({
+        creatorRole: 'owner',
+        // No-op: this CLI config only exists to shape the generated schema.
+        sendInvitationEmail: async () => {},
+      }),
+    ],
     user: {
       additionalFields: {
         locale: { type: 'string', required: false, input: true },
