@@ -1,4 +1,4 @@
-# Contributing to samla
+# Contributing to whenweall
 
 Thanks for your interest in contributing.
 

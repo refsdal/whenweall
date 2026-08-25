@@ -4,7 +4,7 @@
 @import '@fontsource-variable/bricolage-grotesque';
 
 /*
- * samla design tokens.
+ * whenweall design tokens.
  *
  * Identity: warm paper, near-black warm ink, ember coral accent. Colours are authored in
  * oklch so that lightness steps stay perceptually even between the light and dark themes.
@@ -223,9 +223,9 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
-  --animate-cell-in: samla-cell-in 9s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
-  --animate-pop-in: samla-pop-in 0.24s cubic-bezier(0.34, 1.4, 0.64, 1) both;
-  --animate-best-pulse: samla-best-pulse 9s ease-in-out infinite;
+  --animate-cell-in: whenweall-cell-in 9s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
+  --animate-pop-in: whenweall-pop-in 0.24s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+  --animate-best-pulse: whenweall-best-pulse 9s ease-in-out infinite;
 }
 
 @layer base {
@@ -292,7 +292,7 @@
   box-shadow: 0 10px 30px -12px color-mix(in oklab, var(--primary) 65%, transparent);
 }
 
-@keyframes samla-pop-in {
+@keyframes whenweall-pop-in {
   from {
     opacity: 0;
     transform: scale(0.7) rotate(-25deg);
@@ -308,7 +308,7 @@
  * its own colour — then holds before the loop restarts. Delays are staggered per cell so the
  * grid fills in the way a real poll does.
  */
-@keyframes samla-cell-in {
+@keyframes whenweall-cell-in {
   0%,
   6% {
     background-color: var(--muted);
@@ -328,7 +328,7 @@
   }
 }
 
-@keyframes samla-best-pulse {
+@keyframes whenweall-best-pulse {
   0%,
   40% {
     opacity: 0;
@@ -369,7 +369,7 @@
   }
 }
 
-@keyframes samla-cell-mark {
+@keyframes whenweall-cell-mark {
   0%,
   10% {
     opacity: 0;

@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a problem with samla
+description: Report a problem with whenweall
 labels: [bug]
 body:
   - type: textarea

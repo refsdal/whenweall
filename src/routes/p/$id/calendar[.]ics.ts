@@ -17,7 +17,7 @@ export const Route = createFileRoute('/p/$id/calendar.ics')({
         return new Response(ics, {
           headers: {
             'Content-Type': 'text/calendar; charset=utf-8',
-            'Content-Disposition': `attachment; filename="samla-${params.id}.ics"`,
+            'Content-Disposition': `attachment; filename="whenweall-${params.id}.ics"`,
           },
         })
       },

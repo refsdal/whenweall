@@ -13,8 +13,8 @@ import {
 import { makeBooking, makeBookingPage, makeUser } from '../../../../test/helpers'
 
 const testEnv = {
-  EMAIL_FROM: 'samla <no-reply@samla.test>',
-  APP_URL: 'https://samla.test',
+  EMAIL_FROM: 'whenweall <no-reply@whenweall.test>',
+  APP_URL: 'https://whenweall.test',
   APP_ENV: 'test',
 }
 

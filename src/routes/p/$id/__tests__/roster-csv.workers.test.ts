@@ -94,7 +94,7 @@ describe('GET /p/$id/roster.csv', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toContain('text/csv')
     expect(res.headers.get('Content-Disposition')).toBe(
-      `attachment; filename="samla-${pollId}-roster.csv"`,
+      `attachment; filename="whenweall-${pollId}-roster.csv"`,
     )
     const text = await res.text()
     expect(text).toContain('slot,capacity,claimed,participant,email')

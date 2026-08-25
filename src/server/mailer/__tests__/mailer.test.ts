@@ -17,7 +17,7 @@ describe('sendMail', () => {
     const send = vi.fn().mockResolvedValue({ messageId: '1' })
     const env = {
       EMAIL: { send } as unknown as SendEmail,
-      EMAIL_FROM: 'samla <no-reply@samla.app>',
+      EMAIL_FROM: 'whenweall <no-reply@whenweall.com>',
     }
 
     const ok = await sendMail(env, {
@@ -27,7 +27,7 @@ describe('sendMail', () => {
 
     expect(ok).toBe(true)
     expect(send).toHaveBeenCalledWith({
-      from: { name: 'samla', email: 'no-reply@samla.app' },
+      from: { name: 'whenweall', email: 'no-reply@whenweall.com' },
       to: baseMsg.to,
       subject: baseMsg.subject,
       html: baseMsg.html,
@@ -47,19 +47,19 @@ describe('sendMail', () => {
     const send = vi.fn().mockResolvedValue({ messageId: '1' })
     const env = {
       EMAIL: { send } as unknown as SendEmail,
-      EMAIL_FROM: 'no-reply@samla.app',
+      EMAIL_FROM: 'no-reply@whenweall.com',
     }
 
     await sendMail(env, baseMsg)
 
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ from: 'no-reply@samla.app' }))
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ from: 'no-reply@whenweall.com' }))
   })
 
   it('returns false and logs the subject (never the recipient) when env.EMAIL.send rejects', async () => {
     const send = vi.fn().mockRejectedValue(new Error('boom'))
     const env = {
       EMAIL: { send } as unknown as SendEmail,
-      EMAIL_FROM: 'samla <no-reply@samla.app>',
+      EMAIL_FROM: 'whenweall <no-reply@whenweall.com>',
     }
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -75,7 +75,7 @@ describe('sendMail', () => {
   })
 
   it('falls back to console transport and returns true when env.EMAIL is absent', async () => {
-    const env = { EMAIL_FROM: 'samla <no-reply@samla.app>' }
+    const env = { EMAIL_FROM: 'whenweall <no-reply@whenweall.com>' }
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     const ok = await sendMail(env, baseMsg)
@@ -87,20 +87,20 @@ describe('sendMail', () => {
 
 describe('parseFromAddress', () => {
   it('parses a "Name <addr>" pair', () => {
-    expect(parseFromAddress('samla <no-reply@samla.app>')).toEqual({
-      name: 'samla',
-      email: 'no-reply@samla.app',
+    expect(parseFromAddress('whenweall <no-reply@whenweall.com>')).toEqual({
+      name: 'whenweall',
+      email: 'no-reply@whenweall.com',
     })
   })
 
   it('trims surrounding whitespace and quotes around the name', () => {
-    expect(parseFromAddress('  "samla"  <no-reply@samla.app>  ')).toEqual({
-      name: 'samla',
-      email: 'no-reply@samla.app',
+    expect(parseFromAddress('  "whenweall"  <no-reply@whenweall.com>  ')).toEqual({
+      name: 'whenweall',
+      email: 'no-reply@whenweall.com',
     })
   })
 
   it('returns a bare address unchanged', () => {
-    expect(parseFromAddress('no-reply@samla.app')).toBe('no-reply@samla.app')
+    expect(parseFromAddress('no-reply@whenweall.com')).toBe('no-reply@whenweall.com')
   })
 })

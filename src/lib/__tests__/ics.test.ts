@@ -4,9 +4,9 @@ describe('ics', () => {
   const now = new Date('2026-08-20T10:00:00.000Z')
   it('builds an all-day event', () => {
     const ics = buildIcs({
-      uid: 'abc@samla',
+      uid: 'abc@whenweall',
       title: 'Team; offsite',
-      url: 'https://samla.app/p/x',
+      url: 'https://whenweall.com/p/x',
       start: { date: '2026-09-01' },
       now,
     })
@@ -38,9 +38,14 @@ describe('buildIcsMulti', () => {
   it('builds a single VCALENDAR with one VEVENT per input event, in order', () => {
     const ics = buildIcsMulti(
       [
-        { uid: 'a@samla', title: 'Slot A', url: 'https://x/p/1', start: { date: '2026-09-01' } },
         {
-          uid: 'b@samla',
+          uid: 'a@whenweall',
+          title: 'Slot A',
+          url: 'https://x/p/1',
+          start: { date: '2026-09-01' },
+        },
+        {
+          uid: 'b@whenweall',
           title: 'Slot B',
           url: 'https://x/p/1',
           start: { dateTime: '2026-09-02T16:30:00.000Z' },
@@ -53,9 +58,9 @@ describe('buildIcsMulti', () => {
     expect(ics.match(/END:VCALENDAR/g)).toHaveLength(1)
     expect(ics.match(/BEGIN:VEVENT/g)).toHaveLength(2)
     expect(ics.match(/END:VEVENT/g)).toHaveLength(2)
-    expect(ics).toContain('UID:a@samla\r\n')
-    expect(ics).toContain('UID:b@samla\r\n')
-    expect(ics.indexOf('UID:a@samla')).toBeLessThan(ics.indexOf('UID:b@samla'))
+    expect(ics).toContain('UID:a@whenweall\r\n')
+    expect(ics).toContain('UID:b@whenweall\r\n')
+    expect(ics.indexOf('UID:a@whenweall')).toBeLessThan(ics.indexOf('UID:b@whenweall'))
     expect(ics.endsWith('END:VCALENDAR\r\n')).toBe(true)
   })
 

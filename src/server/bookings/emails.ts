@@ -166,7 +166,7 @@ function bookingIcs(
   appUrl: string,
 ): string {
   return buildIcs({
-    uid: `${bookingId}@samla`,
+    uid: `${bookingId}@whenweall`,
     title: page.title,
     description: page.description,
     location: page.location,

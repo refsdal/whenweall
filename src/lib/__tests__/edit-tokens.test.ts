@@ -17,7 +17,7 @@ describe('edit tokens', () => {
     saveEditToken('abcdefghijkl', 'pa_1', 'tok_1')
     saveEditToken('mnopqrstuvwx', 'pa_2', 'tok_2')
 
-    expect(window.localStorage.getItem('samla:edit:abcdefghijkl')).toBeTruthy()
+    expect(window.localStorage.getItem('whenweall:edit:abcdefghijkl')).toBeTruthy()
     expect(loadEditToken('mnopqrstuvwx')).toEqual({ participantId: 'pa_2', token: 'tok_2' })
   })
 
@@ -26,10 +26,13 @@ describe('edit tokens', () => {
   })
 
   it('returns null for unreadable or malformed entries', () => {
-    window.localStorage.setItem('samla:edit:abcdefghijkl', 'not json')
+    window.localStorage.setItem('whenweall:edit:abcdefghijkl', 'not json')
     expect(loadEditToken('abcdefghijkl')).toBeNull()
 
-    window.localStorage.setItem('samla:edit:abcdefghijkl', JSON.stringify({ participantId: 'x' }))
+    window.localStorage.setItem(
+      'whenweall:edit:abcdefghijkl',
+      JSON.stringify({ participantId: 'x' }),
+    )
     expect(loadEditToken('abcdefghijkl')).toBeNull()
   })
 

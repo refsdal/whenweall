@@ -10,7 +10,7 @@ import {
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 
-export const TZ_STORAGE_KEY = 'samla:tz'
+export const TZ_STORAGE_KEY = 'whenweall:tz'
 
 /** The visitor's own zone, or null when the browser won't say. */
 export function browserTimeZone(): string | null {

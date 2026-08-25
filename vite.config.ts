@@ -15,7 +15,7 @@ const config = defineConfig({
       project: './project.inlang',
       outdir: './src/paraglide',
       strategy: ['cookie', 'preferredLanguage', 'baseLocale'],
-      cookieName: 'samla_locale',
+      cookieName: 'whenweall_locale',
     }),
     devtools(),
     cloudflare({ viteEnvironment: { name: 'ssr' } }),

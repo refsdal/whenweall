@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an idea for samla
+description: Suggest an idea for whenweall
 labels: [enhancement]
 body:
   - type: textarea

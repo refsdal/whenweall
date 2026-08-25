@@ -42,7 +42,7 @@ export async function bookingIcsResponse(request: Request, bookingId: string): P
   }
 
   const ics = buildIcs({
-    uid: `${bookingId}@samla`,
+    uid: `${bookingId}@whenweall`,
     title: view.page.title,
     description: null,
     location: view.page.location,
@@ -53,7 +53,7 @@ export async function bookingIcsResponse(request: Request, bookingId: string): P
   return new Response(ics, {
     headers: {
       'Content-Type': 'text/calendar; charset=utf-8',
-      'Content-Disposition': `attachment; filename="samla-booking-${bookingId}.ics"`,
+      'Content-Disposition': `attachment; filename="whenweall-booking-${bookingId}.ics"`,
     },
   })
 }

@@ -10,7 +10,7 @@ test('switching locale updates the page and persists across a reload', async ({ 
   const switcher = page.getByRole('navigation').getByRole('group', { name: 'Language' })
   await switcher.getByRole('button', { name: 'NO' }).click()
 
-  // `setLocale` sets the `samla_locale` cookie and reloads the page.
+  // `setLocale` sets the `whenweall_locale` cookie and reloads the page.
   await expect(page.locator('html')).toHaveAttribute('lang', 'nb', { timeout: 10_000 })
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(
     'Finn et tidspunkt som passer for alle.',

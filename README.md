@@ -2,7 +2,7 @@
 
 <img src="./public/logo.svg" alt="" width="72" height="72">
 
-# samla
+# whenweall
 
 **Find a time everyone can make.**
 
@@ -19,7 +19,7 @@ vote, pick the winner. Built to run natively on Cloudflare Workers.
 
 ---
 
-samla is a Doodle/Rallly-style scheduling poll that fits in a single Cloudflare Worker.
+whenweall is a Doodle/Rallly-style scheduling poll that fits in a single Cloudflare Worker.
 An organiser signs in, picks a handful of dates (or writes a plain list of options) and
 shares a link. Anyone with the link votes **yes / if need be / no** — no account, no app,
 no e-mail address required. Votes, comments and viewer presence stream to everyone
@@ -141,7 +141,7 @@ flowchart LR
     W["Worker — TanStack Start<br/>SSR · server functions · /api/*"]
     R["PollRoom<br/>Durable Object, hibernating"]
     K["BookingRoom<br/>Durable Object, hibernating"]
-    D[("D1 · samla-db<br/>Drizzle ORM")]
+    D[("D1 · whenweall-db<br/>Drizzle ORM")]
     E["Email Service<br/>send_email binding"]
     T["Turnstile"]
   end
@@ -209,8 +209,8 @@ You need [bun](https://bun.sh/) 1.4+ (see [`.bun-version`](./.bun-version)). No 
 installation is required.
 
 ```bash
-git clone https://github.com/andersro93/scheduler.git samla
-cd samla
+git clone https://github.com/andersro93/scheduler.git whenweall
+cd whenweall
 
 bun install                     # also compiles the Paraglide messages
 cp .dev.vars.example .dev.vars  # local secrets — the defaults are Turnstile test keys
@@ -235,14 +235,14 @@ commit `.dev.vars` — it is git-ignored.
 | ---------------------- | ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `APP_URL`              | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.                           |
 | `APP_ENV`              | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.                          |
-| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `samla <no-reply@example.com>`.                                     |
+| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `whenweall <no-reply@example.com>`.                                 |
 | `TURNSTILE_SITE_KEY`   | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                                            |
 | `BETTER_AUTH_SECRET`   | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                                                |
 | `TURNSTILE_SECRET_KEY` | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                                           |
 | `GOOGLE_CLIENT_ID`     | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                                      |
 | `GOOGLE_CLIENT_SECRET` | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                                               |
 | `ENABLE_TEST_ROUTES`   | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`.                   |
-| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`samla-db`). Holds every durable row.                                                    |
+| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`whenweall-db`). Holds every durable row.                                                |
 | `POLL_ROOM`            | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                                     |
 | `BOOKING_ROOM`         | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `BookingRoom` class: sockets, book/cancel/reschedule serialisation, reminder alarms.                  |
 | `EMAIL`                | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.                      |
@@ -278,7 +278,7 @@ bunx wrangler login
 **1. Create the D1 database.**
 
 ```bash
-bunx wrangler d1 create samla-db
+bunx wrangler d1 create whenweall-db
 ```
 
 Copy the printed `database_id` into `wrangler.jsonc` (it ships with an all-zero placeholder
@@ -308,12 +308,12 @@ domain and copy the two keys: the **site key** goes into `TURNSTILE_SITE_KEY` in
 [test keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) — fine
 for local development and CI, useless in production.
 
-**5. Email Service.** samla sends through the
+**5. Email Service.** whenweall sends through the
 [`send_email` binding](https://developers.cloudflare.com/email-routing/email-workers/send-email-workers/)
 (`{ "name": "EMAIL" }`, already in `wrangler.jsonc`). Add the sending domain to Cloudflare
 and verify it — the dashboard walks you through the DKIM/SPF records. Until a verified
 sender exists, `EMAIL_FROM` will be rejected at send time; with no `EMAIL` binding at all,
-samla falls back to logging each message to the Worker console, which is exactly what
+whenweall falls back to logging each message to the Worker console, which is exactly what
 local development uses.
 
 **6. Google OAuth** (optional). Create an OAuth client in the Google Cloud console and add
@@ -349,7 +349,7 @@ guard step that fails the job if `wrangler.jsonc` still has its local-developmen
 You can always rehearse a deploy without touching your account:
 
 ```bash
-bunx wrangler deploy --dry-run --outdir /tmp/samla-dryrun
+bunx wrangler deploy --dry-run --outdir /tmp/whenweall-dryrun
 ```
 
 ## Scripts
@@ -478,7 +478,7 @@ docs/screenshots/         README images (see `bun run screenshots`)
 Strings live in [`messages/en.json`](./messages/en.json) and
 [`messages/nb.json`](./messages/nb.json) and are compiled by
 [Paraglide](https://inlang.com/m/gerre34r/library-inlang-paraglideJs) into tree-shakeable
-functions (`m.poll_share_title()`). The active locale resolves from the `samla_locale`
+functions (`m.poll_share_title()`). The active locale resolves from the `whenweall_locale`
 cookie, then `Accept-Language`, then English, and is applied on the server too — so SSR
 output and outgoing e-mails are localised, not just the client. A unit test fails the build
 if the two catalogues drift apart in keys or placeholders.

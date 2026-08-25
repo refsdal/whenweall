@@ -5,7 +5,7 @@ import { Slot } from 'radix-ui'
 import { cn } from '#/lib/utils'
 
 /**
- * samla buttons are pills. The filled variant uses `--primary-strong` rather than the raw
+ * whenweall buttons are pills. The filled variant uses `--primary-strong` rather than the raw
  * brand `--primary` so white label text clears 4.5:1; hover lifts the button and lights an
  * ember glow underneath instead of shifting the fill.
  */

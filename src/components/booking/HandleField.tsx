@@ -8,17 +8,17 @@ import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 import { LIMITS, handleSchema } from '#/server/bookings/schemas'
 
-/** `https://samla.app` → `samla.app/book/` — the bit that is fixed, whatever the deployment. */
+/** `https://whenweall.com` → `whenweall.com/book/` — the bit that is fixed, whatever the deployment. */
 export function bookingPrefix(appUrl: string): string {
   try {
     return `${new URL(appUrl).host}/book/`
   } catch {
-    return 'samla.app/book/'
+    return 'whenweall.com/book/'
   }
 }
 
 /**
- * The organiser's public handle: the `samla.app/book/<handle>` half of every booking link. Kept
+ * The organiser's public handle: the `whenweall.com/book/<handle>` half of every booking link. Kept
  * free of server imports so it can be unit-tested; the settings route hands it the `setHandle`
  * server function as `onSave`.
  */

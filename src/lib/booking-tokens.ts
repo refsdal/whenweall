@@ -11,7 +11,7 @@ import { useSyncExternalStore } from 'react'
  */
 
 function storageKey(bookingId: string): string {
-  return `samla:booking:${bookingId}`
+  return `whenweall:booking:${bookingId}`
 }
 
 function storage(): Storage | null {
