@@ -99,7 +99,7 @@ describe('GET /booking/$id/calendar.ics', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toContain('text/calendar')
     expect(res.headers.get('Content-Disposition')).toBe(
-      `attachment; filename="samla-booking-${bookingId}.ics"`,
+      `attachment; filename="whenweall-booking-${bookingId}.ics"`,
     )
     expect(await res.text()).toContain('BEGIN:VCALENDAR')
   })

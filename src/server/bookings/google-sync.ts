@@ -90,7 +90,7 @@ export async function syncGoogleEventDelete(
 /**
  * Google Calendar delete-then-recreate for a reschedule, sequenced so a booking never ends up
  * pointing at a *new* Google event while the *old* one is still sitting on the organiser's
- * calendar under a `googleEventId` samla no longer knows about. Deletes `previousGoogleEventId`
+ * calendar under a `googleEventId` whenweall no longer knows about. Deletes `previousGoogleEventId`
  * (if any) via `syncGoogleEventDelete` and only creates the new event when that delete actually
  * succeeded — a failed delete leaves the booking's `googleEventId` pointed at the (still real,
  * still on the calendar) old event rather than overwriting it with an orphaned one, and relies on

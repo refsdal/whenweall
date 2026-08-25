@@ -17,7 +17,7 @@ export function intlLocale(locale: string): string {
  * Reads the locale for the current request. Must be called within the
  * `paraglideMiddleware` async context on the server (e.g. during SSR or a
  * server function), or on the client where Paraglide resolves it from the
- * `samla_locale` cookie / document.
+ * `whenweall_locale` cookie / document.
  */
 export function localeFromRequest(): AppLocale {
   return getLocale()

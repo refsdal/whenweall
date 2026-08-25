@@ -4,7 +4,7 @@ import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 
 /**
- * The samla mark: three option columns with the winning one filled in ember coral —
+ * The whenweall mark: three option columns with the winning one filled in ember coral —
  * the same shape language as the vote grid.
  */
 export function LogoMark({ className }: { className?: string }) {

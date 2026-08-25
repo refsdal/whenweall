@@ -6,7 +6,7 @@ import { ShareSheet } from '#/components/poll/ShareSheet'
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
 
-const URL_UNDER_TEST = 'https://samla.app/p/abcdefghijkl'
+const URL_UNDER_TEST = 'https://whenweall.com/p/abcdefghijkl'
 
 afterEach(() => {
   cleanup()

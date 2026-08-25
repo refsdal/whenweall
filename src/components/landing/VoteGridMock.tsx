@@ -129,7 +129,7 @@ function Row({ person, row }: { person: (typeof PEOPLE)[number]; row: number }) 
           >
             <Icon
               data-mock-mark
-              className="size-4 animate-[samla-cell-mark_9s_ease-in-out_infinite]"
+              className="size-4 animate-[whenweall-cell-mark_9s_ease-in-out_infinite]"
               style={{ animationDelay: delay }}
             />
           </div>

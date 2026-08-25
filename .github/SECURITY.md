@@ -13,7 +13,7 @@ Report privately using one of these channels:
 
 1. GitHub's [private vulnerability reporting](https://github.com/andersro93/scheduler/security/advisories/new)
    ("Report a vulnerability" under the Security tab) — preferred.
-2. Email `security@samla.app`.
+2. Email `security@whenweall.com`.
 
 We aim to acknowledge new reports within **72 hours** and will work with you
 on a fix and disclosure timeline.

@@ -9,7 +9,7 @@ import { LIMITS } from '#/server/polls/schemas'
 import type { PollType } from '#/server/db/schema'
 import type { CreatorAction, CreatorDraft } from '#/components/creator/creator-state'
 
-/** The zones most samla organisers live in; the browser's own zone is added when it's missing. */
+/** The zones most whenweall organisers live in; the browser's own zone is added when it's missing. */
 const COMMON_TIMEZONES = [
   'Europe/Oslo',
   'Europe/London',

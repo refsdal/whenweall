@@ -20,7 +20,7 @@ export function LocaleSwitcher({ className }: { className?: string }) {
       void authClient.updateUser({ locale })
     }
 
-    // Sets the `samla_locale` cookie and reloads the page by default.
+    // Sets the `whenweall_locale` cookie and reloads the page by default.
     setLocale(locale)
   }
 

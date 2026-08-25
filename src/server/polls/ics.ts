@@ -39,7 +39,7 @@ export async function buildPollIcs(db: Db, pollId: string): Promise<string | nul
   if (!start) return null
 
   return buildIcs({
-    uid: `${poll.id}@samla`,
+    uid: `${poll.id}@whenweall`,
     title: poll.title,
     description: poll.description,
     location: poll.location,

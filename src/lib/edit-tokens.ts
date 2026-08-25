@@ -13,7 +13,7 @@ import { useSyncExternalStore } from 'react'
 export type EditToken = { participantId: string; token: string }
 
 function storageKey(pollId: string): string {
-  return `samla:edit:${pollId}`
+  return `whenweall:edit:${pollId}`
 }
 
 function storage(): Storage | null {

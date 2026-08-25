@@ -102,7 +102,7 @@ export function buildIcs(e: IcsEvent & { now?: Date }): string {
   const lines: string[] = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//samla//EN',
+    'PRODID:-//whenweall//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     ...buildVevent(e, now),
@@ -122,7 +122,7 @@ export function buildIcsMulti(events: IcsEvent[], opts: { now?: Date } = {}): st
   const lines: string[] = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//samla//EN',
+    'PRODID:-//whenweall//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     ...events.flatMap((e) => buildVevent(e, now)),

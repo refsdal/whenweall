@@ -1,11 +1,11 @@
 {
-  "name": "samla-test",
+  "name": "whenweall-test",
   "main": "./worker.ts",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_URL": "http://localhost:3000",
     "APP_ENV": "test",
-    "EMAIL_FROM": "samla <no-reply@samla.test>",
+    "EMAIL_FROM": "whenweall <no-reply@whenweall.test>",
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA",
     "BETTER_AUTH_SECRET": "test-secret-test-secret-test-secret-1234",
@@ -13,7 +13,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "samla-db",
+      "database_name": "whenweall-db",
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "../drizzle",
     },

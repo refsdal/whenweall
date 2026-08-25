@@ -38,7 +38,7 @@ export async function rosterResponse(request: Request, id: string): Promise<Resp
   return new Response(csv, {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="samla-${id}-roster.csv"`,
+      'Content-Disposition': `attachment; filename="whenweall-${id}-roster.csv"`,
     },
   })
 }

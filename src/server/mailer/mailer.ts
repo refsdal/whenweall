@@ -1,5 +1,5 @@
 /**
- * Parses `EMAIL_FROM` (e.g. `"samla <no-reply@samla.app>"`) into the `{ name, email }` shape
+ * Parses `EMAIL_FROM` (e.g. `"whenweall <no-reply@whenweall.com>"`) into the `{ name, email }` shape
  * `SendEmail.send()` expects, so the display name Cloudflare's Email Service shows a recipient
  * actually reflects `wrangler.jsonc`'s configured sender name instead of being ignored. Falls
  * back to the raw string when it isn't a `Name <addr>` pair (e.g. a bare address).

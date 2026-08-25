@@ -17,7 +17,7 @@ describe('booking tokens', () => {
     saveBookingToken('abcdefghijkl', 'tok_1')
     saveBookingToken('mnopqrstuvwx', 'tok_2')
 
-    expect(window.localStorage.getItem('samla:booking:abcdefghijkl')).toBe('tok_1')
+    expect(window.localStorage.getItem('whenweall:booking:abcdefghijkl')).toBe('tok_1')
     expect(loadBookingToken('mnopqrstuvwx')).toBe('tok_2')
   })
 

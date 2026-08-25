@@ -65,7 +65,7 @@ export async function sendClaimConfirmation(
       const start = icsStartFromOption(option)
       if (!start) continue
       icsEvents.push({
-        uid: `${poll.id}-${option.id}@samla`,
+        uid: `${poll.id}-${option.id}@whenweall`,
         title: poll.title,
         description: poll.description,
         location: poll.location,

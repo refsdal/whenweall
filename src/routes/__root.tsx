@@ -96,7 +96,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
   // `shellComponent` renders outside the matched route tree, so it has no access to
   // `Route.useRouteContext()`. Paraglide's `getLocale()` resolves correctly here in both
   // environments: on the server from the `paraglideMiddleware` async context, on the client
-  // from the `samla_locale` cookie / document.
+  // from the `whenweall_locale` cookie / document.
   const locale = getLocale()
 
   return (
