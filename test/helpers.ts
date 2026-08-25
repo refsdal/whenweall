@@ -1,6 +1,8 @@
 import type { Db } from '#/server/db/client'
 import {
   bookings,
+  member,
+  organization,
   participants,
   user,
   votes,
@@ -38,6 +40,27 @@ export async function makeUser(
     updatedAt: now,
   })
   return { id, email }
+}
+
+export async function makeOrg(
+  db: Db,
+  ownerUserId: string,
+  overrides?: Partial<{ name: string; slug: string; role: 'owner' | 'admin' | 'member' }>,
+): Promise<{ id: string; slug: string }> {
+  const id = `org_${newId()}`
+  const slug = overrides?.slug ?? `org-${unique()}`
+  const now = new Date()
+  await db
+    .insert(organization)
+    .values({ id, name: overrides?.name ?? 'Test Org', slug, createdAt: now })
+  await db.insert(member).values({
+    id: `mem_${newId()}`,
+    organizationId: id,
+    userId: ownerUserId,
+    role: overrides?.role ?? 'owner',
+    createdAt: now,
+  })
+  return { id, slug }
 }
 
 export async function makePoll(
