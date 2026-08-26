@@ -653,5 +653,9 @@
   "booking_manage_locked_title": "Åpne bookinglenken din",
   "booking_manage_locked_body": "Bruk lenken fra bekreftelses-e-posten — den slutter på ?t=… og viser at bookingen er din.",
   "booking_manage_not_found_title": "Ingen booking her",
-  "booking_manage_not_found_body": "Lenken kan ha blitt endret, eller bookingen er fjernet."
+  "booking_manage_not_found_body": "Lenken kan ha blitt endret, eller bookingen er fjernet.",
+  "org_invite_accept_title": "Bli med i organisasjonen",
+  "org_invite_accept_body": "Godtar invitasjonen din …",
+  "org_invite_accept_cta": "Gå til dashbordet",
+  "org_invite_invalid": "Denne invitasjonen er ugyldig eller har utløpt."
 }

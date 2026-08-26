@@ -4,17 +4,18 @@ import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
 import { stripe } from '@better-auth/stripe'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { env as workerEnv } from 'cloudflare:workers'
-import { createDb } from '#/server/db/client'
+import { createDb, type Db } from '#/server/db/client'
 import * as schema from '#/server/db/schema'
-import { member } from '#/server/db/schema'
+import { invitation as invitationTable, member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
 import { sendMail } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
 import { authorizeSubscriptionReference, createStripeClient } from '#/server/billing/stripe'
+import { getEntitlements } from '#/server/billing/entitlements'
 
 /** Shared by `beforeCreateOrganization`/`beforeUpdateOrganization`: any slug the caller supplies
  * (direct API calls included — this is what actually stops `POST /api/auth/organization/create|
@@ -27,6 +28,31 @@ function assertValidOrgSlug(slug: string | undefined): void {
     throw new APIError('BAD_REQUEST', {
       message: result.error.issues[0]?.message ?? 'Invalid organization slug',
     })
+  }
+}
+
+/** Spec §3 seat gate, shared by `beforeCreateInvitation` below: Free orgs can't invite at all
+ * (`UPGRADE_REQUIRED` points the UI at an upgrade CTA); Premium orgs may invite until current
+ * members + pending invitations reach `maxSeats` (`SEAT_LIMIT_REACHED`). Runs inside the hook so
+ * the raw `POST /api/auth/organization/invite-member` endpoint stays gated, not just the UI. */
+async function assertSeatAvailable(db: Db, organizationId: string) {
+  const entitlements = await getEntitlements(db, organizationId)
+  if (entitlements.plan === 'free') {
+    throw new APIError('FORBIDDEN', { message: 'UPGRADE_REQUIRED' })
+  }
+
+  const [members, pendingInvitations] = await Promise.all([
+    db.query.member.findMany({ where: eq(member.organizationId, organizationId) }),
+    db.query.invitation.findMany({
+      where: and(
+        eq(invitationTable.organizationId, organizationId),
+        eq(invitationTable.status, 'pending'),
+      ),
+    }),
+  ])
+  const seatsUsed = members.length + pendingInvitations.length
+  if (seatsUsed >= entitlements.maxSeats) {
+    throw new APIError('FORBIDDEN', { message: 'SEAT_LIMIT_REACHED' })
   }
 }
 
@@ -128,13 +154,11 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
           beforeUpdateOrganization: async ({ organization: org }) => {
             assertValidOrgSlug(org.slug)
           },
-          // Phase 1 has no seat model and no `/accept-invitation` route yet — every (Free) org
-          // can't invite anyway, so block it here rather than ship a dead-end invite flow.
-          // `sendInvitationEmail`/`renderOrgInvite` stay wired below for Phase 2/3.
-          beforeCreateInvitation: async () => {
-            throw new APIError('FORBIDDEN', {
-              message: 'Invitations are not available yet',
-            })
+          // Phase 2 §3: Free orgs can't invite (UPGRADE_REQUIRED); Premium orgs can invite until
+          // members + pending invitations reach `getEntitlements(...).maxSeats`
+          // (SEAT_LIMIT_REACHED). See `assertSeatAvailable` above.
+          beforeCreateInvitation: async ({ invitation }) => {
+            await assertSeatAvailable(createDb(d1), invitation.organizationId)
           },
         },
         sendInvitationEmail: async ({ email, organization: org, inviter, id }) => {

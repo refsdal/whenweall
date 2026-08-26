@@ -32,9 +32,10 @@ export function createAuth(d1: D1Database) {
               throw new APIError('BAD_REQUEST', { message: 'Invalid organization slug' })
             }
           },
-          beforeCreateInvitation: async () => {
-            throw new APIError('FORBIDDEN', { message: 'Invitations are not available yet' })
-          },
+          // Mirrors the runtime seat gate (auth.ts's `assertSeatAvailable`) for generator parity;
+          // no-op here since this CLI config only exists to shape the generated schema and has no
+          // real D1 to query entitlements against.
+          beforeCreateInvitation: async () => {},
         },
         // No-op: this CLI config only exists to shape the generated schema.
         sendInvitationEmail: async () => {},
