@@ -29,28 +29,23 @@ test.describe('billing', () => {
     page,
     userPremium,
   }) => {
-    // TEMPORARY: diagnostic instrumentation for the CI-only invite failure (deterministic there,
-    // not reproducible locally against the real HTTP handler or a preview server). Remove once
-    // the real response/session shape is captured from a CI run.
-    console.log('[diag] seed response', JSON.stringify(userPremium))
-
     await signIn(page, userPremium)
 
-    const sessionResponse = await page.request.get('/api/auth/get-session')
-    console.log(
-      '[diag] get-session',
-      sessionResponse.status(),
-      await sessionResponse.text().catch((e) => `<unreadable: ${e}>`),
-    )
-
+    // Better-Auth's origin-check middleware requires an `Origin` header on any state-changing
+    // request that carries a session cookie (see `validateOrigin` in
+    // node_modules/better-auth/dist/api/middlewares/origin-check.mjs — it's a CSRF guard, so it
+    // only kicks in once a `cookie` header is present, which GETs like get-session never trip).
+    // A real browser always attaches `Origin` on a same-page `fetch()` POST, including
+    // same-origin ones. `page.request.post`, unlike an in-page `fetch()`, is a Node-side HTTP
+    // client that does not run through the browser's networking stack, so it does not add that
+    // header on its own — without it, this call 403s with `MISSING_OR_NULL_ORIGIN` even though
+    // the session/entitlements are otherwise fine. Set it explicitly to match what the app's own
+    // client-side call (`authClient.organization.inviteMember(...)`, run from the page) actually
+    // sends.
     const inviteResponse = await page.request.post('/api/auth/organization/invite-member', {
+      headers: { origin: new URL(page.url()).origin },
       data: { email: `invitee-${Date.now()}@example.com`, role: 'member' },
     })
-    console.log(
-      '[diag] invite-member',
-      inviteResponse.status(),
-      await inviteResponse.text().catch((e) => `<unreadable: ${e}>`),
-    )
     expect(inviteResponse.ok()).toBe(true)
     const invitation = (await inviteResponse.json()) as { id: string }
     expect(invitation.id).toBeTruthy()
