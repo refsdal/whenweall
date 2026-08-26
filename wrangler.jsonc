@@ -48,6 +48,10 @@
         "APP_ENV": "production",
         "EMAIL_FROM": "whenweall test <no-reply@whenweall.com>",
         "TURNSTILE_SITE_KEY": "0x4AAAAAAEcpi42QywKz2sSm",
+        // TEST-mode Stripe prices (60 NOK/mo, 600 NOK/yr) - env vars are not inherited,
+        // so the test worker declares its own pair.
+        "STRIPE_PRICE_PREMIUM_MONTHLY": "price_1U8k6tDHpY37Lq0GWCCYcQnX",
+        "STRIPE_PRICE_PREMIUM_YEARLY": "price_1U8k6tDHpY37Lq0G6P3Q3Qkz",
       },
       "d1_databases": [
         {
