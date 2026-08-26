@@ -655,7 +655,7 @@
   "booking_manage_not_found_title": "No booking here",
   "booking_manage_not_found_body": "The link may have changed, or the booking was removed.",
   "org_invite_accept_title": "Join the organization",
-  "org_invite_accept_body": "Accepting your invitation…",
-  "org_invite_accept_cta": "Go to dashboard",
+  "org_invite_accept_body": "You've been invited to join. Accept to start scheduling together.",
+  "org_invite_accept_cta": "Accept invitation",
   "org_invite_invalid": "This invitation is invalid or has expired."
 }
