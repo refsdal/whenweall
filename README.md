@@ -111,7 +111,14 @@ that script.
 - **One Worker.** SSR, server functions, auth, the WebSocket endpoint and the `.ics` route
   are all the same deployment.
 - **D1 is the only source of truth.** Mutations write to D1 in a batch and _then_ poke the
-  Durable Object best-effort; a DO or e-mail failure never fails a user request.
+  Durable Object best-effort; a DO or e-mail failure never fails a user request. D1 has no
+  interactive transactions and caps bound parameters at ~100 per statement — multi-row inserts
+  that scale with user input go through `chunkedInsert` and are spread into the surrounding
+  `db.batch()` so they stay atomic. We stay on D1 deliberately; revisit Postgres (e.g.
+  Neon + Hyperdrive) only if one of these becomes real: money-adjacent writes needing
+  multi-statement interactive transactions, a database approaching D1's 10 GB cap, heavy
+  analytical queries, or cross-region read patterns beyond D1 read replication. The Drizzle
+  schema keeps that port mechanical; the workers-vitest D1 test setup is the expensive part.
 - **Hibernating WebSockets.** `PollRoom` and `BookingRoom` both use the hibernation API,
   so idle poll and booking pages cost nothing while staying connected.
 - **A pure availability engine.** `lib/availability.ts` turns weekly rules, overrides,
