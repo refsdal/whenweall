@@ -251,7 +251,7 @@ commit `.dev.vars` — it is git-ignored.
 | `STRIPE_WEBHOOK_SECRET`        | secret              | `.dev.vars` / `wrangler secret put`                 | Signing secret for the `/api/auth/stripe/webhook` endpoint. See [Billing](#billing).                      |
 | `STRIPE_PRICE_PREMIUM_MONTHLY` | var                 | `wrangler.jsonc`                                    | Stripe Price id for the Premium plan's monthly interval. See [Billing](#billing).                         |
 | `STRIPE_PRICE_PREMIUM_YEARLY`  | var                 | `wrangler.jsonc`                                    | Stripe Price id for the Premium plan's yearly interval. See [Billing](#billing).                          |
-| `DB`                           | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`whenweall-db`). Holds every durable row.                                                |
+| `DB`                           | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`whenweall`). Holds every durable row.                                                   |
 | `POLL_ROOM`                    | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                                     |
 | `BOOKING_ROOM`                 | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `BookingRoom` class: sockets, book/cancel/reschedule serialisation, reminder alarms.                  |
 | `EMAIL`                        | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.                      |
@@ -412,6 +412,13 @@ Subscribe each endpoint to these four events:
 - `customer.subscription.deleted`
 
 Copy the endpoint's **Signing secret** into `STRIPE_WEBHOOK_SECRET` for that mode (step 2).
+
+A subscription created manually in the Stripe dashboard (rather than through the app's own
+upgrade flow) resolves to a user reference, not an org one, and grants that org nothing — always
+go through `BillingSection`'s upgrade CTA (or `authClient.subscription.upgrade` with an explicit
+`referenceId`) instead. The webhook handler also swallows its own errors and still returns `200`
+to Stripe (so Stripe won't retry); consider wiring up a Stripe webhook-failure alert (dashboard
+notification or a log-based alert on the Worker) so a broken handler doesn't fail silently.
 
 **Note on API versions.** `createStripeClient` in
 [`src/server/billing/stripe.ts`](./src/server/billing/stripe.ts) deliberately omits
