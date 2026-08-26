@@ -143,6 +143,29 @@ describe('createPoll', () => {
     ])
   })
 
+  it('creates a poll with 20 datetime options without exceeding D1 bound-parameter limits', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const options = Array.from({ length: 20 }, (_, i) => ({
+      kind: 'datetime' as const,
+      startAt: tomorrowAt(String(i).padStart(2, '0')),
+    }))
+    const { id } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'datetime',
+        title: 'Big scheduling poll',
+        timezone: 'Europe/Oslo',
+        options,
+      },
+    )
+
+    const view = await getPollView(db, id, { userId: ownerId })
+    expect(view?.options).toHaveLength(20)
+    expect(view?.options.map((o) => o.startAt)).toEqual(options.map((o) => o.startAt))
+  })
+
   it('forces capacity to null and signupMaxClaims to 1 for a non-signup poll', async () => {
     const db = createDb(env.DB)
     const { userId: ownerId, orgId } = await makeUserWithOrg(db)
@@ -658,6 +681,30 @@ describe('duplicatePoll', () => {
       copy?.options.map((o) => ({ kind: o.kind, startAt: o.startAt, endAt: o.endAt })),
     ).toEqual(original?.options.map((o) => ({ kind: o.kind, startAt: o.startAt, endAt: o.endAt })))
     expect(copy?.options.map((o) => o.id)).not.toEqual(original?.options.map((o) => o.id))
+  })
+
+  it('duplicates a poll with 30 options without exceeding D1 bound-parameter limits', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'options',
+        title: 'Big options poll',
+        timezone: 'Europe/Oslo',
+        options: Array.from({ length: 30 }, (_, i) => ({
+          kind: 'text' as const,
+          label: `Option ${i}`,
+        })),
+      },
+    )
+
+    const { id: copyId } = await duplicatePoll(db, pollId, org, ownerId)
+
+    const copy = await getPollView(db, copyId, { userId: ownerId })
+    expect(copy?.options).toHaveLength(30)
   })
 })
 
