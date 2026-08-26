@@ -35,4 +35,38 @@
   "ratelimits": [
     { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
   ],
+  // Staging twin at test.whenweall.com: same code, separate worker + D1 + secrets (Stripe TEST
+  // keys live here). APP_ENV stays "production" on purpose - the URL is public, so seed/test
+  // routes must stay disabled and HSTS on. Bindings are not inherited by wrangler envs, so the
+  // block mirrors the top-level ones.
+  "env": {
+    "test": {
+      "name": "whenweall-test",
+      "routes": [{ "pattern": "test.whenweall.com", "custom_domain": true }],
+      "vars": {
+        "APP_URL": "https://test.whenweall.com",
+        "APP_ENV": "production",
+        "EMAIL_FROM": "whenweall test <no-reply@whenweall.com>",
+        "TURNSTILE_SITE_KEY": "0x4AAAAAAEcpi42QywKz2sSm",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "whenweall-test",
+          "database_id": "18b66eb8-9018-4e2e-a65a-a35b9671af2c",
+          "migrations_dir": "drizzle",
+        },
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "POLL_ROOM", "class_name": "PollRoom" },
+          { "name": "BOOKING_ROOM", "class_name": "BookingRoom" },
+        ],
+      },
+      "send_email": [{ "name": "EMAIL" }],
+      "ratelimits": [
+        { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
+      ],
+    },
+  },
 }

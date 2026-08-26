@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "bun run build && vite preview",
     "deploy": "bun run build && wrangler deploy",
+    "deploy:test": "CLOUDFLARE_ENV=test bun run build && wrangler deploy",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -23,6 +24,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply whenweall --local",
     "db:migrate:remote": "wrangler d1 migrations apply whenweall --remote",
+    "db:migrate:remote:test": "wrangler d1 migrations apply whenweall-test --remote --env test",
     "auth:generate": "auth generate --config src/server/auth/auth.cli.ts --output src/server/db/auth-schema.ts -y",
     "cf-typegen": "wrangler types",
     "generate-routes": "tsr generate"
