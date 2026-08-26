@@ -16,12 +16,19 @@ vi.mock('#/server/auth/client', () => ({
   },
 }))
 
-const FREE = { plan: 'free' as const, maxSeats: 1 as const, googleSync: false, branding: false }
+const FREE = {
+  plan: 'free' as const,
+  maxSeats: 1 as const,
+  googleSync: false,
+  branding: false,
+  push: false,
+}
 const PREMIUM = {
   plan: 'premium' as const,
   maxSeats: 10 as const,
   googleSync: true,
   branding: true,
+  push: true,
 }
 
 afterEach(() => {
