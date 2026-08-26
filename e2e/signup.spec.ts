@@ -81,7 +81,7 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   expect(csv).toContain('Guest A')
   expect(csv).toContain('Guest B')
 
-  // --- anonymous access to the same roster is forbidden ---
+  // --- anonymous access to the same roster is rejected (401: no session at all) ---
   const anonymousRoster = await request.get(`${pollPath}/roster.csv`)
-  expect(anonymousRoster.status()).toBe(403)
+  expect(anonymousRoster.status()).toBe(401)
 })
