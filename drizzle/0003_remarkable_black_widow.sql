@@ -55,17 +55,19 @@ FROM `polls` p
 WHERE p.`created_by` IS NOT NULL;--> statement-breakpoint
 --> Booking pages get NULL channels (inherit the user's defaults, whose booking events are all
 --> on) because organiser notices are unconditional today — defaults reproduce that exactly.
+--> `member_user_id` only, with no fallback to `created_by`: a page with no assigned member
+--> receives no organiser mail today, and the migration must not start sending it any.
 INSERT INTO `notification_subscriptions`
   (`scope_type`, `scope_id`, `user_id`, `source`, `channels`, `created_at`, `updated_at`)
 SELECT
   'booking_page',
   bp.`id`,
-  COALESCE(bp.`member_user_id`, bp.`created_by`),
+  bp.`member_user_id`,
   'creator',
   NULL,
   bp.`created_at`,
   bp.`updated_at`
 FROM `booking_pages` bp
-WHERE COALESCE(bp.`member_user_id`, bp.`created_by`) IS NOT NULL;--> statement-breakpoint
+WHERE bp.`member_user_id` IS NOT NULL;--> statement-breakpoint
 ALTER TABLE `polls` DROP COLUMN `notify_on_vote`;--> statement-breakpoint
 ALTER TABLE `polls` DROP COLUMN `notify_on_comment`;

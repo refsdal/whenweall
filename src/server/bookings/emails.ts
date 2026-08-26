@@ -10,6 +10,8 @@ import BookingRescheduledOrganiser from '../../../emails/BookingRescheduledOrgan
 import BookingSyncFailed from '../../../emails/BookingSyncFailed'
 import { buildIcs } from '#/lib/ics'
 import { asLocaleOptions } from '#/lib/i18n'
+import type { BookingNotificationEvent } from '#/lib/notifications'
+import { resolveRecipients } from '#/server/notifications/recipients'
 import { formatOptionLabel } from '#/lib/time'
 import * as m from '#/paraglide/messages'
 import type { Db } from '#/server/db/client'
@@ -177,6 +179,17 @@ function bookingIcs(
 
 export type SendBookingEmailsKind = 'confirmed' | 'cancelled' | 'reminder' | 'rescheduled'
 
+/** Maps a lifecycle send onto the notification event that decides who receives the organiser
+ * half. `reminder` has none — it predates the subsystem and stays governed by `page.reminders`. */
+const ORGANISER_EVENT: Record<SendBookingEmailsKind, BookingNotificationEvent | null> = {
+  confirmed: 'booking.created',
+  cancelled: 'booking.cancelled',
+  rescheduled: 'booking.rescheduled',
+  reminder: null,
+}
+
+type OrganiserRecipient = { email: string; name: string; locale: string }
+
 type MailAttachment = { filename: string; content: string; type: string }
 
 /**
@@ -236,6 +249,24 @@ export async function sendBookingEmails(
       ? await db.query.user.findFirst({ where: eq(user.id, page.memberUserId) })
       : null
 
+    // Who actually receives the organiser-side mail. For the three lifecycle events that is the
+    // notification subsystem's call — the page's subscribers, each filtered by their own grid —
+    // rather than `memberUserId` alone, so a teammate who follows the page hears about it too.
+    // The reminder has no notification event: it stays governed by the page's `reminders` flag
+    // and keeps going to the assigned member only.
+    const organiserEvent = ORGANISER_EVENT[kind]
+    const organisers: OrganiserRecipient[] = organiserEvent
+      ? (
+          await resolveRecipients(
+            db,
+            { type: 'booking_page', id: page.id, organizationId: page.organizationId },
+            organiserEvent,
+          )
+        ).email
+      : owner
+        ? [{ email: owner.email, name: owner.name, locale: owner.locale ?? 'en' }]
+        : []
+
     const visitorLocale = booking.visitorLocale ?? 'en'
     const organiserLocale = owner?.locale ?? 'en'
     // Falls back to the org's own name so the visitor's email still has *someone* to address
@@ -253,6 +284,12 @@ export async function sendBookingEmails(
       organiserLocale,
       page.timezone,
     )
+    // Each subscriber may read a different language, so the formatted time is per recipient now
+    // rather than one string computed from the assigned member's locale.
+    const whenFor = (r: OrganiserRecipient) =>
+      r.locale === organiserLocale
+        ? organiserWhen
+        : bookingWhen(booking.startAt, booking.endAt, r.locale, page.timezone)
     const manageUrl = `${env.APP_URL}/booking/${bookingId}${opts.manageToken ? `?t=${opts.manageToken}` : ''}`
     const dashboardUrl = `${env.APP_URL}/bookings/${page.id}`
     const publicPageUrl = `${env.APP_URL}/book/${org.slug}/${page.slug}`
@@ -277,19 +314,19 @@ export async function sendBookingEmails(
         attachments,
       )
 
-      if (owner) {
+      for (const organiser of organisers) {
         await deliver(
-          owner.email,
+          organiser.email,
           await renderBookingOrganiserNotice({
-            organiserName: owner.name,
+            organiserName: organiser.name,
             pageTitle: page.title,
             visitorName: booking.visitorName,
             visitorEmail: booking.visitorEmail,
             visitorNote: booking.visitorNote,
-            when: organiserWhen,
+            when: whenFor(organiser),
             location: page.location,
             viewUrl: dashboardUrl,
-            locale: organiserLocale,
+            locale: organiser.locale,
           }),
           attachments,
         )
@@ -322,25 +359,25 @@ export async function sendBookingEmails(
         attachments,
       )
 
-      if (owner) {
+      for (const organiser of organisers) {
         const previousOrganiserWhen = opts.previousStartAt
-          ? bookingWhen(opts.previousStartAt, null, organiserLocale, page.timezone)
-          : organiserWhen
+          ? bookingWhen(opts.previousStartAt, null, organiser.locale, page.timezone)
+          : whenFor(organiser)
 
         // The organiser gets its own "booking moved" template rather than the plain "new booking"
         // notice (`BookingOrganiserNotice`, reused for `confirmed`) — a reschedule is not a new
         // booking, and the organiser needs the previous time alongside the new one.
         await deliver(
-          owner.email,
+          organiser.email,
           await renderBookingRescheduledOrganiser({
-            organiserName: owner.name,
+            organiserName: organiser.name,
             pageTitle: page.title,
             visitorName: booking.visitorName,
             previousWhen: previousOrganiserWhen,
-            when: organiserWhen,
+            when: whenFor(organiser),
             location: page.location,
             viewUrl: dashboardUrl,
-            locale: organiserLocale,
+            locale: organiser.locale,
           }),
           attachments,
         )
@@ -364,17 +401,17 @@ export async function sendBookingEmails(
         }),
       )
 
-      if (owner) {
+      for (const organiser of organisers) {
         await deliver(
-          owner.email,
+          organiser.email,
           await renderBookingCancelled({
-            recipientName: owner.name,
+            recipientName: organiser.name,
             pageTitle: page.title,
-            when: organiserWhen,
+            when: whenFor(organiser),
             cancelledBy: cancelledBy === 'organiser' ? 'you' : 'visitor',
             visitorName: booking.visitorName,
             viewUrl: dashboardUrl,
-            locale: organiserLocale,
+            locale: organiser.locale,
           }),
         )
       }
@@ -395,16 +432,16 @@ export async function sendBookingEmails(
       }),
     )
 
-    if (owner) {
+    for (const organiser of organisers) {
       await deliver(
-        owner.email,
+        organiser.email,
         await renderBookingReminder({
-          recipientName: owner.name,
+          recipientName: organiser.name,
           pageTitle: page.title,
-          when: organiserWhen,
+          when: whenFor(organiser),
           location: page.location,
           viewUrl: dashboardUrl,
-          locale: organiserLocale,
+          locale: organiser.locale,
         }),
       )
     }

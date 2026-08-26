@@ -2,12 +2,12 @@ import { DurableObject } from 'cloudflare:workers'
 import { eq } from 'drizzle-orm'
 import type { DigestEvent } from '#/lib/notifications'
 import { createDb } from '#/server/db/client'
-import { polls } from '#/server/db/schema'
+import { pollOptions, polls } from '#/server/db/schema'
 import { sendMail } from '#/server/mailer/mailer'
 import { renderDigest, type DigestLine } from '#/server/mailer/templates'
 import { emitPollEvent } from '#/server/notifications/emit'
 import { resolveRecipients, type Recipient } from '#/server/notifications/recipients'
-import { applyClaim, removeClaim, type ClaimIdentity } from '#/server/polls/claims'
+import { applyClaim, countClaims, removeClaim, type ClaimIdentity } from '#/server/polls/claims'
 import { closeExpiredPoll } from '#/server/polls/service'
 import type { DigestItem, PollEvent } from './protocol'
 
@@ -24,6 +24,7 @@ const DIGEST_SENT_KEY = 'digest:sent'
 const DEADLINE_AT_KEY = 'deadline:at'
 const REMIND_AT_KEY = 'remind:at'
 const RETRY_COUNT_KEY = 'retry:count'
+const SIGNUP_FULL_KEY = 'signup:full'
 
 /** Collapses a recipient's queued items into one summarised row per event, preserving the order
  * the events first appeared so the mail reads chronologically. Names are deduped — the same
@@ -141,9 +142,42 @@ export class PollRoom extends DurableObject<Env> {
       const result = await applyClaim(db, pollId, optionId, identity)
       // A re-claim of a slot the participant already holds is a no-op (`changed: false`) — nothing
       // for anyone else to see, so skip the broadcast rather than fan out a phantom update.
-      if (result.changed) this.#send({ type: 'poll.changed', entity: 'vote' })
+      if (result.changed) {
+        this.#send({ type: 'poll.changed', entity: 'vote' })
+        // Inside `#serialize`, so the capacity read is atomic with the claim that may have just
+        // filled the sheet — outside it, two concurrent claims could both miss the transition or
+        // both announce it.
+        await this.#emitIfSheetFilled(db, pollId)
+      }
       return result
     })
+  }
+
+  /**
+   * Fires `signup.full` on the transition to "every slot taken". Options with no capacity are
+   * unlimited, so a sheet containing one can never be full.
+   */
+  async #emitIfSheetFilled(db: ReturnType<typeof createDb>, pollId: string): Promise<void> {
+    try {
+      const options = await db.query.pollOptions.findMany({
+        where: eq(pollOptions.pollId, pollId),
+      })
+      if (options.length === 0) return
+      if (options.some((option) => option.capacity === null)) return
+
+      const counts = await countClaims(db, pollId)
+      const full = options.every((option) => (counts[option.id] ?? 0) >= option.capacity!)
+      if (!full) return
+
+      // Storage-flagged so a later claim/unclaim cycle on an already-full sheet does not
+      // re-announce it every time someone re-takes the last slot.
+      if (await this.ctx.storage.get<boolean>(SIGNUP_FULL_KEY)) return
+      await this.ctx.storage.put(SIGNUP_FULL_KEY, true)
+
+      await emitPollEvent(pollId, 'signup.full', { actorUserId: null }, { mailer: this.mailer })
+    } catch (err) {
+      console.error('[PollRoom] signup.full check failed', err)
+    }
   }
 
   unclaim(
@@ -157,6 +191,8 @@ export class PollRoom extends DurableObject<Env> {
       const db = createDb(this.env.DB)
       const result = await removeClaim(db, pollId, optionId, participantId, opts)
       this.#send({ type: 'poll.changed', entity: 'vote' })
+      // Freeing a slot re-arms the announcement, so filling the sheet again is news again.
+      await this.ctx.storage.delete(SIGNUP_FULL_KEY)
       return result
     })
   }
