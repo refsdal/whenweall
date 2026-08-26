@@ -11,7 +11,7 @@ import { member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
 import { sendMail } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
-import { createPersonalOrganization } from './personal-org'
+import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
 
 type AuthEnv = Pick<
   Env,
@@ -71,6 +71,13 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
               createDb(d1),
               u as { id: string; name: string; email: string },
             )
+          },
+        },
+        delete: {
+          before: async (u) => {
+            // Runs before the user row (and its `member` rows, via their own cascading FK) is
+            // actually deleted — see `deleteOrphanedOwnerOrganizations`'s own doc comment.
+            await deleteOrphanedOwnerOrganizations(createDb(d1), (u as { id: string }).id)
           },
         },
       },
