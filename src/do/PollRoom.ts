@@ -249,7 +249,10 @@ export class PollRoom extends DurableObject<Env> {
           where: eq(polls.id, pollId),
           with: { owner: true },
         })
-        if (poll) {
+        // `owner` (poll.createdBy) is nullable — set to null if the creator's account was
+        // deleted. There's no fallback recipient (e.g. mailing every org admin) in scope here;
+        // the notification is simply skipped, same as any other best-effort mail failure.
+        if (poll?.owner) {
           const rendered = await renderClosed({
             pollTitle: poll.title,
             pollUrl: `${this.env.APP_URL}/p/${pollId}`,
@@ -280,7 +283,9 @@ export class PollRoom extends DurableObject<Env> {
       ? items.filter((item) => (item.kind === 'vote' ? poll.notifyOnVote : poll.notifyOnComment))
       : []
 
-    if (!poll || poll.deletedAt || filtered.length === 0) {
+    // `owner` (poll.createdBy) is nullable — same graceful skip as `#processDeadline` above when
+    // the creator's account is gone.
+    if (!poll || poll.deletedAt || filtered.length === 0 || !poll.owner) {
       await this.#clearDigest()
       return
     }

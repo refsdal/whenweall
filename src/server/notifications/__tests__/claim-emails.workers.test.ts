@@ -5,7 +5,7 @@ import type { MailMessage } from '#/server/mailer/mailer'
 import { applyClaim } from '#/server/polls/claims'
 import { createPoll, getPollView } from '#/server/polls/service'
 import { sendClaimConfirmation } from '#/server/notifications/claim-emails'
-import { makeSignupPoll, makeUser } from '../../../../test/helpers'
+import { makeSignupPoll, makeUserWithOrg } from '../../../../test/helpers'
 
 function recordingMailer(sentMessages: MailMessage[], result = true) {
   return async (_env: unknown, msg: MailMessage): Promise<boolean> => {
@@ -17,17 +17,21 @@ function recordingMailer(sentMessages: MailMessage[], result = true) {
 describe('sendClaimConfirmation', () => {
   it('sends a confirmation listing all claimed slots with an ics attachment for date/datetime slots only', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await createPoll(db, ownerId, {
-      type: 'signup',
-      title: 'Bake sale',
-      timezone: 'Europe/Oslo',
-      options: [
-        { kind: 'datetime', startAt: '2026-09-01T10:00:00.000Z', capacity: null },
-        { kind: 'text', label: 'Bring cookies', capacity: null },
-      ],
-      signupMaxClaims: 2,
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'signup',
+        title: 'Bake sale',
+        timezone: 'Europe/Oslo',
+        options: [
+          { kind: 'datetime', startAt: '2026-09-01T10:00:00.000Z', capacity: null },
+          { kind: 'text', label: 'Bring cookies', capacity: null },
+        ],
+        signupMaxClaims: 2,
+      },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const [slotA, slotB] = view!.options
 
@@ -60,8 +64,12 @@ describe('sendClaimConfirmation', () => {
 
   it('skips silently when the participant has no email', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const claim = await applyClaim(db, pollId, view!.options[0]!.id, {
       name: 'Alice',
@@ -81,8 +89,12 @@ describe('sendClaimConfirmation', () => {
 
   it('returns false without throwing when the participant has no claims', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
 
     await expect(
       sendClaimConfirmation(env, { db, pollId, participantId: 'pa_missing' }),

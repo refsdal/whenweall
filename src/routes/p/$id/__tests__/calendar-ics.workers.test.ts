@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { finalizePoll, getPollView } from '#/server/polls/service'
-import { makePoll, makeUser } from '../../../../../test/helpers'
+import { makePoll, makeUserWithOrg } from '../../../../../test/helpers'
 import { Route } from '../calendar[.]ics'
 
 // `createFileRoute(...)` exposes the raw handler at `Route.options.server.handlers.GET`, so it
@@ -32,10 +32,11 @@ describe('GET /p/$id/calendar.ics', () => {
 
   it('returns the ics calendar for a finalized poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId, { title: 'Team sync' })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { title: 'Team sync' })
     const view = await getPollView(db, pollId, { userId: ownerId })
-    await finalizePoll(db, pollId, ownerId, view!.options[0]!.id)
+    await finalizePoll(db, pollId, org, ownerId, view!.options[0]!.id)
 
     const res = await GET({ params: { id: pollId } })
     expect(res.status).toBe(200)

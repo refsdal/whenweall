@@ -3,7 +3,8 @@ import { notFound } from '@tanstack/react-router'
 import { env } from 'cloudflare:workers'
 import * as z from 'zod'
 import { getDb } from '#/server/db/client'
-import { requireSessionMiddleware, sessionMiddleware } from '#/server/auth/middleware'
+import { sessionMiddleware } from '#/server/auth/middleware'
+import { requireOrgMiddleware } from '#/server/auth/org'
 import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { notifyChanged, syncDeadline } from '#/server/notifications/do-client'
 import { sendFinalizedEmails } from '#/server/notifications/finalize-emails'
@@ -23,22 +24,19 @@ import {
  * manifest can never drift from what a function actually runs.
  */
 const SESSION_ONLY = [sessionMiddleware] as const
-const REQUIRE_SESSION = [requireSessionMiddleware] as const
-const REQUIRE_SESSION_AND_CREATE_LIMIT = [
-  requireSessionMiddleware,
-  rateLimitMiddleware('create'),
-] as const
+const REQUIRE_ORG = [requireOrgMiddleware] as const
+const REQUIRE_ORG_AND_CREATE_LIMIT = [requireOrgMiddleware, rateLimitMiddleware('create')] as const
 
 export const SERVER_FN_MIDDLEWARE = {
   getPoll: SESSION_ONLY,
-  createPoll: REQUIRE_SESSION_AND_CREATE_LIMIT,
-  updatePoll: REQUIRE_SESSION,
-  setPollStatus: REQUIRE_SESSION,
-  finalizePoll: REQUIRE_SESSION,
-  deletePoll: REQUIRE_SESSION,
-  duplicatePoll: REQUIRE_SESSION,
-  listMyPolls: REQUIRE_SESSION,
-  updateNotificationPrefs: REQUIRE_SESSION,
+  createPoll: REQUIRE_ORG_AND_CREATE_LIMIT,
+  updatePoll: REQUIRE_ORG,
+  setPollStatus: REQUIRE_ORG,
+  finalizePoll: REQUIRE_ORG,
+  deletePoll: REQUIRE_ORG,
+  duplicatePoll: REQUIRE_ORG,
+  listMyPolls: REQUIRE_ORG,
+  updateNotificationPrefs: REQUIRE_ORG,
 } as const
 
 export const getPoll = createServerFn({ method: 'GET' })
@@ -56,7 +54,11 @@ export const createPoll = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.createPoll)
   .validator(createPollSchema)
   .handler(async ({ data, context }) => {
-    const result = await pollService.createPoll(getDb(), context.session.user.id, data)
+    const result = await pollService.createPoll(
+      getDb(),
+      { organizationId: context.org.id, createdBy: context.session.user.id },
+      data,
+    )
     await syncDeadline(result.id, data.deadlineAt ?? null)
     return result
   })
@@ -66,7 +68,7 @@ export const updatePoll = createServerFn({ method: 'POST' })
   .validator(updatePollSchema)
   .handler(async ({ data, context }) => {
     const { pollId, ...input } = data
-    await pollService.updatePoll(getDb(), pollId, context.session.user.id, input)
+    await pollService.updatePoll(getDb(), pollId, context.org, context.session.user.id, input)
     await notifyChanged(pollId, 'poll')
     // `deadlineAt` is optional on this schema: `undefined` means "leave it unchanged" (service.ts
     // only touches the column when the field is present), so the DO's alarm must only be
@@ -81,7 +83,13 @@ export const setPollStatus = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.setPollStatus)
   .validator(z.object({ pollId: pollIdSchema, status: z.enum(['open', 'closed']) }))
   .handler(async ({ data, context }) => {
-    await pollService.setPollStatus(getDb(), data.pollId, context.session.user.id, data.status)
+    await pollService.setPollStatus(
+      getDb(),
+      data.pollId,
+      context.org,
+      context.session.user.id,
+      data.status,
+    )
     await notifyChanged(data.pollId, 'poll')
   })
 
@@ -92,6 +100,7 @@ export const finalizePoll = createServerFn({ method: 'POST' })
     const result = await pollService.finalizePoll(
       getDb(),
       data.pollId,
+      context.org,
       context.session.user.id,
       data.optionId,
     )
@@ -105,7 +114,7 @@ export const deletePoll = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.deletePoll)
   .validator(z.object({ pollId: pollIdSchema }))
   .handler(async ({ data, context }) => {
-    await pollService.deletePoll(getDb(), data.pollId, context.session.user.id)
+    await pollService.deletePoll(getDb(), data.pollId, context.org, context.session.user.id)
     await notifyChanged(data.pollId, 'poll')
     await syncDeadline(data.pollId, null)
   })
@@ -114,13 +123,13 @@ export const duplicatePoll = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.duplicatePoll)
   .validator(z.object({ pollId: pollIdSchema }))
   .handler(async ({ data, context }) => {
-    return pollService.duplicatePoll(getDb(), data.pollId, context.session.user.id)
+    return pollService.duplicatePoll(getDb(), data.pollId, context.org, context.session.user.id)
   })
 
 export const listMyPolls = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.listMyPolls)
   .handler(async ({ context }) => {
-    return pollService.listMyPolls(getDb(), context.session.user.id)
+    return pollService.listMyPolls(getDb(), context.org.id)
   })
 
 export const updateNotificationPrefs = createServerFn({ method: 'POST' })
@@ -128,5 +137,11 @@ export const updateNotificationPrefs = createServerFn({ method: 'POST' })
   .validator(notificationPrefsSchema)
   .handler(async ({ data, context }) => {
     const { pollId, ...prefs } = data
-    await pollService.updateNotificationPrefs(getDb(), pollId, context.session.user.id, prefs)
+    await pollService.updateNotificationPrefs(
+      getDb(),
+      pollId,
+      context.org,
+      context.session.user.id,
+      prefs,
+    )
   })

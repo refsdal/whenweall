@@ -11,7 +11,7 @@ import {
   syncDeadline,
   unclaimViaRoom,
 } from '#/server/notifications/do-client'
-import { makeSignupPoll, makeUser } from '../../../../test/helpers'
+import { makeSignupPoll, makeUserWithOrg } from '../../../../test/helpers'
 
 function stubFor(pollId: string) {
   return env.POLL_ROOM.getByName(pollId)
@@ -50,8 +50,12 @@ describe('do-client', () => {
 describe('claimViaRoom / unclaimViaRoom', () => {
   it('claimViaRoom resolves with the claim result on success', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
 
@@ -62,8 +66,12 @@ describe('claimViaRoom / unclaimViaRoom', () => {
 
   it('propagates a business error instead of swallowing it (NOT best-effort)', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [1] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
 
@@ -73,8 +81,12 @@ describe('claimViaRoom / unclaimViaRoom', () => {
 
   it('unclaimViaRoom resolves with the remaining claimed option ids', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const claim = await claimViaRoom(pollId, slot.id, { name: 'Alice', userId: null })

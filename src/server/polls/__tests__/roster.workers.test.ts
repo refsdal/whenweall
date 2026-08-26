@@ -4,13 +4,17 @@ import { createDb } from '#/server/db/client'
 import { applyClaim } from '#/server/polls/claims'
 import { buildRosterCsv } from '#/server/polls/roster'
 import { createPoll, getPollView } from '#/server/polls/service'
-import { makeSignupPoll, makeUser } from '../../../../test/helpers'
+import { makeSignupPoll, makeUserWithOrg } from '../../../../test/helpers'
 
 describe('buildRosterCsv', () => {
   it('emits a header row, one row per claim, and a zero-claim row for an unclaimed slot', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [2, null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [2, null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const [slotA] = view!.options
 
@@ -36,8 +40,12 @@ describe('buildRosterCsv', () => {
 
   it('prefixes the file with a UTF-8 BOM', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
 
     const csv = await buildRosterCsv(db, pollId, { locale: 'en' })
     expect(csv.startsWith('\uFEFF')).toBe(true)
@@ -45,13 +53,17 @@ describe('buildRosterCsv', () => {
 
   it('quotes fields containing commas, quotes, or newlines per RFC 4180', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await createPoll(db, ownerId, {
-      type: 'signup',
-      title: 'Sheet',
-      timezone: 'Europe/Oslo',
-      options: [{ kind: 'text', label: 'Bring "snacks", please', capacity: null }],
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'signup',
+        title: 'Sheet',
+        timezone: 'Europe/Oslo',
+        options: [{ kind: 'text', label: 'Bring "snacks", please', capacity: null }],
+      },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const [slot] = view!.options
 
@@ -72,8 +84,12 @@ describe('buildRosterCsv', () => {
     'prefixes a formula-looking name (%s) with a single quote to defuse CSV formula injection',
     async (name) => {
       const db = createDb(env.DB)
-      const { id: ownerId } = await makeUser(db)
-      const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+      const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+      const { id: pollId } = await makeSignupPoll(
+        db,
+        { orgId, createdBy: ownerId },
+        { capacities: [null] },
+      )
       const view = await getPollView(db, pollId, { userId: ownerId })
       const [slot] = view!.options
 
@@ -88,8 +104,12 @@ describe('buildRosterCsv', () => {
 
   it('leaves capacity empty for unlimited slots and prints the number for capped slots', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [3, null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [3, null] },
+    )
 
     const csv = await buildRosterCsv(db, pollId, { locale: 'en' })
     const lines = csv

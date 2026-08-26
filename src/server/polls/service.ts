@@ -3,6 +3,7 @@ import type { BatchItem } from 'drizzle-orm/batch'
 import type { Db } from '#/server/db/client'
 import {
   comments,
+  member,
   pollOptions,
   polls,
   participants,
@@ -15,9 +16,14 @@ import {
 import { AppError } from '#/lib/errors'
 import { newId, newPollId } from '#/lib/ids'
 import { bestOptionId, scoreOptions } from '#/lib/scoring'
+import { canManageContent, type OrgRole } from '#/server/auth/org'
 import { countClaims } from './claims'
 import type { OptionInput, UpdatePollInput, CreatePollInput } from './schemas'
 import type { PollSummary, PollView } from './viewmodel'
+
+/** The creator/org pair a poll is created under. `createdBy` is nullable on the row (it's
+ * cleared if the creator's account is later deleted), but a fresh creation always has one. */
+export type PollOwner = { organizationId: string; createdBy: string | null }
 
 type Query = BatchItem<'sqlite'>
 
@@ -59,7 +65,7 @@ function optionRowFields(
 
 export async function createPoll(
   db: Db,
-  ownerId: string,
+  owner: PollOwner,
   input: CreatePollInput,
 ): Promise<{ id: string }> {
   const id = newPollId()
@@ -75,7 +81,8 @@ export async function createPoll(
   await db.batch([
     db.insert(polls).values({
       id,
-      ownerId,
+      organizationId: owner.organizationId,
+      createdBy: owner.createdBy,
       type: input.type,
       title: input.title,
       description: input.description ?? null,
@@ -113,12 +120,27 @@ export async function getPollView(
         where: isNull(comments.deletedAt),
         orderBy: (c, { asc }) => [asc(c.createdAt)],
       },
-      owner: true,
+      organization: true,
     },
   })
   if (!poll || poll.deletedAt) return null
 
-  const isOwner = viewer.userId !== null && viewer.userId === poll.ownerId
+  // "isOwner" here means "can manage this poll" (spec §1: creator manages their own content,
+  // admin/owner manage everything in the org) — the viewer must be a member of the poll's own
+  // org, not just any signed-in user, so a wrong-org member never lights up admin controls.
+  const membership =
+    viewer.userId !== null
+      ? await db.query.member.findFirst({
+          where: and(
+            eq(member.organizationId, poll.organizationId),
+            eq(member.userId, viewer.userId),
+          ),
+        })
+      : null
+  const isOwner =
+    membership !== null &&
+    membership !== undefined &&
+    canManageContent({ role: membership.role as OrgRole }, viewer.userId!, poll.createdBy)
   const isSignup = poll.type === 'signup'
   const optionIds = poll.options.map((o) => o.id)
   const allVotes = poll.participants.flatMap((p) => p.votes)
@@ -155,7 +177,7 @@ export async function getPollView(
     notifications: isOwner
       ? { notifyOnVote: poll.notifyOnVote, notifyOnComment: poll.notifyOnComment }
       : null,
-    owner: { id: poll.owner.id, name: poll.owner.name },
+    owner: { id: poll.organization.id, name: poll.organization.name },
     isOwner,
     options: poll.options.map((o) => ({
       id: o.id,
@@ -188,9 +210,9 @@ export async function getPollView(
   }
 }
 
-export async function listMyPolls(db: Db, ownerId: string): Promise<PollSummary[]> {
+export async function listMyPolls(db: Db, organizationId: string): Promise<PollSummary[]> {
   const rows = await db.query.polls.findMany({
-    where: and(eq(polls.ownerId, ownerId), isNull(polls.deletedAt)),
+    where: and(eq(polls.organizationId, organizationId), isNull(polls.deletedAt)),
     orderBy: (p, { desc }) => [desc(p.createdAt)],
     with: { participants: { with: { votes: true } } },
   })
@@ -211,20 +233,34 @@ export async function listMyPolls(db: Db, ownerId: string): Promise<PollSummary[
   }))
 }
 
-export async function requireOwnedPoll(db: Db, pollId: string, ownerId: string): Promise<Poll> {
+/** The acting org + role, as `requireOrgMiddleware` produces it. */
+export type ActingOrg = { id: string; role: OrgRole }
+
+/**
+ * NOT_FOUND when the poll doesn't exist, is soft-deleted, or belongs to a different org (no
+ * leaking whether a poll id exists at all outside the caller's own org); FORBIDDEN when it's in
+ * the right org but the caller can't manage it (a plain member managing someone else's poll).
+ */
+export async function requireManagedPoll(
+  db: Db,
+  pollId: string,
+  org: ActingOrg,
+  userId: string,
+): Promise<Poll> {
   const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
-  if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
-  if (poll.ownerId !== ownerId) throw new AppError('FORBIDDEN')
+  if (!poll || poll.deletedAt || poll.organizationId !== org.id) throw new AppError('NOT_FOUND')
+  if (!canManageContent(org, userId, poll.createdBy)) throw new AppError('FORBIDDEN')
   return poll
 }
 
 export async function updatePoll(
   db: Db,
   pollId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
   input: Omit<UpdatePollInput, 'pollId'>,
 ): Promise<void> {
-  const poll = await requireOwnedPoll(db, pollId, ownerId)
+  const poll = await requireManagedPoll(db, pollId, org, userId)
   if (poll.status === 'finalized' && input.options !== undefined) {
     throw new AppError('POLL_FINALIZED')
   }
@@ -298,10 +334,11 @@ export async function updatePoll(
 export async function setPollStatus(
   db: Db,
   pollId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
   status: 'open' | 'closed',
 ): Promise<void> {
-  const poll = await requireOwnedPoll(db, pollId, ownerId)
+  const poll = await requireManagedPoll(db, pollId, org, userId)
   if (poll.status === 'finalized') throw new AppError('POLL_FINALIZED')
   await db
     .update(polls)
@@ -312,14 +349,15 @@ export async function setPollStatus(
 export async function finalizePoll(
   db: Db,
   pollId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
   optionId: string,
 ): Promise<{
   poll: Poll
   option: PollOption
   recipients: { email: string; name: string; locale: string | null }[]
 }> {
-  const poll = await requireOwnedPoll(db, pollId, ownerId)
+  const poll = await requireManagedPoll(db, pollId, org, userId)
   if (poll.type === 'signup') throw new AppError('VALIDATION')
   if (poll.status === 'finalized') throw new AppError('CONFLICT')
 
@@ -336,7 +374,12 @@ export async function finalizePoll(
   const participantRows = await db.query.participants.findMany({
     where: eq(participants.pollId, pollId),
   })
-  const owner = await db.query.user.findFirst({ where: eq(user.id, ownerId) })
+  // The creator, if the account is still around — nullable now that ownership lives on the org
+  // rather than a single user; there's no fallback recipient (e.g. every org admin) in scope
+  // here, same as the graceful skip in `PollRoom`'s digest/deadline notifications.
+  const owner = poll.createdBy
+    ? await db.query.user.findFirst({ where: eq(user.id, poll.createdBy) })
+    : null
 
   const recipients = new Map<string, { email: string; name: string; locale: string | null }>()
   for (const p of participantRows) {
@@ -356,8 +399,13 @@ export async function finalizePoll(
   return { poll: updatedPoll!, option, recipients: [...recipients.values()] }
 }
 
-export async function deletePoll(db: Db, pollId: string, ownerId: string): Promise<void> {
-  await requireOwnedPoll(db, pollId, ownerId)
+export async function deletePoll(
+  db: Db,
+  pollId: string,
+  org: ActingOrg,
+  userId: string,
+): Promise<void> {
+  await requireManagedPoll(db, pollId, org, userId)
   const now = new Date().toISOString()
   await db.update(polls).set({ deletedAt: now, updatedAt: now }).where(eq(polls.id, pollId))
 }
@@ -365,9 +413,10 @@ export async function deletePoll(db: Db, pollId: string, ownerId: string): Promi
 export async function duplicatePoll(
   db: Db,
   pollId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
 ): Promise<{ id: string }> {
-  const original = await requireOwnedPoll(db, pollId, ownerId)
+  const original = await requireManagedPoll(db, pollId, org, userId)
   const options = await db.query.pollOptions.findMany({
     where: eq(pollOptions.pollId, pollId),
     orderBy: (o, { asc }) => [asc(o.position)],
@@ -390,7 +439,8 @@ export async function duplicatePoll(
   await db.batch([
     db.insert(polls).values({
       id,
-      ownerId,
+      organizationId: org.id,
+      createdBy: userId,
       type: original.type,
       title: `${original.title} (copy)`,
       description: original.description,
@@ -417,10 +467,11 @@ export async function duplicatePoll(
 export async function updateNotificationPrefs(
   db: Db,
   pollId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
   prefs: { notifyOnVote: boolean; notifyOnComment: boolean },
 ): Promise<void> {
-  await requireOwnedPoll(db, pollId, ownerId)
+  await requireManagedPoll(db, pollId, org, userId)
   await db
     .update(polls)
     .set({
