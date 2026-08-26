@@ -45,7 +45,6 @@
   "theme_dark": "Mørkt",
   "theme_switch": "Bytt tema (nå: {mode})",
   "footer_rights": "© {year} {name}",
-  "footer_source": "Kildekode på GitHub",
   "answer_yes": "Ja",
   "answer_ifneedbe": "Om nødvendig",
   "answer_no": "Nei",
