@@ -262,6 +262,7 @@
   "creator_submitting": "Creating…",
   "creator_created": "Poll created. Share the link!",
   "creator_error_generic": "Something in the poll didn't look right. Check your options and try again.",
+  "creator_submit_error": "Could not create the poll. Please try again.",
   "error_rate_limited": "You're going a bit fast. Wait a moment, then try again.",
   "answer_none": "No answer",
   "poll_vote_cell_label": "{option}: {answer}",
