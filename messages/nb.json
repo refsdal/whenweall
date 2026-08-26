@@ -606,6 +606,16 @@
   "settings_handle_taken": "Det brukernavnet er tatt. Prøv et annet.",
   "settings_handle_invalid": "Bruk 3–30 små bokstaver, tall eller bindestrek.",
   "settings_handle_current": "Bookingsidene dine ligger på {url}",
+  "billing_title": "Fakturering",
+  "billing_free_plan": "Gratisplan",
+  "billing_premium_plan": "Premium-plan",
+  "billing_upgrade_cta": "Oppgrader til Premium",
+  "billing_manage_cta": "Administrer fakturering",
+  "billing_seats_used": "{used} av {max} plasser i bruk",
+  "billing_renews": "Fornyes {date}",
+  "billing_cancels": "Avsluttes {date}",
+  "billing_monthly": "Månedlig",
+  "billing_annual": "Årlig",
   "book_public_organiser": "med {name}",
   "book_public_duration": "{count} min",
   "book_public_pick_day": "Velg en dag",
@@ -661,5 +671,9 @@
   "booking_manage_locked_title": "Åpne bookinglenken din",
   "booking_manage_locked_body": "Bruk lenken fra bekreftelses-e-posten — den slutter på ?t=… og viser at bookingen er din.",
   "booking_manage_not_found_title": "Ingen booking her",
-  "booking_manage_not_found_body": "Lenken kan ha blitt endret, eller bookingen er fjernet."
+  "booking_manage_not_found_body": "Lenken kan ha blitt endret, eller bookingen er fjernet.",
+  "org_invite_accept_title": "Bli med i organisasjonen",
+  "org_invite_accept_body": "Du er invitert til å bli med. Godta for å begynne å planlegge sammen.",
+  "org_invite_accept_cta": "Godta invitasjon",
+  "org_invite_invalid": "Denne invitasjonen er ugyldig eller har utløpt."
 }

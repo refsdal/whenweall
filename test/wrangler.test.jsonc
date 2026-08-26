@@ -9,6 +9,10 @@
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA",
     "BETTER_AUTH_SECRET": "test-secret-test-secret-test-secret-1234",
+    "STRIPE_SECRET_KEY": "sk_test_dummy",
+    "STRIPE_WEBHOOK_SECRET": "whsec_dummy",
+    "STRIPE_PRICE_PREMIUM_MONTHLY": "price_premium_monthly_dev",
+    "STRIPE_PRICE_PREMIUM_YEARLY": "price_premium_yearly_dev",
   },
   "d1_databases": [
     {

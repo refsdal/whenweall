@@ -8,6 +8,20 @@
       "when": 1787701312510,
       "tag": "0000_third_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787734220770,
+      "tag": "0001_dry_lady_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787741726706,
+      "tag": "0002_clever_reavers",
+      "breakpoints": true
     }
   ]
 }

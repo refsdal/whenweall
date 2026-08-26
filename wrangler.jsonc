@@ -12,6 +12,9 @@
     "APP_ENV": "production",
     "EMAIL_FROM": "whenweall <no-reply@whenweall.com>",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAEcpi42QywKz2sSm",
+    // LIVE-mode prices (60 NOK/mo, 600 NOK/yr); test-mode ids live on the whenweall-test env.
+    "STRIPE_PRICE_PREMIUM_MONTHLY": "price_1U8k2WDqZd85ftHmUfw4OH8O",
+    "STRIPE_PRICE_PREMIUM_YEARLY": "price_1U8k2WDqZd85ftHmIqsuL2Uw",
   },
   "d1_databases": [
     {

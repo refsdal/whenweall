@@ -26,7 +26,7 @@ async function signUpVerified(
   return { cookie }
 }
 
-describe('organization plugin guardrails (Phase 1: no invitations yet, bounded slugs/orgs)', () => {
+describe('organization plugin guardrails (bounded slugs/orgs)', () => {
   it('rejects org creation with a slug that fails handleSchema, straight through the Better-Auth endpoint', async () => {
     const auth = createAuth({ d1: env.DB, env: authEnv })
     const { cookie } = await signUpVerified(auth, 'Org Creator', 'password-123456')
@@ -71,7 +71,7 @@ describe('organization plugin guardrails (Phase 1: no invitations yet, bounded s
     ).rejects.toMatchObject({ status: 'FORBIDDEN' })
   })
 
-  it('rejects inviting a member — Phase 1 has no seats to invite into and no accept route yet', async () => {
+  it('rejects inviting a member on a Free org — seat gate requires upgrading first (Phase 2 §3)', async () => {
     const auth = createAuth({ d1: env.DB, env: authEnv })
     const { cookie } = await signUpVerified(auth, 'Org Inviter', 'password-123456')
 
@@ -80,6 +80,6 @@ describe('organization plugin guardrails (Phase 1: no invitations yet, bounded s
         headers: new Headers({ cookie }),
         body: { email: `invitee-${crypto.randomUUID()}@example.com`, role: 'member' },
       }),
-    ).rejects.toMatchObject({ status: 'FORBIDDEN' })
+    ).rejects.toMatchObject({ status: 'FORBIDDEN', body: { message: 'UPGRADE_REQUIRED' } })
   })
 })

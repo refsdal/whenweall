@@ -236,22 +236,26 @@ Public values live in `wrangler.jsonc` under `vars`. Secrets live in `.dev.vars`
 and in Cloudflare's secret store in production (`bunx wrangler secret put NAME`). Never
 commit `.dev.vars` — it is git-ignored.
 
-| Name                   | Kind                | Where it is set                                     | Purpose                                                                                                   |
-| ---------------------- | ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `APP_URL`              | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.                           |
-| `APP_ENV`              | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.                          |
-| `EMAIL_FROM`           | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `whenweall <no-reply@example.com>`.                                 |
-| `TURNSTILE_SITE_KEY`   | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                                            |
-| `BETTER_AUTH_SECRET`   | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                                                |
-| `TURNSTILE_SECRET_KEY` | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                                           |
-| `GOOGLE_CLIENT_ID`     | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                                      |
-| `GOOGLE_CLIENT_SECRET` | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                                               |
-| `ENABLE_TEST_ROUTES`   | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`.                   |
-| `DB`                   | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`whenweall-db`). Holds every durable row.                                                |
-| `POLL_ROOM`            | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                                     |
-| `BOOKING_ROOM`         | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `BookingRoom` class: sockets, book/cancel/reschedule serialisation, reminder alarms.                  |
-| `EMAIL`                | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.                      |
-| `RATE_LIMITER`         | binding             | `wrangler.jsonc` → `ratelimits`                     | 20 requests / 60 s per action, keyed by `action:ip` across poll creation, voting, commenting and booking. |
+| Name                           | Kind                | Where it is set                                     | Purpose                                                                                                   |
+| ------------------------------ | ------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `APP_URL`                      | var                 | `wrangler.jsonc`                                    | Canonical origin. Used for links in e-mails, the passkey origin and share URLs.                           |
+| `APP_ENV`                      | var                 | `wrangler.jsonc`                                    | `development` or `production`. Gates HSTS and hard-disables the test seed route.                          |
+| `EMAIL_FROM`                   | var                 | `wrangler.jsonc`                                    | Sender of every outgoing e-mail, e.g. `whenweall <no-reply@example.com>`.                                 |
+| `TURNSTILE_SITE_KEY`           | var                 | `wrangler.jsonc`                                    | Public Turnstile key rendered into the widget.                                                            |
+| `BETTER_AUTH_SECRET`           | secret              | `.dev.vars` / `wrangler secret put`                 | Signs sessions and tokens. 32+ random bytes. **Required.**                                                |
+| `TURNSTILE_SECRET_KEY`         | secret              | `.dev.vars` / `wrangler secret put`                 | Server-side captcha verification. **Required.**                                                           |
+| `GOOGLE_CLIENT_ID`             | secret              | `.dev.vars` / `wrangler secret put`                 | Optional. Enables the "Continue with Google" button.                                                      |
+| `GOOGLE_CLIENT_SECRET`         | secret              | `.dev.vars` / `wrangler secret put`                 | Optional, required alongside the client id.                                                               |
+| `ENABLE_TEST_ROUTES`           | secret (local only) | `.dev.vars`                                         | `true` exposes `POST /api/test/seed` for Playwright. Ignored when `APP_ENV=production`.                   |
+| `STRIPE_SECRET_KEY`            | secret              | `.dev.vars` / `wrangler secret put`                 | Stripe API secret key. Powers Premium subscriptions and the billing portal — see [Billing](#billing).     |
+| `STRIPE_WEBHOOK_SECRET`        | secret              | `.dev.vars` / `wrangler secret put`                 | Signing secret for the `/api/auth/stripe/webhook` endpoint. See [Billing](#billing).                      |
+| `STRIPE_PRICE_PREMIUM_MONTHLY` | var                 | `wrangler.jsonc`                                    | Stripe Price id for the Premium plan's monthly interval. See [Billing](#billing).                         |
+| `STRIPE_PRICE_PREMIUM_YEARLY`  | var                 | `wrangler.jsonc`                                    | Stripe Price id for the Premium plan's yearly interval. See [Billing](#billing).                          |
+| `DB`                           | binding             | `wrangler.jsonc` → `d1_databases`                   | The D1 database (`whenweall`). Holds every durable row.                                                   |
+| `POLL_ROOM`                    | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `PollRoom` class: sockets, digest buffer, alarms.                                                     |
+| `BOOKING_ROOM`                 | binding             | `wrangler.jsonc` → `durable_objects` + `migrations` | The `BookingRoom` class: sockets, book/cancel/reschedule serialisation, reminder alarms.                  |
+| `EMAIL`                        | binding             | `wrangler.jsonc` → `send_email`                     | Cloudflare Email Service. Without it, mail is logged to the console instead of sent.                      |
+| `RATE_LIMITER`                 | binding             | `wrangler.jsonc` → `ratelimits`                     | 20 requests / 60 s per action, keyed by `action:ip` across poll creation, voting, commenting and booking. |
 
 CI and the deploy workflow additionally need two GitHub secrets — see
 [Deploying](#deploying).
@@ -356,6 +360,77 @@ You can always rehearse a deploy without touching your account:
 ```bash
 bunx wrangler deploy --dry-run --outdir /tmp/whenweall-dryrun
 ```
+
+## Billing
+
+Premium is a single org-scoped Stripe subscription (owner-only), wired up with
+[`@better-auth/stripe`](https://www.better-auth.com/docs/plugins/stripe). Free orgs get one
+seat and no Google Calendar sync or custom branding; Premium orgs get up to ten seats
+(members + pending invitations count against the cap) plus both. `getEntitlements` in
+[`src/server/billing/entitlements.ts`](./src/server/billing/entitlements.ts) is the one
+place those plan rules live — it reads D1 only and never calls Stripe.
+
+**1. Create the product and prices.** In the Stripe dashboard, create one product
+("Premium") with two recurring **Price**s: a monthly and a yearly one. Copy each Price id
+(`price_...`) into `wrangler.jsonc`'s `vars`:
+
+```jsonc
+"STRIPE_PRICE_PREMIUM_MONTHLY": "price_...",
+"STRIPE_PRICE_PREMIUM_YEARLY": "price_...",
+```
+
+**2. Set the secrets.** Stripe has separate key pairs for live and test mode, and this repo
+runs two Workers — the production app on `whenweall.com` and a test/staging Worker on
+`test.whenweall.com` — so each needs its own pair set with `--env`:
+
+```bash
+bunx wrangler secret put STRIPE_SECRET_KEY              # live secret key (sk_live_...)
+bunx wrangler secret put STRIPE_WEBHOOK_SECRET           # live webhook signing secret (whsec_...)
+
+bunx wrangler secret put STRIPE_SECRET_KEY --env test    # test-mode secret key (sk_test_...)
+bunx wrangler secret put STRIPE_WEBHOOK_SECRET --env test # test-mode webhook signing secret
+```
+
+Locally, `.dev.vars` already ships with `sk_test_dummy` / `whsec_dummy` placeholders —
+fine for `bun run dev` and the test suite (see [Testing](#testing)), useless against the
+real Stripe API.
+
+**3. Register the webhook.** In the Stripe dashboard → **Developers → Webhooks**, add one
+endpoint per mode, both pointing at the same mounted route
+(`getAuth().handler(request)` in [`src/routes/api/auth/$.ts`](./src/routes/api/auth/$.ts)):
+
+| Mode | Endpoint URL                                         |
+| ---- | ---------------------------------------------------- |
+| Live | `https://whenweall.com/api/auth/stripe/webhook`      |
+| Test | `https://test.whenweall.com/api/auth/stripe/webhook` |
+
+Subscribe each endpoint to these four events:
+
+- `checkout.session.completed`
+- `customer.subscription.created`
+- `customer.subscription.updated`
+- `customer.subscription.deleted`
+
+Copy the endpoint's **Signing secret** into `STRIPE_WEBHOOK_SECRET` for that mode (step 2).
+
+A subscription created manually in the Stripe dashboard (rather than through the app's own
+upgrade flow) resolves to a user reference, not an org one, and grants that org nothing — always
+go through `BillingSection`'s upgrade CTA (or `authClient.subscription.upgrade` with an explicit
+`referenceId`) instead. The webhook handler also swallows its own errors and still returns `200`
+to Stripe (so Stripe won't retry); consider wiring up a Stripe webhook-failure alert (dashboard
+notification or a log-based alert on the Worker) so a broken handler doesn't fail silently.
+
+**Note on API versions.** `createStripeClient` in
+[`src/server/billing/stripe.ts`](./src/server/billing/stripe.ts) deliberately omits
+`apiVersion`, so the client uses your Stripe account's own pinned/default API version
+rather than a literal baked into the installed `stripe` package (which would silently drift,
+and stop typechecking, on the next SDK upgrade). This means the webhook payload shape you
+receive tracks whatever API version your account is pinned to — if you upgrade the
+account's default API version in the Stripe dashboard, re-check
+[`@better-auth/stripe`](https://www.npmjs.com/package/@better-auth/stripe)'s webhook
+handling (e.g. the subscription item vs. subscription-level location of
+`current_period_start`/`current_period_end`, which moved between API versions) still
+matches what your account now sends.
 
 ## Scripts
 

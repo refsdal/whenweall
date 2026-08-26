@@ -1,9 +1,11 @@
 import type { Db } from '#/server/db/client'
 import {
   bookings,
+  invitation,
   member,
   organization,
   participants,
+  subscription,
   user,
   votes,
   type BookingStatus,
@@ -242,4 +244,48 @@ export async function makeBooking(
   })
 
   return { id, manageToken }
+}
+
+/** Inserts a bare `invitation` row directly (bypassing `auth.api.createInvitation`'s seat gate
+ * and email send) — for tests that just need a pending/accepted invitation row to exist, e.g.
+ * seat-usage counting. Defaults to `status: 'pending'` and a far-future `expiresAt`. */
+export async function makeInvitation(
+  db: Db,
+  orgId: string,
+  inviterId: string,
+  overrides?: Partial<{ email: string; role: string; status: string; expiresAt: Date }>,
+): Promise<{ id: string }> {
+  const id = `inv_${newId()}`
+  await db.insert(invitation).values({
+    id,
+    organizationId: orgId,
+    email: overrides?.email ?? `invitee-${unique()}@example.com`,
+    role: overrides?.role ?? 'member',
+    status: overrides?.status ?? 'pending',
+    expiresAt: overrides?.expiresAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    inviterId,
+  })
+  return { id }
+}
+
+export async function makeSubscription(
+  db: Db,
+  orgId: string,
+  overrides?: Partial<{
+    plan: string
+    status: string
+    stripeCustomerId: string | null
+    stripeSubscriptionId: string | null
+  }>,
+): Promise<{ id: string }> {
+  const id = `sub_${newId()}`
+  await db.insert(subscription).values({
+    id,
+    plan: overrides?.plan ?? 'premium',
+    referenceId: orgId,
+    status: overrides?.status ?? 'active',
+    stripeCustomerId: overrides?.stripeCustomerId ?? null,
+    stripeSubscriptionId: overrides?.stripeSubscriptionId ?? null,
+  })
+  return { id }
 }

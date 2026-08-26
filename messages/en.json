@@ -606,6 +606,16 @@
   "settings_handle_taken": "That handle is taken. Try another.",
   "settings_handle_invalid": "Use 3–30 lowercase letters, digits or hyphens.",
   "settings_handle_current": "Your booking pages live at {url}",
+  "billing_title": "Billing",
+  "billing_free_plan": "Free plan",
+  "billing_premium_plan": "Premium plan",
+  "billing_upgrade_cta": "Upgrade to Premium",
+  "billing_manage_cta": "Manage billing",
+  "billing_seats_used": "{used} of {max} seats used",
+  "billing_renews": "Renews {date}",
+  "billing_cancels": "Cancels {date}",
+  "billing_monthly": "Monthly",
+  "billing_annual": "Annual",
   "book_public_organiser": "with {name}",
   "book_public_duration": "{count} min",
   "book_public_pick_day": "Pick a day",
@@ -661,5 +671,9 @@
   "booking_manage_locked_title": "Open your booking link",
   "booking_manage_locked_body": "Use the link from your confirmation email — it ends in ?t=… and proves the booking is yours.",
   "booking_manage_not_found_title": "No booking here",
-  "booking_manage_not_found_body": "The link may have changed, or the booking was removed."
+  "booking_manage_not_found_body": "The link may have changed, or the booking was removed.",
+  "org_invite_accept_title": "Join the organization",
+  "org_invite_accept_body": "You've been invited to join. Accept to start scheduling together.",
+  "org_invite_accept_cta": "Accept invitation",
+  "org_invite_invalid": "This invitation is invalid or has expired."
 }

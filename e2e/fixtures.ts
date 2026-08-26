@@ -13,7 +13,13 @@ export type SeededUser = {
 
 async function seed(
   request: APIRequestContext,
-  opts: { name?: string; withPoll?: boolean; withSignup?: boolean; withBookingPage?: boolean } = {},
+  opts: {
+    name?: string
+    withPoll?: boolean
+    withSignup?: boolean
+    withBookingPage?: boolean
+    plan?: 'premium'
+  } = {},
 ): Promise<SeededUser> {
   const response = await request.post('/api/test/seed', {
     data: {
@@ -21,6 +27,7 @@ async function seed(
       withPoll: opts.withPoll ?? false,
       withSignup: opts.withSignup ?? false,
       withBookingPage: opts.withBookingPage ?? false,
+      ...(opts.plan ? { plan: opts.plan } : {}),
     },
   })
   if (!response.ok()) {
@@ -44,6 +51,10 @@ type Fixtures = {
    * `src/routes/api/test/seed.ts`.
    */
   userWithBookingPage: SeededUser
+  /** A verified user who owns the org, seeded with an active premium subscription (Phase 2 §4) —
+   * for e2e coverage of the billing UI's Premium branch and the seat-gated invite flow, without
+   * going through real Stripe. */
+  userPremium: SeededUser
 }
 
 /**
@@ -66,6 +77,9 @@ export const test = base.extend<Fixtures>({
   },
   userWithBookingPage: async ({ request }, provide) => {
     await provide(await seed(request, { withBookingPage: true }))
+  },
+  userPremium: async ({ request }, provide) => {
+    await provide(await seed(request, { plan: 'premium' }))
   },
 })
 

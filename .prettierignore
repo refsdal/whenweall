@@ -11,3 +11,6 @@ dist/
 playwright-report/
 test-results/
 .superpowers/
+# Sibling agent worktrees living under .claude/worktrees (see `using-git-worktrees`) are separate
+# checkouts, sometimes on other branches — never this repo's own source to format.
+.claude/

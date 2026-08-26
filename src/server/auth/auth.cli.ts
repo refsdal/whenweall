@@ -1,9 +1,13 @@
 import { APIError, betterAuth } from 'better-auth'
+import { createAuthMiddleware } from 'better-auth/api'
 import { organization } from 'better-auth/plugins'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
+import { stripe } from '@better-auth/stripe'
 import { drizzle } from 'drizzle-orm/d1'
 import { handleSchema } from '#/server/bookings/schemas'
+import { createStripeClient } from '#/server/billing/stripe'
+import { PREMIUM_PLAN_NAME } from '#/lib/billing'
 
 // This shape exists so `bun run auth:generate` can emit the schema.
 // The runtime auth config (getAuth()) is created in Task 8's src/server/auth/auth.ts,
@@ -30,18 +34,45 @@ export function createAuth(d1: D1Database) {
               throw new APIError('BAD_REQUEST', { message: 'Invalid organization slug' })
             }
           },
-          beforeCreateInvitation: async () => {
-            throw new APIError('FORBIDDEN', { message: 'Invitations are not available yet' })
-          },
+          // Mirrors the runtime seat gate (auth.ts's `assertSeatAvailable`) for generator parity;
+          // no-op here since this CLI config only exists to shape the generated schema and has no
+          // real D1 to query entitlements against.
+          beforeCreateInvitation: async () => {},
+          // Mirrors the runtime acceptance gate (auth.ts's `assertOrgCanAcceptInvitation`) for
+          // generator parity; no-op for the same reason as `beforeCreateInvitation` above.
+          beforeAcceptInvitation: async () => {},
         },
         // No-op: this CLI config only exists to shape the generated schema.
         sendInvitationEmail: async () => {},
+      }),
+      stripe({
+        // Dummy values: this CLI config only exists to shape the generated schema.
+        stripeClient: createStripeClient('sk_test_dummy'),
+        stripeWebhookSecret: 'whsec_dummy',
+        createCustomerOnSignUp: false,
+        subscription: {
+          enabled: true,
+          plans: [
+            {
+              name: PREMIUM_PLAN_NAME,
+              priceId: 'price_dummy',
+              annualDiscountPriceId: 'price_dummy_yearly',
+            },
+          ],
+          authorizeReference: async () => false,
+        },
       }),
     ],
     user: {
       additionalFields: {
         locale: { type: 'string', required: false, input: true },
       },
+    },
+    // Mirrors the runtime resend-bypass / referenceId-required hooks (auth.ts's top-level
+    // `hooks.before`) for generator parity; no-op for the same reason as the organizationHooks
+    // no-ops above.
+    hooks: {
+      before: createAuthMiddleware(async () => {}),
     },
   })
 }
