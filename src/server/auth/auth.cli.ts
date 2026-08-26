@@ -1,4 +1,5 @@
 import { APIError, betterAuth } from 'better-auth'
+import { createAuthMiddleware } from 'better-auth/api'
 import { organization } from 'better-auth/plugins'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
@@ -37,6 +38,9 @@ export function createAuth(d1: D1Database) {
           // no-op here since this CLI config only exists to shape the generated schema and has no
           // real D1 to query entitlements against.
           beforeCreateInvitation: async () => {},
+          // Mirrors the runtime acceptance gate (auth.ts's `assertOrgCanAcceptInvitation`) for
+          // generator parity; no-op for the same reason as `beforeCreateInvitation` above.
+          beforeAcceptInvitation: async () => {},
         },
         // No-op: this CLI config only exists to shape the generated schema.
         sendInvitationEmail: async () => {},
@@ -63,6 +67,12 @@ export function createAuth(d1: D1Database) {
       additionalFields: {
         locale: { type: 'string', required: false, input: true },
       },
+    },
+    // Mirrors the runtime resend-bypass / referenceId-required hooks (auth.ts's top-level
+    // `hooks.before`) for generator parity; no-op for the same reason as the organizationHooks
+    // no-ops above.
+    hooks: {
+      before: createAuthMiddleware(async () => {}),
     },
   })
 }

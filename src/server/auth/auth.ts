@@ -1,4 +1,5 @@
 import { APIError, betterAuth } from 'better-auth'
+import { createAuthMiddleware, getSessionFromCtx } from 'better-auth/api'
 import { captcha, organization } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
@@ -44,6 +45,33 @@ async function assertSeatAvailable(db: Db, organizationId: string) {
 
   const seatsUsed = await getSeatsUsed(db, organizationId)
   if (seatsUsed >= entitlements.maxSeats) {
+    throw new APIError('FORBIDDEN', { message: 'SEAT_LIMIT_REACHED' })
+  }
+}
+
+/** Spec §3 acceptance gate, run from `beforeAcceptInvitation` below. This is deliberately NOT
+ * `assertSeatAvailable` re-run at acceptance time: accepting converts a pending invitation into
+ * a member, so the occupied-seat count (`getSeatsUsed` = members + pending) doesn't change — the
+ * invite already counted itself. The real hole this closes is the *window* between an invite
+ * being sent and it being accepted: the org can be downgraded to Free in that window (Free orgs
+ * can't have a second member at all), or — independent of pending invitations — its member count
+ * alone can reach the Premium cap. So this checks `members` only, not `getSeatsUsed`. */
+async function assertOrgCanAcceptInvitation(db: Db, organizationId: string) {
+  const entitlements = await getEntitlements(db, organizationId)
+  const members = await db.query.member.findMany({
+    where: eq(member.organizationId, organizationId),
+  })
+
+  if (entitlements.plan === 'free') {
+    // A Free org's one seat is always occupied by its owner, so any acceptance — which would
+    // add a second member — is blocked.
+    if (members.length >= 1) {
+      throw new APIError('FORBIDDEN', { message: 'UPGRADE_REQUIRED' })
+    }
+    return
+  }
+
+  if (members.length >= entitlements.maxSeats) {
     throw new APIError('FORBIDDEN', { message: 'SEAT_LIMIT_REACHED' })
   }
 }
@@ -152,6 +180,14 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
           beforeCreateInvitation: async ({ invitation }) => {
             await assertSeatAvailable(createDb(d1), invitation.organizationId)
           },
+          // Closes the other half of Phase 2 §3's seat gate: `beforeCreateInvitation` only
+          // covers invite *creation*, but an org can be downgraded to Free (or hit its member
+          // cap) in the window between an invite being sent and it being accepted. See
+          // `assertOrgCanAcceptInvitation`'s own doc comment for why this isn't just
+          // `assertSeatAvailable` again.
+          beforeAcceptInvitation: async ({ invitation }) => {
+            await assertOrgCanAcceptInvitation(createDb(d1), invitation.organizationId)
+          },
         },
         sendInvitationEmail: async ({ email, organization: org, inviter, id }) => {
           const locale = (inviter.user as { locale?: string }).locale ?? appConfig.defaultLocale
@@ -205,6 +241,43 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       // is skipped only in the isolated test environment and stays active in dev/production.
       ...(env.APP_ENV === 'test' ? [] : [tanstackStartCookies()]),
     ],
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === '/organization/invite-member') {
+          // Better-Auth's invite-member endpoint returns *before* calling
+          // `organizationHooks.beforeCreateInvitation` when `ctx.body.resend` is true and a
+          // pending invitation already exists for that email (see `createInvitation` in
+          // node_modules/better-auth/dist/plugins/organization/routes/crud-invites.mjs) — so an
+          // org downgraded to Free (or already at its seat cap) after sending an invite could
+          // resend its way around the gate forever. Run the same check unconditionally here;
+          // it's an idempotent double-check on the normal (non-resend) path, since
+          // `beforeCreateInvitation` still runs for that case too.
+          //
+          // The endpoint resolves a missing `organizationId` from the session's active org
+          // (`ctx.body.organizationId || session.session.activeOrganizationId`); most callers
+          // never pass it explicitly, so this hook resolves it the same way rather than only
+          // trusting the body.
+          const body = ctx.body as { organizationId?: string } | undefined
+          const organizationId =
+            body?.organizationId ?? (await getSessionFromCtx(ctx))?.session.activeOrganizationId
+          if (organizationId) {
+            await assertSeatAvailable(createDb(d1), organizationId)
+          }
+        }
+
+        if (ctx.path === '/subscription/upgrade') {
+          // Without an explicit `referenceId`, @better-auth/stripe silently defaults to the
+          // session user's id and never calls `authorizeReference` at all — a member could buy
+          // a subscription that grants no org anything (see `referenceMiddleware` in
+          // node_modules/@better-auth/stripe/dist/index.mjs). Every upgrade must say which org
+          // it's for.
+          const body = ctx.body as { referenceId?: string } | undefined
+          if (!body?.referenceId) {
+            throw new APIError('BAD_REQUEST', { message: 'referenceId required' })
+          }
+        }
+      }),
+    },
   })
 }
 

@@ -2,9 +2,9 @@ import { env } from 'cloudflare:workers'
 import { and, eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
-import { invitation, member } from '#/server/db/schema'
+import { invitation, member, subscription } from '#/server/db/schema'
 import { createAuth } from '#/server/auth/auth'
-import { addOrgMember, makeSubscription, makeUser } from '../../../../test/helpers'
+import { addOrgMember, makeInvitation, makeSubscription, makeUser } from '../../../../test/helpers'
 
 const authEnv = { ...env, APP_ENV: 'test' } as never
 const captchaHeaders = new Headers({ 'x-captcha-response': 'test-token' })
@@ -130,5 +130,83 @@ describe('seat-gated invitations (Phase 2 §3)', () => {
       where: eq(invitation.id, created.id),
     })
     expect(invitationRow?.status).toBe('accepted')
+  })
+
+  it('rejects accepting an invitation once the org has been downgraded to Free', async () => {
+    const auth = createAuth({ d1: env.DB, env: authEnv })
+    const { orgId, cookie: ownerCookie } = await signUpVerifiedWithOrg(
+      auth,
+      'Downgrade Owner',
+      'password-123456',
+    )
+    const db = createDb(env.DB)
+    const { id: subId } = await makeSubscription(db, orgId, { plan: 'premium', status: 'active' })
+
+    const { email: inviteeEmail, cookie: inviteeCookie } = await signUpVerifiedWithOrg(
+      auth,
+      'Downgrade Invitee',
+      'password-123456',
+    )
+    const created = await auth.api.createInvitation({
+      headers: new Headers({ cookie: ownerCookie }),
+      body: { email: inviteeEmail, role: 'member' },
+    })
+
+    // Org is downgraded to Free after the invite was sent (subscription no longer active).
+    await db.update(subscription).set({ status: 'canceled' }).where(eq(subscription.id, subId))
+
+    await expect(
+      auth.api.acceptInvitation({
+        headers: new Headers({ cookie: inviteeCookie }),
+        body: { invitationId: created.id },
+      }),
+    ).rejects.toMatchObject({ status: 'FORBIDDEN', body: { message: 'UPGRADE_REQUIRED' } })
+  })
+
+  it('rejects resending an invite once the org has been downgraded to Free — resend bypasses beforeCreateInvitation', async () => {
+    const auth = createAuth({ d1: env.DB, env: authEnv })
+    const {
+      orgId,
+      userId: ownerId,
+      cookie,
+    } = await signUpVerifiedWithOrg(auth, 'Resend Free Owner', 'password-123456')
+    const db = createDb(env.DB)
+    // Seeded directly (as if sent while the org was still Premium) — a fresh Free-org invite
+    // would already be blocked by `beforeCreateInvitation`, so this isolates the resend path.
+    const email = `invitee-${crypto.randomUUID()}@example.com`
+    await makeInvitation(db, orgId, ownerId, { email })
+
+    await expect(
+      auth.api.createInvitation({
+        headers: new Headers({ cookie }),
+        body: { email, role: 'member', resend: true },
+      }),
+    ).rejects.toMatchObject({ status: 'FORBIDDEN', body: { message: 'UPGRADE_REQUIRED' } })
+  })
+
+  it('rejects resending an invite once a Premium org is at its seat cap — resend bypasses beforeCreateInvitation', async () => {
+    const auth = createAuth({ d1: env.DB, env: authEnv })
+    const {
+      orgId,
+      userId: ownerId,
+      cookie,
+    } = await signUpVerifiedWithOrg(auth, 'Resend Cap Owner', 'password-123456')
+    const db = createDb(env.DB)
+    await makeSubscription(db, orgId, { plan: 'premium', status: 'active' })
+
+    // Owner is member #1; 9 filler members bring the org to 10 members — already at cap.
+    for (let i = 0; i < 9; i++) {
+      const filler = await makeUser(db)
+      await addOrgMember(db, orgId, filler.id)
+    }
+    const email = `invitee-${crypto.randomUUID()}@example.com`
+    await makeInvitation(db, orgId, ownerId, { email })
+
+    await expect(
+      auth.api.createInvitation({
+        headers: new Headers({ cookie }),
+        body: { email, role: 'member', resend: true },
+      }),
+    ).rejects.toMatchObject({ status: 'FORBIDDEN', body: { message: 'SEAT_LIMIT_REACHED' } })
   })
 })
