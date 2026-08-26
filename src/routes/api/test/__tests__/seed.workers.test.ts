@@ -61,6 +61,7 @@ describe('POST /api/test/seed — plan', () => {
       maxSeats: 10,
       googleSync: true,
       branding: true,
+      push: true,
     })
   })
 

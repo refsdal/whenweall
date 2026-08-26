@@ -1,4 +1,5 @@
 import * as z from 'zod'
+import { gridSchema } from '#/lib/notifications'
 
 export const LIMITS = {
   title: 200,
@@ -199,11 +200,18 @@ export type AddCommentInput = z.infer<typeof addCommentSchema>
 
 export const notificationPrefsSchema = z.object({
   pollId: pollIdSchema,
-  notifyOnVote: z.boolean(),
-  notifyOnComment: z.boolean(),
+  /** `null` clears the per-poll override so the viewer's account defaults apply again. */
+  channels: gridSchema.nullable(),
 })
 
 export type NotificationPrefsInput = z.infer<typeof notificationPrefsSchema>
+
+export const pollFollowingSchema = z.object({
+  pollId: pollIdSchema,
+  following: z.boolean(),
+})
+
+export type PollFollowingInput = z.infer<typeof pollFollowingSchema>
 
 export const claimSchema = z.object({
   pollId: pollIdSchema,

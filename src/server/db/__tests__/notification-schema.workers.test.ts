@@ -28,17 +28,9 @@ describe('notification tables', () => {
   it('treats a null channels column as "inherit my defaults"', async () => {
     const db = createDb(env.DB)
     const { userId, orgId } = await makeUserWithOrg(db)
+    // `createPoll` subscribes the creator itself, so there is no row to insert here — asserting
+    // on what it wrote is a stronger check than asserting on a row this test fabricated.
     const { id: pollId } = await makePoll(db, { orgId, createdBy: userId })
-
-    await db.insert(notificationSubscriptions).values({
-      scopeType: 'poll',
-      scopeId: pollId,
-      userId,
-      source: 'creator',
-      channels: null,
-      createdAt: now(),
-      updatedAt: now(),
-    })
 
     const row = await db.query.notificationSubscriptions.findFirst({
       where: and(

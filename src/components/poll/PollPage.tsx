@@ -252,6 +252,7 @@ export function PollPage({
           onShare={() => setShareOpen(true)}
           locale={locale}
           timeZone={timeZone}
+          pushAvailable={session?.entitlements.push ?? false}
         />
       )}
 

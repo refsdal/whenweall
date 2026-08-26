@@ -60,6 +60,7 @@ describe('buildClientSession', () => {
       maxSeats: 10,
       googleSync: true,
       branding: true,
+      push: true,
     })
   })
 

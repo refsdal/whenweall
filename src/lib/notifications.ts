@@ -50,6 +50,9 @@ export function isDigestEvent(event: NotificationEvent): event is DigestEvent {
   return (DIGEST_EVENTS as readonly string[]).includes(event)
 }
 
+/** Everything that is not batched — exactly the set the single-event email template covers. */
+export type ImmediateEvent = Exclude<NotificationEvent, DigestEvent>
+
 export type ChannelPrefs = { email: boolean; push: boolean }
 export type NotificationGrid = Partial<Record<NotificationEvent, ChannelPrefs>>
 

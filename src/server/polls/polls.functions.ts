@@ -7,11 +7,13 @@ import { sessionMiddleware } from '#/server/auth/middleware'
 import { requireOrgMiddleware } from '#/server/auth/org'
 import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { notifyChanged, syncDeadline } from '#/server/notifications/do-client'
+import { emitPollEvent } from '#/server/notifications/emit'
 import { sendFinalizedEmails } from '#/server/notifications/finalize-emails'
 import * as pollService from './service'
 import {
   createPollSchema,
   notificationPrefsSchema,
+  pollFollowingSchema,
   pollIdSchema,
   updatePollSchema,
 } from './schemas'
@@ -37,6 +39,7 @@ export const SERVER_FN_MIDDLEWARE = {
   duplicatePoll: REQUIRE_ORG,
   listMyPolls: REQUIRE_ORG,
   updateNotificationPrefs: REQUIRE_ORG,
+  setPollFollowing: REQUIRE_ORG,
 } as const
 
 export const getPoll = createServerFn({ method: 'GET' })
@@ -105,7 +108,12 @@ export const finalizePoll = createServerFn({ method: 'POST' })
       data.optionId,
     )
     await notifyChanged(data.pollId, 'poll')
+    // Participants always get the transactional "the time is set" mail with its .ics — that is
+    // not a notification and is never gated by preferences. The organiser-side notice below is.
     const { sent } = await sendFinalizedEmails(env, result)
+    await emitPollEvent(data.pollId, 'poll.finalized', {
+      actorUserId: context.session.user.id,
+    })
     await syncDeadline(data.pollId, null)
     return { sent }
   })
@@ -136,12 +144,24 @@ export const updateNotificationPrefs = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.updateNotificationPrefs)
   .validator(notificationPrefsSchema)
   .handler(async ({ data, context }) => {
-    const { pollId, ...prefs } = data
     await pollService.updateNotificationPrefs(
       getDb(),
-      pollId,
+      data.pollId,
       context.org,
       context.session.user.id,
-      prefs,
+      data.channels,
+    )
+  })
+
+export const setPollFollowing = createServerFn({ method: 'POST' })
+  .middleware(SERVER_FN_MIDDLEWARE.setPollFollowing)
+  .validator(pollFollowingSchema)
+  .handler(async ({ data, context }) => {
+    await pollService.setPollFollowing(
+      getDb(),
+      data.pollId,
+      context.org,
+      context.session.user.id,
+      data.following,
     )
   })

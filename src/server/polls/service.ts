@@ -4,6 +4,8 @@ import type { Db } from '#/server/db/client'
 import {
   comments,
   member,
+  notificationPrefs,
+  notificationSubscriptions,
   pollOptions,
   polls,
   participants,
@@ -15,8 +17,16 @@ import {
 } from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
 import { newId, newPollId } from '#/lib/ids'
+import type { NotificationGrid } from '#/lib/notifications'
 import { bestOptionId, scoreOptions } from '#/lib/scoring'
 import { canManageContent, type OrgRole } from '#/server/auth/org'
+import {
+  deleteScopeSubscriptions,
+  ensureCreatorSubscription,
+  followScope,
+  setScopeChannels,
+  unfollowScope,
+} from '#/server/notifications/subscriptions'
 import { countClaims } from './claims'
 import type { OptionInput, UpdatePollInput, CreatePollInput } from './schemas'
 import type { PollSummary, PollView } from './viewmodel'
@@ -94,14 +104,16 @@ export async function createPoll(
       requireParticipantEmail: input.requireParticipantEmail ?? false,
       allowComments: input.allowComments ?? true,
       allowIfNeedBe: input.type === 'signup' ? false : (input.allowIfNeedBe ?? true),
-      notifyOnVote: true,
-      notifyOnComment: true,
       signupMaxClaims: input.signupMaxClaims ?? 1,
       createdAt: now,
       updatedAt: now,
     }),
     db.insert(pollOptions).values(optionRows),
   ] as [Query, ...Query[]])
+
+  // Outside the batch on purpose: the creator's subscription is a notification convenience, not
+  // part of the poll's integrity. If it ever failed it must not roll back the poll itself.
+  await ensureCreatorSubscription(db, { type: 'poll', id }, owner.createdBy)
 
   return { id }
 }
@@ -137,10 +149,27 @@ export async function getPollView(
           ),
         })
       : null
+  const isMember = membership !== null && membership !== undefined
   const isOwner =
-    membership !== null &&
-    membership !== undefined &&
-    canManageContent({ role: membership.role as OrgRole }, viewer.userId!, poll.createdBy)
+    isMember &&
+    canManageContent({ role: membership!.role as OrgRole }, viewer.userId!, poll.createdBy)
+
+  // Notification settings belong to the viewer, not the poll: any org member can follow a poll
+  // and tune their own grid, so this is loaded per viewer rather than read off the poll row.
+  const [viewerSubscription, viewerPrefs] = isMember
+    ? await Promise.all([
+        db.query.notificationSubscriptions.findFirst({
+          where: and(
+            eq(notificationSubscriptions.scopeType, 'poll'),
+            eq(notificationSubscriptions.scopeId, pollId),
+            eq(notificationSubscriptions.userId, viewer.userId!),
+          ),
+        }),
+        db.query.notificationPrefs.findFirst({
+          where: eq(notificationPrefs.userId, viewer.userId!),
+        }),
+      ])
+    : [undefined, undefined]
   const isSignup = poll.type === 'signup'
   const optionIds = poll.options.map((o) => o.id)
   const allVotes = poll.participants.flatMap((p) => p.votes)
@@ -174,8 +203,12 @@ export async function getPollView(
       allowIfNeedBe: poll.allowIfNeedBe,
       signupMaxClaims: poll.signupMaxClaims,
     },
-    notifications: isOwner
-      ? { notifyOnVote: poll.notifyOnVote, notifyOnComment: poll.notifyOnComment }
+    notifications: isMember
+      ? {
+          channels: viewerSubscription?.channels ?? null,
+          defaults: viewerPrefs?.channels ?? null,
+          following: Boolean(viewerSubscription),
+        }
       : null,
     owner: { name: poll.organization.name },
     isOwner,
@@ -408,6 +441,9 @@ export async function deletePoll(
   await requireManagedPoll(db, pollId, org, userId)
   const now = new Date().toISOString()
   await db.update(polls).set({ deletedAt: now, updatedAt: now }).where(eq(polls.id, pollId))
+  // A polymorphic `scopeId` cannot carry a foreign key, so this is the cascade — see
+  // `notificationSubscriptions` in the schema.
+  await deleteScopeSubscriptions(db, { type: 'poll', id: pollId })
 }
 
 export async function duplicatePoll(
@@ -452,8 +488,6 @@ export async function duplicatePoll(
       requireParticipantEmail: original.requireParticipantEmail,
       allowComments: original.allowComments,
       allowIfNeedBe: original.allowIfNeedBe,
-      notifyOnVote: original.notifyOnVote,
-      notifyOnComment: original.notifyOnComment,
       signupMaxClaims: original.signupMaxClaims,
       createdAt: now,
       updatedAt: now,
@@ -461,25 +495,63 @@ export async function duplicatePoll(
     db.insert(pollOptions).values(optionRows),
   ] as [Query, ...Query[]])
 
+  await ensureCreatorSubscription(db, { type: 'poll', id }, userId)
+
+  // Duplicating used to carry the poll's two notify booleans across. The equivalent now is the
+  // duplicator's own override on the original, if they had tuned one — without this, duplicating
+  // a poll silently resets the copy to defaults.
+  const originalOverride = await db.query.notificationSubscriptions.findFirst({
+    where: and(
+      eq(notificationSubscriptions.scopeType, 'poll'),
+      eq(notificationSubscriptions.scopeId, original.id),
+      eq(notificationSubscriptions.userId, userId),
+    ),
+  })
+  if (originalOverride?.channels) {
+    await setScopeChannels(db, { type: 'poll', id }, userId, originalOverride.channels)
+  }
+
   return { id }
 }
 
+/**
+ * Writes the viewer's own per-poll override. Unlike the two booleans this replaces, the settings
+ * are per user rather than per poll, so managing the poll is not required — following it is.
+ * `channels: null` clears the override and falls back to the user's defaults.
+ */
 export async function updateNotificationPrefs(
   db: Db,
   pollId: string,
   org: ActingOrg,
   userId: string,
-  prefs: { notifyOnVote: boolean; notifyOnComment: boolean },
+  channels: NotificationGrid | null,
 ): Promise<void> {
-  await requireManagedPoll(db, pollId, org, userId)
-  await db
-    .update(polls)
-    .set({
-      notifyOnVote: prefs.notifyOnVote,
-      notifyOnComment: prefs.notifyOnComment,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(polls.id, pollId))
+  const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
+  if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
+  if (poll.organizationId !== org.id) throw new AppError('FORBIDDEN')
+
+  const scope = { type: 'poll' as const, id: pollId }
+  // Tuning a poll you have not followed yet is an implicit follow — otherwise the write silently
+  // lands on no row and the UI appears to forget the change.
+  await followScope(db, scope, userId)
+  await setScopeChannels(db, scope, userId, channels)
+}
+
+/** Follow/unfollow a poll's notifications. Any member of the poll's org may follow it. */
+export async function setPollFollowing(
+  db: Db,
+  pollId: string,
+  org: ActingOrg,
+  userId: string,
+  following: boolean,
+): Promise<void> {
+  const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
+  if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
+  if (poll.organizationId !== org.id) throw new AppError('FORBIDDEN')
+
+  const scope = { type: 'poll' as const, id: pollId }
+  if (following) await followScope(db, scope, userId)
+  else await unfollowScope(db, scope, userId)
 }
 
 export async function closeExpiredPoll(db: Db, pollId: string): Promise<boolean> {

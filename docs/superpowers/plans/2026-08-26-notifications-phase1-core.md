@@ -10,6 +10,21 @@
 
 **Spec:** [`docs/superpowers/specs/2026-08-26-notifications-design.md`](../specs/2026-08-26-notifications-design.md)
 
+## Deviations taken during implementation
+
+Recorded as they happened, so the review can argue with the decisions rather than rediscover them.
+
+1. **Test factory names were invented.** The plan called for `makeOrgUser` / `makeMember` / `makePremium` in a `factories.ts` that does not exist. The real helpers live in `test/helpers.ts`: `makeUserWithOrg`, `makeUser` + `addOrgMember`, `makeSubscription`. No new factory module was created.
+2. **Task order changed.** Dropping `notify_on_vote` in Task 2 broke `service.ts`, `PollRoom.ts` and the viewmodel immediately, so Tasks 3–6 were pulled forward and landed as one rewiring pass rather than the planned sequence. One intermediate commit does not typecheck; the commit message says so.
+3. **Digest retries no longer duplicate mail.** The plan's fan-out retried the whole batch, so a single failing address would re-send to everyone who had already succeeded — a failure mode the old single-recipient ladder did not have. `PollRoom` now tracks delivered recipients in `digest:sent` and skips them on retry.
+4. **`Checkbox` UI primitive added.** `src/components/ui/` had `switch.tsx` but no checkbox, and a two-column grid wants checkboxes. Added in the same shadcn/radix style.
+5. **`ImmediateEvent` type added** (`Exclude<NotificationEvent, DigestEvent>`) so `renderNotification`'s parameter is derived from the catalogue instead of hand-listed — the plan's version needed an unsound cast at the emit boundary.
+6. **`poll.closed` reuses the existing `Closed` template.** `renderNotification` delegates rather than duplicating copy that is already written and translated in both locales.
+7. **`PollView.notifications` carries `defaults` too.** The grid needs the account defaults to show what an inherited checkbox actually resolves to; without it an inheriting poll renders every box unchecked.
+8. **`updateNotificationPrefs` implicitly follows.** Tuning a poll you had not followed used to land on no row at all. It now creates the subscription first — and dropped the `requireManagedPoll` gate, because these settings are per-viewer, not per-poll: a teammate must be able to tune a poll they do not manage.
+9. **Duplicating a poll copies the duplicator's override.** The old behaviour copied the poll's two booleans; without this, duplicating silently reset the copy to defaults.
+10. **Still outstanding:** `signup.full` is in the catalogue and the grid but nothing emits it yet; booking events are defined but `BookingRoom` still mails organisers directly; no `prefs.functions.ts`, no account-level settings route, no E2E spec. See the closing status note.
+
 ## Global Constraints
 
 - **bun only.** No `npm`/`pnpm` lockfiles or scripts (CONTRIBUTING.md).
