@@ -325,4 +325,23 @@ describe('TimeSlotEditor / showCapacity', () => {
 
     expect(onSetCapacity).toHaveBeenCalledWith(1, 5)
   })
+
+  it('keeps rendering a slot as unlimited once its capacity is null, instead of snapping back to 1', () => {
+    // Simulates what the parent draft looks like right after the "unlimited" toggle round-trips
+    // through `onSetCapacity` and a re-render — `slot.capacity` is `null`, not `undefined`.
+    render(
+      <TimeSlotEditor
+        date="2026-06-15"
+        slots={[{ start: '09:00', end: null, capacity: null }]}
+        onAdd={vi.fn()}
+        onRemove={vi.fn()}
+        onSetCapacity={vi.fn()}
+        showCapacity
+      />,
+    )
+
+    // The first switch/spinbutton pair belongs to the existing slot; the second is the add-form's.
+    expect(screen.getAllByRole('switch')[0]).toBeChecked()
+    expect(screen.getAllByRole('spinbutton')[0]).toBeDisabled()
+  })
 })

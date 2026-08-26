@@ -111,7 +111,10 @@ export function DateOptionsEditor({
                         <CapacityField
                           id={`date-capacity-${day.date}`}
                           size="sm"
-                          value={day.capacity ?? 1}
+                          // `capacity: undefined` (never set) means the default of 1; `null` is
+                          // unlimited and must pass through unchanged — `?? 1` would wrongly
+                          // coerce that back to 1.
+                          value={day.capacity === undefined ? 1 : day.capacity}
                           onChange={(capacity) =>
                             dispatch({ type: 'setDateCapacity', date: day.date, capacity })
                           }

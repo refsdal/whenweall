@@ -159,6 +159,24 @@ describe('TextOptionsEditor', () => {
     ])
   })
 
+  it('keeps a row unlimited after toggling, instead of snapping back to 1', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(
+      <TextOptionsEditor
+        value={[{ label: 'Setup', capacity: 2 }]}
+        onChange={onChange}
+        showCapacity
+      />,
+    )
+
+    await user.click(screen.getByRole('switch'))
+
+    expect(onChange).toHaveBeenLastCalledWith([{ label: 'Setup', capacity: null }])
+    expect(screen.getByRole('switch')).toBeChecked()
+    expect(screen.getByRole('spinbutton')).toBeDisabled()
+  })
+
   it('stops adding rows once the limit is reached', async () => {
     const user = userEvent.setup()
     render(
