@@ -337,7 +337,7 @@
   "poll_edit": "Rediger avstemningen",
   "poll_duplicate": "Dupliser",
   "poll_duplicated": "Avstemningen er duplisert.",
-  "poll_delete": "Slett avstemningen",
+  "poll_delete": "Slett",
   "poll_delete_title": "Slette denne avstemningen?",
   "poll_delete_body": "Avstemningen, alle svar og alle kommentarer blir borte for godt.",
   "poll_delete_confirm": "Slett",

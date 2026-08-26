@@ -77,6 +77,34 @@ describe('TimeSlotEditor', () => {
     expect(screen.getByRole('button', { name: /add time/i })).toBeDisabled()
   })
 
+  it('constrains the end time field to no earlier than the chosen start time', () => {
+    renderEditor()
+
+    setTime(/start/i, '09:00')
+
+    expect(screen.getByLabelText(/end/i)).toHaveAttribute('min', '09:00')
+  })
+
+  it('bumps an earlier end time up to the newly chosen start time', () => {
+    renderEditor()
+
+    setTime(/start/i, '09:00')
+    setTime(/end/i, '08:00')
+    setTime(/start/i, '11:00')
+
+    expect(screen.getByLabelText(/end/i)).toHaveValue('11:00')
+  })
+
+  it('leaves a still-valid end time untouched when the start time changes', () => {
+    renderEditor()
+
+    setTime(/start/i, '09:00')
+    setTime(/end/i, '12:00')
+    setTime(/start/i, '10:00')
+
+    expect(screen.getByLabelText(/end/i)).toHaveValue('12:00')
+  })
+
   it('lists the slots it is given and removes one by index', async () => {
     const user = userEvent.setup()
     const { onRemove } = renderEditor({

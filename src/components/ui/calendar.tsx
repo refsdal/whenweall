@@ -82,7 +82,7 @@ function Calendar({
         week: cn('mt-2 flex w-full', defaultClassNames.week),
         week_number_header: cn('w-(--cell-size) select-none', defaultClassNames.week_number_header),
         week_number: cn(
-          'text-[0.8rem] text-muted-foreground select-none',
+          'text-[0.7rem] text-muted-foreground/60 tabular-nums select-none',
           defaultClassNames.week_number,
         ),
         day: cn(

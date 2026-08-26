@@ -7,8 +7,14 @@ import { TurnstileField } from '#/components/auth/TurnstileField'
 // in jsdom. Stand in with a button that fires the same callback props the real component takes,
 // so the test proves TurnstileField wires `onToken` to the library correctly.
 vi.mock('@marsidev/react-turnstile', () => ({
-  Turnstile: ({ onSuccess }: { onSuccess: (token: string) => void }) => (
-    <button type="button" onClick={() => onSuccess('tok')}>
+  Turnstile: ({
+    onSuccess,
+    options,
+  }: {
+    onSuccess: (token: string) => void
+    options?: { size?: string }
+  }) => (
+    <button type="button" data-size={options?.size ?? ''} onClick={() => onSuccess('tok')}>
       mock turnstile
     </button>
   ),
@@ -26,5 +32,14 @@ describe('TurnstileField', () => {
     await user.click(widget)
 
     expect(onToken).toHaveBeenCalledWith('tok')
+  })
+
+  it('does not force a fixed widget size, so an invisible-mode widget leaves no empty box', () => {
+    render(<TurnstileField onToken={vi.fn()} />)
+
+    // `@marsidev/react-turnstile` inline-styles its container to a fixed height/min-width
+    // whenever `options.size` is set (e.g. 'flexible' or 'normal'). Leaving it unset is what lets
+    // the container collapse to nothing when the production (invisible) widget renders no UI.
+    expect(screen.getByRole('button', { name: 'mock turnstile' })).toHaveAttribute('data-size', '')
   })
 })
