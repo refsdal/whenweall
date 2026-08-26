@@ -1,6 +1,6 @@
 import { relations, sql } from 'drizzle-orm'
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import { user } from './auth-schema'
+import { organization, user } from './auth-schema'
 
 export * from './auth-schema'
 
@@ -20,9 +20,10 @@ export const polls = sqliteTable(
   'polls',
   {
     id: text('id').primaryKey(),
-    ownerId: text('owner_id')
+    organizationId: text('organization_id')
       .notNull()
-      .references(() => user.id, { onDelete: 'cascade' }),
+      .references(() => organization.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
     type: text('type', { enum: POLL_TYPES }).notNull(),
     title: text('title').notNull(),
     description: text('description'),
@@ -41,7 +42,7 @@ export const polls = sqliteTable(
     updatedAt: text('updated_at').notNull(),
     deletedAt: text('deleted_at'),
   },
-  (t) => [index('polls_owner_created_idx').on(t.ownerId, t.createdAt)],
+  (t) => [index('polls_org_created_idx').on(t.organizationId, t.createdAt)],
 )
 
 export const pollOptions = sqliteTable(
@@ -113,7 +114,11 @@ export const comments = sqliteTable(
 )
 
 export const pollsRelations = relations(polls, ({ one, many }) => ({
-  owner: one(user, { fields: [polls.ownerId], references: [user.id] }),
+  organization: one(organization, {
+    fields: [polls.organizationId],
+    references: [organization.id],
+  }),
+  owner: one(user, { fields: [polls.createdBy], references: [user.id] }),
   options: many(pollOptions),
   participants: many(participants),
   comments: many(comments),
@@ -152,9 +157,13 @@ export const bookingPages = sqliteTable(
   'booking_pages',
   {
     id: text('id').primaryKey(),
-    ownerId: text('owner_id')
+    organizationId: text('organization_id')
       .notNull()
-      .references(() => user.id, { onDelete: 'cascade' }),
+      .references(() => organization.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+    /** Whose calendar/availability this page reads and writes (Google sync) — set to the
+     * creator on create, but reassignable later (e.g. a page handed off to a teammate). */
+    memberUserId: text('member_user_id').references(() => user.id, { onDelete: 'set null' }),
     slug: text('slug').notNull(),
     title: text('title').notNull(),
     description: text('description'),
@@ -177,8 +186,8 @@ export const bookingPages = sqliteTable(
   (t) => [
     // Partial so a soft-deleted page's slug can be reused by a new (or re-created) page — only
     // live pages (deleted_at IS NULL) compete for a slug.
-    uniqueIndex('booking_pages_owner_slug_uidx')
-      .on(t.ownerId, t.slug)
+    uniqueIndex('booking_pages_org_slug_uidx')
+      .on(t.organizationId, t.slug)
       .where(sql`${t.deletedAt} IS NULL`),
   ],
 )
@@ -208,7 +217,20 @@ export const bookings = sqliteTable(
 )
 
 export const bookingPagesRelations = relations(bookingPages, ({ one, many }) => ({
-  owner: one(user, { fields: [bookingPages.ownerId], references: [user.id] }),
+  organization: one(organization, {
+    fields: [bookingPages.organizationId],
+    references: [organization.id],
+  }),
+  creator: one(user, {
+    fields: [bookingPages.createdBy],
+    references: [user.id],
+    relationName: 'bookingPageCreator',
+  }),
+  member: one(user, {
+    fields: [bookingPages.memberUserId],
+    references: [user.id],
+    relationName: 'bookingPageMember',
+  }),
   bookings: many(bookings),
 }))
 

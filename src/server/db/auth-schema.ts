@@ -15,7 +15,6 @@ export const user = sqliteTable('user', {
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
   locale: text('locale'),
-  handle: text('handle'),
 })
 
 export const session = sqliteTable(
