@@ -2,8 +2,10 @@ import { APIError, betterAuth } from 'better-auth'
 import { organization } from 'better-auth/plugins'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
+import { stripe } from '@better-auth/stripe'
 import { drizzle } from 'drizzle-orm/d1'
 import { handleSchema } from '#/server/bookings/schemas'
+import { createStripeClient } from '#/server/billing/stripe'
 
 // This shape exists so `bun run auth:generate` can emit the schema.
 // The runtime auth config (getAuth()) is created in Task 8's src/server/auth/auth.ts,
@@ -36,6 +38,23 @@ export function createAuth(d1: D1Database) {
         },
         // No-op: this CLI config only exists to shape the generated schema.
         sendInvitationEmail: async () => {},
+      }),
+      stripe({
+        // Dummy values: this CLI config only exists to shape the generated schema.
+        stripeClient: createStripeClient('sk_test_dummy'),
+        stripeWebhookSecret: 'whsec_dummy',
+        createCustomerOnSignUp: false,
+        subscription: {
+          enabled: true,
+          plans: [
+            {
+              name: 'premium',
+              priceId: 'price_dummy',
+              annualDiscountPriceId: 'price_dummy_yearly',
+            },
+          ],
+          authorizeReference: async () => false,
+        },
       }),
     ],
     user: {

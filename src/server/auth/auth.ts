@@ -3,6 +3,7 @@ import { captcha, organization } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
+import { stripe } from '@better-auth/stripe'
 import { eq } from 'drizzle-orm'
 import { env as workerEnv } from 'cloudflare:workers'
 import { createDb } from '#/server/db/client'
@@ -13,6 +14,7 @@ import { sendMail } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
+import { authorizeSubscriptionReference, createStripeClient } from '#/server/billing/stripe'
 
 /** Shared by `beforeCreateOrganization`/`beforeUpdateOrganization`: any slug the caller supplies
  * (direct API calls included — this is what actually stops `POST /api/auth/organization/create|
@@ -36,6 +38,10 @@ type AuthEnv = Pick<
   | 'GOOGLE_CLIENT_SECRET'
   | 'TURNSTILE_SECRET_KEY'
   | 'EMAIL_FROM'
+  | 'STRIPE_SECRET_KEY'
+  | 'STRIPE_WEBHOOK_SECRET'
+  | 'STRIPE_PRICE_PREMIUM_MONTHLY'
+  | 'STRIPE_PRICE_PREMIUM_YEARLY'
 > & { EMAIL?: SendEmail; APP_ENV?: string }
 
 export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
@@ -142,6 +148,25 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
               locale,
             })),
           })
+        },
+      }),
+      stripe({
+        stripeClient: createStripeClient(env.STRIPE_SECRET_KEY),
+        stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
+        createCustomerOnSignUp: false,
+        subscription: {
+          enabled: true,
+          plans: [
+            {
+              name: 'premium',
+              priceId: env.STRIPE_PRICE_PREMIUM_MONTHLY,
+              annualDiscountPriceId: env.STRIPE_PRICE_PREMIUM_YEARLY,
+            },
+          ],
+          // Spec §3: subscriptions are org-scoped (referenceId is the org id) and only the org
+          // owner may manage billing for it.
+          authorizeReference: async ({ user, referenceId }) =>
+            authorizeSubscriptionReference(createDb(d1), { userId: user.id, referenceId }),
         },
       }),
       captcha({

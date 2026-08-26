@@ -11,6 +11,8 @@
     "APP_ENV": "development",
     "EMAIL_FROM": "whenweall <no-reply@whenweall.com>",
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    "STRIPE_PRICE_PREMIUM_MONTHLY": "price_premium_monthly_dev",
+    "STRIPE_PRICE_PREMIUM_YEARLY": "price_premium_yearly_dev",
   },
   "d1_databases": [
     {

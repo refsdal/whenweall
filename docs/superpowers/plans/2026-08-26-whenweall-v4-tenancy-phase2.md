@@ -25,6 +25,7 @@
 ### Task 1: Stripe plugin wiring + subscription schema
 
 **Files:**
+
 - Create: `src/server/billing/stripe.ts`
 - Modify: `src/server/auth/auth.ts`, `src/server/auth/auth.cli.ts`, `src/server/auth/client.ts`
 - Modify: `.dev.vars.example`, `wrangler.jsonc`, `test/wrangler.test.jsonc`
@@ -32,6 +33,7 @@
 - Test: `src/server/billing/__tests__/stripe.workers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createAuth` env plumbing (AuthEnv type), org tables.
 - Produces: `getStripe(env): Stripe` (memoized, fetch http client); auth plugin configured with `stripe({ stripeClient, stripeWebhookSecret, createCustomerOnSignUp: false, subscription: { enabled: true, plans: [{ name: 'premium', priceId: env.STRIPE_PRICE_PREMIUM_MONTHLY, annualDiscountPriceId: env.STRIPE_PRICE_PREMIUM_YEARLY }], authorizeReference } })`; `subscription` table in schema; client plugin `stripeClient({ subscription: true })`.
 
@@ -50,9 +52,13 @@ describe('authorizeSubscriptionReference', () => {
     const db = createDb(env.DB)
     const owner = await makeUser(db)
     const org = await makeOrg(db, owner.id)
-    expect(await authorizeSubscriptionReference(db, { userId: owner.id, referenceId: org.id })).toBe(true)
+    expect(
+      await authorizeSubscriptionReference(db, { userId: owner.id, referenceId: org.id }),
+    ).toBe(true)
     const outsider = await makeUser(db)
-    expect(await authorizeSubscriptionReference(db, { userId: outsider.id, referenceId: org.id })).toBe(false)
+    expect(
+      await authorizeSubscriptionReference(db, { userId: outsider.id, referenceId: org.id }),
+    ).toBe(false)
   })
 })
 ```
@@ -95,11 +101,13 @@ export async function authorizeSubscriptionReference(
 ### Task 2: Entitlements module
 
 **Files:**
+
 - Create: `src/server/billing/entitlements.ts`
 - Modify: `test/helpers.ts` (add `makeSubscription`)
 - Test: `src/server/billing/__tests__/entitlements.workers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `subscription` table (Task 1).
 - Produces (spec §4, exact): `type Entitlements = { plan: 'free' | 'premium'; maxSeats: 1 | 10; googleSync: boolean; branding: boolean }`; `getEntitlements(db: Db, orgId: string): Promise<Entitlements>`; `PREMIUM_MAX_SEATS = 10`; helper `makeSubscription(db, orgId, overrides?)` (defaults: plan 'premium', status 'active').
 
@@ -140,12 +148,14 @@ export async function getEntitlements(db: Db, orgId: string): Promise<Entitlemen
 ### Task 3: Seat-gated invitations + accept flow
 
 **Files:**
+
 - Modify: `src/server/auth/auth.ts` (+ `auth.cli.ts`): replace the Phase 1 `beforeCreateInvitation` hard-block with the entitlements seat gate
 - Create: `src/routes/accept-invitation/$id.tsx`
 - Modify: `messages/en.json`, `messages/nb.json`
 - Test: extend `src/server/auth/__tests__/org-plugin.workers.test.ts`; create `src/server/auth/__tests__/invitations.workers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `getEntitlements` (Task 2), Phase 1's `sendInvitationEmail` wiring + OrgInvite template (already built), Better-Auth `organization.acceptInvitation`.
 - Produces: invitation flow — Free org invite → rejected with code the UI can map to an upgrade CTA (`APIError('FORBIDDEN', { message: 'UPGRADE_REQUIRED' })`); Premium org under cap → invitation created + email sent; at cap (`members + pending invitations >= maxSeats`) → rejected `SEAT_LIMIT_REACHED`. Route `/accept-invitation/$id`: signed-in → `authClient.organization.acceptInvitation` then redirect to `/dashboard` (org switched active); signed-out → redirect to `/login?next=/accept-invitation/$id`; invalid/expired → error card with i18n message.
 
@@ -159,6 +169,7 @@ export async function getEntitlements(db: Db, orgId: string): Promise<Entitlemen
 ### Task 4: Billing UI (settings section) + seedable plans
 
 **Files:**
+
 - Create: `src/components/billing/BillingSection.tsx`
 - Modify: `src/routes/settings.tsx` (owner-only Billing section), `src/server/auth/session.functions.ts` (add `entitlements` to the session payload — read via `getEntitlements` in `buildClientSession`)
 - Modify: `src/routes/api/test/seed.ts` (optional `plan: 'premium'` seeds a subscription row)
@@ -166,6 +177,7 @@ export async function getEntitlements(db: Db, orgId: string): Promise<Entitlemen
 - Test: `src/components/billing/__tests__/BillingSection.test.tsx`; extend `session.functions.workers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `authClient.subscription.upgrade/cancel/billingPortal` (client plugin, Task 1); `session.org` (Phase 1); `getEntitlements`.
 - Produces: Billing section visible only to `session.org.role === 'owner'`: plan card (Free: name + "Upgrade to Premium" button calling `authClient.subscription.upgrade({ plan: 'premium', referenceId: org.id, successUrl: '/settings?upgraded=1', cancelUrl: '/settings' })`, monthly/annual toggle; Premium: status, period end, seat usage `X of 10`, "Manage billing" → `authClient.subscription.billingPortal({ referenceId, returnUrl: '/settings' })`, cancel note when `cancelAtPeriodEnd`). `ClientSession` gains `entitlements: Entitlements`.
 
@@ -179,6 +191,7 @@ export async function getEntitlements(db: Db, orgId: string): Promise<Entitlemen
 ### Task 5: Webhook state test, e2e, verification
 
 **Files:**
+
 - Test: `src/server/billing/__tests__/webhook.workers.test.ts`
 - Modify: `e2e/settings.spec.ts` or new `e2e/billing.spec.ts` (free → upgrade CTA visible; seeded premium → plan card + seat usage; invite gate: premium org can send an invite from the API and the accept URL resolves) — static-check only locally, CI runs it
 - Modify: `README.md` (billing section: env vars, Stripe setup steps, webhook URL `/api/auth/stripe/webhook`)
