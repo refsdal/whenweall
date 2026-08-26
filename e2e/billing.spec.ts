@@ -29,11 +29,28 @@ test.describe('billing', () => {
     page,
     userPremium,
   }) => {
+    // TEMPORARY: diagnostic instrumentation for the CI-only invite failure (deterministic there,
+    // not reproducible locally against the real HTTP handler or a preview server). Remove once
+    // the real response/session shape is captured from a CI run.
+    console.log('[diag] seed response', JSON.stringify(userPremium))
+
     await signIn(page, userPremium)
+
+    const sessionResponse = await page.request.get('/api/auth/get-session')
+    console.log(
+      '[diag] get-session',
+      sessionResponse.status(),
+      await sessionResponse.text().catch((e) => `<unreadable: ${e}>`),
+    )
 
     const inviteResponse = await page.request.post('/api/auth/organization/invite-member', {
       data: { email: `invitee-${Date.now()}@example.com`, role: 'member' },
     })
+    console.log(
+      '[diag] invite-member',
+      inviteResponse.status(),
+      await inviteResponse.text().catch((e) => `<unreadable: ${e}>`),
+    )
     expect(inviteResponse.ok()).toBe(true)
     const invitation = (await inviteResponse.json()) as { id: string }
     expect(invitation.id).toBeTruthy()
