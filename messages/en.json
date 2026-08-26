@@ -45,7 +45,6 @@
   "theme_dark": "Dark",
   "theme_switch": "Change theme (currently {mode})",
   "footer_rights": "© {year} {name}",
-  "footer_source": "Source on GitHub",
   "answer_yes": "Yes",
   "answer_ifneedbe": "If need be",
   "answer_no": "No",

@@ -2,25 +2,26 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "whenweall",
   "main": "src/server.ts",
+  "routes": [{ "pattern": "whenweall.com", "custom_domain": true }],
   "compatibility_date": "2026-08-20",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "upload_source_maps": true,
   "vars": {
-    "APP_URL": "http://localhost:3000",
-    "APP_ENV": "development",
+    "APP_URL": "https://whenweall.com",
+    "APP_ENV": "production",
     "EMAIL_FROM": "whenweall <no-reply@whenweall.com>",
-    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAEcpi42QywKz2sSm",
+    // Placeholder ids — replace with the LIVE-mode price ids before this reaches production
+    // (test-mode ids go on the whenweall-test worker's env block, PR #18).
     "STRIPE_PRICE_PREMIUM_MONTHLY": "price_premium_monthly_dev",
     "STRIPE_PRICE_PREMIUM_YEARLY": "price_premium_yearly_dev",
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "whenweall-db",
-      // Placeholder UUID so `wrangler dev` works locally without a real D1 database. Replace
-      // with the id printed by `wrangler d1 create whenweall-db` before deploying.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "whenweall",
+      "database_id": "01c56eb2-4850-4abb-a7a6-42d231f3eaab",
       "migrations_dir": "drizzle",
     },
   ],

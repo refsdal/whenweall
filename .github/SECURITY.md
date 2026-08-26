@@ -11,7 +11,7 @@ Please **do not** open a public issue for security vulnerabilities.
 
 Report privately using one of these channels:
 
-1. GitHub's [private vulnerability reporting](https://github.com/andersro93/scheduler/security/advisories/new)
+1. GitHub's [private vulnerability reporting](https://github.com/refsdal/whenweall/security/advisories/new)
    ("Report a vulnerability" under the Security tab) — preferred.
 2. Email `security@whenweall.com`.
 

@@ -9,8 +9,8 @@
 Free, open-source scheduling polls — propose some dates, share one link, let everyone
 vote, pick the winner. Built to run natively on Cloudflare Workers.
 
-[![CI](https://github.com/andersro93/scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/andersro93/scheduler/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/andersro93/scheduler/actions/workflows/codeql.yml/badge.svg)](https://github.com/andersro93/scheduler/actions/workflows/codeql.yml)
+[![CI](https://github.com/refsdal/whenweall/actions/workflows/ci.yml/badge.svg)](https://github.com/refsdal/whenweall/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/refsdal/whenweall/actions/workflows/codeql.yml/badge.svg)](https://github.com/refsdal/whenweall/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Runs on Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![Built with Bun](https://img.shields.io/badge/built%20with-bun-14151a?logo=bun&logoColor=fbf0df)](https://bun.sh/)
@@ -214,7 +214,7 @@ You need [bun](https://bun.sh/) 1.4+ (see [`.bun-version`](./.bun-version)). No 
 installation is required.
 
 ```bash
-git clone https://github.com/andersro93/scheduler.git whenweall
+git clone https://github.com/refsdal/whenweall.git whenweall
 cd whenweall
 
 bun install                     # also compiles the Paraglide messages
@@ -610,7 +610,7 @@ before you open a PR.
 ## Security
 
 Please **do not** open a public issue for a vulnerability. Report it privately through
-[GitHub's advisory form](https://github.com/andersro93/scheduler/security/advisories/new)
+[GitHub's advisory form](https://github.com/refsdal/whenweall/security/advisories/new)
 or the address in [SECURITY.md](./.github/SECURITY.md), which also carries the
 repository-settings checklist for the owner (branch protection, secret scanning, Dependabot
 alerts, private vulnerability reporting) — those live in the GitHub UI, not in this repo.

@@ -21,8 +21,8 @@
     "test:e2e": "playwright test",
     "screenshots": "SCREENSHOTS=1 playwright test --grep @screenshots",
     "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply whenweall-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply whenweall-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply whenweall --local",
+    "db:migrate:remote": "wrangler d1 migrations apply whenweall --remote",
     "auth:generate": "auth generate --config src/server/auth/auth.cli.ts --output src/server/db/auth-schema.ts -y",
     "cf-typegen": "wrangler types",
     "generate-routes": "tsr generate"
