@@ -16,6 +16,7 @@ import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
 import { authorizeSubscriptionReference, createStripeClient } from '#/server/billing/stripe'
 import { getEntitlements, getSeatsUsed } from '#/server/billing/entitlements'
+import { PREMIUM_PLAN_NAME } from '#/lib/billing'
 
 /** Shared by `beforeCreateOrganization`/`beforeUpdateOrganization`: any slug the caller supplies
  * (direct API calls included — this is what actually stops `POST /api/auth/organization/create|
@@ -173,7 +174,7 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
           enabled: true,
           plans: [
             {
-              name: 'premium',
+              name: PREMIUM_PLAN_NAME,
               priceId: env.STRIPE_PRICE_PREMIUM_MONTHLY,
               annualDiscountPriceId: env.STRIPE_PRICE_PREMIUM_YEARLY,
             },

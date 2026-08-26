@@ -176,4 +176,13 @@ describe('getSeatsUsed', () => {
 
     expect(await getSeatsUsed(db, orgId)).toBe(1)
   })
+
+  it('does not count an expired pending invitation (Better-Auth refuses to accept it anyway, so an unfiltered count would hold that seat forever)', async () => {
+    const { id: ownerId } = await makeUser(db)
+    const { id: orgId } = await makeOrg(db, ownerId)
+    await makeInvitation(db, orgId, ownerId, { expiresAt: new Date(Date.now() - 1000) })
+
+    // owner only — the expired invitation is not an occupied seat
+    expect(await getSeatsUsed(db, orgId)).toBe(1)
+  })
 })

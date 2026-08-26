@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { getDb } from '#/server/db/client'
 import { subscription } from '#/server/db/schema'
 import { requireOrgMiddleware, requireOwnerRole } from '#/server/auth/org'
-import { getSeatsUsed } from '#/server/billing/entitlements'
+import { getSeatsUsed, isActivePremium } from '#/server/billing/entitlements'
 
 /*
  * Same "declare once, reuse for both the function and the manifest" convention as
@@ -14,8 +14,6 @@ const REQUIRE_ORG = [requireOrgMiddleware] as const
 export const SERVER_FN_MIDDLEWARE = {
   getBillingSnapshot: REQUIRE_ORG,
 } as const
-
-const ACTIVE_STATUSES = new Set(['active', 'trialing'])
 
 export type BillingSnapshot = {
   subscription: { status: string; periodEnd: number | null; cancelAtPeriodEnd: boolean } | null
@@ -42,7 +40,7 @@ export const getBillingSnapshot = createServerFn({ method: 'GET' })
       db.query.subscription.findMany({ where: eq(subscription.referenceId, context.org.id) }),
       getSeatsUsed(db, context.org.id),
     ])
-    const active = rows.find((s) => s.plan === 'premium' && ACTIVE_STATUSES.has(s.status)) ?? null
+    const active = rows.find(isActivePremium) ?? null
 
     return {
       subscription: active

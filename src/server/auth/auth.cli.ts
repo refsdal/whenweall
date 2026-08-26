@@ -6,6 +6,7 @@ import { stripe } from '@better-auth/stripe'
 import { drizzle } from 'drizzle-orm/d1'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createStripeClient } from '#/server/billing/stripe'
+import { PREMIUM_PLAN_NAME } from '#/lib/billing'
 
 // This shape exists so `bun run auth:generate` can emit the schema.
 // The runtime auth config (getAuth()) is created in Task 8's src/server/auth/auth.ts,
@@ -49,7 +50,7 @@ export function createAuth(d1: D1Database) {
           enabled: true,
           plans: [
             {
-              name: 'premium',
+              name: PREMIUM_PLAN_NAME,
               priceId: 'price_dummy',
               annualDiscountPriceId: 'price_dummy_yearly',
             },

@@ -6,6 +6,7 @@ import { cn } from '#/lib/utils'
 import { authClient } from '#/server/auth/client'
 import type { OrgRole } from '#/server/auth/org'
 import type { Entitlements } from '#/server/billing/entitlements'
+import { PREMIUM_PLAN_NAME } from '#/lib/billing'
 
 export type BillingSubscriptionSnapshot = {
   status: string
@@ -52,7 +53,7 @@ export function BillingSection({
     setUpgrading(true)
     try {
       const { error } = await authClient.subscription.upgrade({
-        plan: 'premium',
+        plan: PREMIUM_PLAN_NAME,
         referenceId: orgId,
         annual,
         successUrl: '/settings?upgraded=1',
