@@ -182,7 +182,9 @@ describe('getPollView', () => {
     expect(asAnon?.isOwner).toBe(false)
     expect(asAnon?.notifications).toBeNull()
 
-    expect(asOwner?.owner).toEqual({ id: orgId, name: 'Test Org' })
+    // No org id leak to the public/participant view — only the owning org's name is exposed.
+    expect(asOwner?.owner).toEqual({ name: 'Test Org' })
+    expect(asOwner?.owner).not.toHaveProperty('id')
   })
 
   it('reports hasEmail true/false per participant without exposing the email', async () => {

@@ -1,10 +1,12 @@
 import { env } from 'cloudflare:workers'
+import { and, eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
+import { member, organization } from '#/server/db/schema'
 import { requireSessionMiddleware } from '#/server/auth/middleware'
 import { requireOrgMiddleware, type OrgRole } from '#/server/auth/org'
 import { createPoll, requireManagedPoll } from '#/server/polls/service'
-import { addOrgMember, makeUser, makeUserWithOrg } from '../../../../test/helpers'
+import { addOrgMember, makeOrg, makeUser, makeUserWithOrg } from '../../../../test/helpers'
 
 /**
  * Directly invokes a `createMiddleware(...)` object's own `.server` function (available at
@@ -94,15 +96,66 @@ describe('org authorization matrix', () => {
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
   })
 
-  it("a signed-in user whose active org they aren't a member of is rejected with FORBIDDEN", async () => {
+  it("a signed-in user whose active org they aren't a member of falls back to a lazily-created personal org (they have no memberships of their own)", async () => {
     const db = createDb(env.DB)
     const { orgId } = await makeUserWithOrg(db)
-    const { id: strangerId } = await makeUser(db) // never added as a member of orgId
+    // Never added as a member of orgId, and has no org of their own either — same shape as a
+    // dangling activeOrganizationId (e.g. their membership was removed after the session was
+    // issued): the middleware must not lock them out, but it must not silently drop them into
+    // someone else's org either.
+    const { id: strangerId, email: strangerEmail } = await makeUser(db, { name: 'Stranger' })
 
-    const fakeSession = { user: { id: strangerId }, session: { activeOrganizationId: orgId } }
-    await expect(
-      invokeMiddlewareServer(requireOrgMiddleware, { session: fakeSession }),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    const fakeSession = {
+      user: { id: strangerId, name: 'Stranger', email: strangerEmail },
+      session: { activeOrganizationId: orgId },
+    }
+    const result = (await invokeMiddlewareServer(requireOrgMiddleware, {
+      session: fakeSession,
+    })) as { context: { org: { id: string; role: OrgRole } } }
+
+    expect(result.context.org.id).not.toBe(orgId)
+    expect(result.context.org.role).toBe('owner')
+    const created = await db.query.organization.findFirst({
+      where: eq(organization.id, result.context.org.id),
+    })
+    expect(created?.name).toBe('Stranger')
+    const createdMembership = await db.query.member.findFirst({
+      where: and(eq(member.organizationId, result.context.org.id), eq(member.userId, strangerId)),
+    })
+    expect(createdMembership?.role).toBe('owner')
+  })
+
+  it('falls back to the oldest remaining membership when the active org id is dangling (the membership row was deleted) instead of FORBIDDEN', async () => {
+    const db = createDb(env.DB)
+    const { userId, orgId: oldestOrgId } = await makeUserWithOrg(db)
+    const { id: otherOrgId } = await makeOrg(db, userId)
+
+    // Force explicit, unambiguous createdAt ordering (independent of real-clock timing between
+    // the two makeOrg calls above).
+    await db
+      .update(member)
+      .set({ createdAt: new Date('2020-01-01') })
+      .where(and(eq(member.organizationId, oldestOrgId), eq(member.userId, userId)))
+    await db
+      .update(member)
+      .set({ createdAt: new Date('2020-06-01') })
+      .where(and(eq(member.organizationId, otherOrgId), eq(member.userId, userId)))
+
+    // Simulate a dangling activeOrganizationId: the session still points at otherOrgId, but that
+    // membership row is gone (e.g. the user was removed from it after the session was issued).
+    await db
+      .delete(member)
+      .where(and(eq(member.organizationId, otherOrgId), eq(member.userId, userId)))
+
+    const fakeSession = {
+      user: { id: userId, name: 'irrelevant', email: 'irrelevant@example.com' },
+      session: { activeOrganizationId: otherOrgId },
+    }
+    const result = (await invokeMiddlewareServer(requireOrgMiddleware, {
+      session: fakeSession,
+    })) as { context: { org: { id: string; role: OrgRole } } }
+
+    expect(result.context.org).toEqual({ id: oldestOrgId, role: 'owner' })
   })
 
   it('a signed-in member of their active org gets context.org with the right id and role', async () => {

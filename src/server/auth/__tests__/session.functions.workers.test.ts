@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:workers'
+import { and, eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
+import { member } from '#/server/db/schema'
 import { buildClientSession } from '#/server/auth/session.functions'
 import type { Session } from '#/server/auth/auth'
 import { makeOrg, makeUser } from '../../../../test/helpers'
@@ -52,7 +54,7 @@ describe('buildClientSession', () => {
     expect(result?.org).toBeNull()
   })
 
-  it('returns org: null when the active org no longer has a membership row for this user', async () => {
+  it('falls back to a lazily-created personal org when the active org no longer has a membership row for this user (dangling activeOrganizationId)', async () => {
     const db = createDb(env.DB)
     const { id: userId, email } = await makeUser(db)
     const { id: otherId } = await makeUser(db)
@@ -63,6 +65,40 @@ describe('buildClientSession', () => {
       fakeSession({ id: userId, name: 'Test User', email }, orgId),
     )
 
-    expect(result?.org).toBeNull()
+    expect(result?.org?.id).not.toBe(orgId)
+    expect(result?.org).toMatchObject({ name: 'Test User', role: 'owner' })
+  })
+
+  it('falls back to the oldest remaining membership when the active org id is dangling but another membership exists', async () => {
+    const db = createDb(env.DB)
+    const { id: userId, email } = await makeUser(db)
+    const { id: oldestOrgId, slug: oldestSlug } = await makeOrg(db, userId, { name: 'Oldest Org' })
+    const { id: staleOrgId } = await makeOrg(db, userId, { name: 'Stale Org' })
+    // Force explicit, unambiguous createdAt ordering (independent of real-clock timing between
+    // the two makeOrg calls above).
+    await db
+      .update(member)
+      .set({ createdAt: new Date('2020-01-01') })
+      .where(and(eq(member.organizationId, oldestOrgId), eq(member.userId, userId)))
+    await db
+      .update(member)
+      .set({ createdAt: new Date('2020-06-01') })
+      .where(and(eq(member.organizationId, staleOrgId), eq(member.userId, userId)))
+    // The session's activeOrganizationId points at staleOrgId, but that membership row is gone.
+    await db
+      .delete(member)
+      .where(and(eq(member.organizationId, staleOrgId), eq(member.userId, userId)))
+
+    const result = await buildClientSession(
+      db,
+      fakeSession({ id: userId, name: 'Test User', email }, staleOrgId),
+    )
+
+    expect(result?.org).toEqual({
+      id: oldestOrgId,
+      slug: oldestSlug,
+      name: 'Oldest Org',
+      role: 'owner',
+    })
   })
 })

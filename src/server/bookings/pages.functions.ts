@@ -2,8 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import * as z from 'zod'
 import { getDb } from '#/server/db/client'
 import { requireSessionMiddleware } from '#/server/auth/middleware'
-import { requireOrgMiddleware } from '#/server/auth/org'
-import { AppError } from '#/lib/errors'
+import { requireOrgMiddleware, requireOwnerRole } from '#/server/auth/org'
 import { getGoogleCalendarStatus as googleCalendarStatus } from '#/server/google/calendar'
 import { notifyPageChanged } from '#/server/notifications/booking-client'
 import * as pagesService from './pages'
@@ -77,9 +76,9 @@ export const setHandle = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.setHandle)
   .validator(z.object({ handle: handleSchema }))
   .handler(async ({ data, context }) => {
-    // Only owner/admin may change the org's public slug — a plain member's own booking pages
-    // still live under it, so letting them rename it would move everyone else's links too.
-    if (context.org.role === 'member') throw new AppError('FORBIDDEN')
+    // Only the owner may change the org's public slug (spec §1) — everyone's booking pages live
+    // under it, so even an admin renaming it would move every member's links too.
+    requireOwnerRole(context.org.role)
     await pagesService.setOrgSlug(getDb(), context.org.id, data.handle)
   })
 

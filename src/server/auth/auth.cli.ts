@@ -1,8 +1,9 @@
-import { betterAuth } from 'better-auth'
+import { APIError, betterAuth } from 'better-auth'
 import { organization } from 'better-auth/plugins'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
 import { drizzle } from 'drizzle-orm/d1'
+import { handleSchema } from '#/server/bookings/schemas'
 
 // This shape exists so `bun run auth:generate` can emit the schema.
 // The runtime auth config (getAuth()) is created in Task 8's src/server/auth/auth.ts,
@@ -15,6 +16,24 @@ export function createAuth(d1: D1Database) {
       passkey(),
       organization({
         creatorRole: 'owner',
+        // Mirrors the runtime config (auth.ts) for generator parity, even though none of this
+        // affects the generated schema (hooks/limits aren't schema-shaping options).
+        organizationLimit: 5,
+        organizationHooks: {
+          beforeCreateOrganization: async ({ organization: org }) => {
+            if (org.slug !== undefined && !handleSchema.safeParse(org.slug).success) {
+              throw new APIError('BAD_REQUEST', { message: 'Invalid organization slug' })
+            }
+          },
+          beforeUpdateOrganization: async ({ organization: org }) => {
+            if (org.slug !== undefined && !handleSchema.safeParse(org.slug).success) {
+              throw new APIError('BAD_REQUEST', { message: 'Invalid organization slug' })
+            }
+          },
+          beforeCreateInvitation: async () => {
+            throw new APIError('FORBIDDEN', { message: 'Invitations are not available yet' })
+          },
+        },
         // No-op: this CLI config only exists to shape the generated schema.
         sendInvitationEmail: async () => {},
       }),

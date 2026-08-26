@@ -1,8 +1,16 @@
 import { and, eq, ne } from 'drizzle-orm'
 import type { Db } from '#/server/db/client'
 import { member, organization } from '#/server/db/schema'
+import { LIMITS } from '#/server/bookings/schemas'
 
-/** Lowercased, ascii-folded, hyphen-joined; ≤24 chars so the random suffix fits handleSchema. */
+/** The random suffix `createPersonalOrganization` appends is `-` (1) + 6 chars, so the slugified
+ * base must leave that much room under `handleSchema`'s max — otherwise a long name's org slug
+ * fails `handleSchema` wherever it's validated (e.g. `publicAvailabilityQuerySchema` on every
+ * public booking page under that org). */
+const SLUG_BASE_MAX = LIMITS.handleMax - 7
+
+/** Lowercased, ascii-folded, hyphen-joined; ≤ SLUG_BASE_MAX chars so the random suffix still fits
+ * handleSchema. */
 export function slugifyOrgName(name: string): string {
   return name
     .normalize('NFKD')
@@ -14,7 +22,7 @@ export function slugifyOrgName(name: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .replace(/-{2,}/g, '-')
-    .slice(0, 24)
+    .slice(0, SLUG_BASE_MAX)
     .replace(/-+$/, '')
 }
 
@@ -49,18 +57,25 @@ export async function createPersonalOrganization(
 }
 
 /**
- * Deletes every organization where `userId` is the sole `owner`-role member — meant to run right
- * before the user row itself is deleted (`databaseHooks.user.delete.before`). Content ownership
- * lives on the organization now (v4 tenancy): `polls`/`bookingPages` cascade from `organization`,
- * not from `user`, so with no owner left to speak for it an org (most commonly someone's personal
- * one) would otherwise survive its departed owner forever, along with every poll and booking page
- * under it — including a still-live, still-bookable public booking page nobody can manage anymore.
+ * Keeps every organization where `userId` is the sole `owner`-role member usable after they leave
+ * — meant to run right before the user row itself is deleted (`databaseHooks.user.delete.before`).
+ * Content ownership lives on the organization now (v4 tenancy): `polls`/`bookingPages` cascade
+ * from `organization`, not from `user`, so an org with no owner left to speak for it (most
+ * commonly someone's personal one) would otherwise survive its departed owner forever but be
+ * unmanageable, along with every poll and booking page under it — including a still-live,
+ * still-bookable public booking page nobody can manage anymore.
  *
- * An org with another `owner`-role member survives untouched, including this user's own content in
- * it (`createdBy`/`memberUserId` simply go `null` via their own `set null` FKs). This user's
- * `member` row — here and in every other org they belonged to — is left for `member.userId`'s own
- * `onDelete: 'cascade'` to clean up once the user row is actually deleted just after this hook
- * returns; deleting it here too would be redundant.
+ * An org with another `owner`-role member survives untouched. An org with no other owner but at
+ * least one other (non-owner) member instead gets that member promoted to owner — the oldest
+ * remaining one, by `member.createdAt` — so the org and everyone else's content in it survives
+ * with someone able to manage it. Only when the departing user was the org's *last* member of any
+ * role is the org actually deleted.
+ *
+ * Either way, this user's own content in a surviving org (`createdBy`/`memberUserId`) simply goes
+ * `null` via their own `set null` FKs, and this user's `member` row — here and in every other org
+ * they belonged to — is left for `member.userId`'s own `onDelete: 'cascade'` to clean up once the
+ * user row is actually deleted just after this hook returns; deleting it here too would be
+ * redundant.
  */
 export async function deleteOrphanedOwnerOrganizations(db: Db, userId: string): Promise<void> {
   const ownedMemberships = await db.query.member.findMany({
@@ -75,7 +90,16 @@ export async function deleteOrphanedOwnerOrganizations(db: Db, userId: string): 
         ne(member.userId, userId),
       ),
     })
-    if (!otherOwner) {
+    if (otherOwner) continue
+
+    const oldestOtherMember = await db.query.member.findFirst({
+      where: and(eq(member.organizationId, membership.organizationId), ne(member.userId, userId)),
+      orderBy: (m, { asc }) => [asc(m.createdAt)],
+    })
+
+    if (oldestOtherMember) {
+      await db.update(member).set({ role: 'owner' }).where(eq(member.id, oldestOtherMember.id))
+    } else {
       await db.delete(organization).where(eq(organization.id, membership.organizationId))
     }
   }

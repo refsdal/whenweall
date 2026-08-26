@@ -1,11 +1,9 @@
 import { createServerFn } from '@tanstack/react-start'
-import { and, eq } from 'drizzle-orm'
 import type { Db } from '#/server/db/client'
 import { getDb } from '#/server/db/client'
-import { member } from '#/server/db/schema'
 import { sessionMiddleware } from './middleware'
 import type { Session } from './auth'
-import type { OrgRole } from './org'
+import { resolveActiveOrg, type OrgRole } from './org'
 
 export type ClientSessionPayload = {
   user: {
@@ -31,13 +29,7 @@ export async function buildClientSession(
   const s = session
   if (!s) return null
 
-  const activeOrgId = (s.session as { activeOrganizationId?: string | null }).activeOrganizationId
-  const membership = activeOrgId
-    ? await db.query.member.findFirst({
-        where: and(eq(member.organizationId, activeOrgId), eq(member.userId, s.user.id)),
-        with: { organization: true },
-      })
-    : null
+  const org = await resolveActiveOrg(db, s)
 
   return {
     user: {
@@ -47,14 +39,7 @@ export async function buildClientSession(
       image: s.user.image ?? null,
       locale: (s.user as { locale?: string }).locale ?? null,
     },
-    org: membership
-      ? {
-          id: membership.organizationId,
-          slug: membership.organization.slug,
-          name: membership.organization.name,
-          role: membership.role as OrgRole,
-        }
-      : null,
+    org: org ? { id: org.id, slug: org.slug, name: org.name, role: org.role } : null,
   }
 }
 

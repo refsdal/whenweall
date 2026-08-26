@@ -227,14 +227,20 @@ export async function sendBookingEmails(
 
     // The organiser email/name/locale come from `memberUserId` — whoever's calendar this page
     // reads/writes (see `google-sync.ts`) — not the org itself (organizations have no email).
-    // Best-effort: if the page has no member assigned, there's simply no one to notify.
+    // Best-effort: if the page has no member assigned, there's simply no one to notify — but that
+    // must only skip the *organiser* send below, not the visitor's own confirmation/cancellation/
+    // reminder email (and, for `confirmed`/`rescheduled`, their manage link — the manage token is
+    // never recoverable once this call returns, so a visitor's own email must not be dropped just
+    // because there's no organiser to also notify).
     const owner = page.memberUserId
       ? await db.query.user.findFirst({ where: eq(user.id, page.memberUserId) })
       : null
-    if (!owner) return { sent, failed }
 
     const visitorLocale = booking.visitorLocale ?? 'en'
-    const organiserLocale = owner.locale ?? 'en'
+    const organiserLocale = owner?.locale ?? 'en'
+    // Falls back to the org's own name so the visitor's email still has *someone* to address
+    // ("your booking with Acme Org was confirmed") when there's no organiser account to name.
+    const organiserName = owner?.name ?? org.name
     const visitorWhen = bookingWhen(
       booking.startAt,
       booking.endAt,
@@ -262,7 +268,7 @@ export async function sendBookingEmails(
         await renderBookingConfirmed({
           visitorName: booking.visitorName,
           pageTitle: page.title,
-          organiserName: owner.name,
+          organiserName,
           when: visitorWhen,
           location: page.location,
           manageUrl,
@@ -271,21 +277,23 @@ export async function sendBookingEmails(
         attachments,
       )
 
-      await deliver(
-        owner.email,
-        await renderBookingOrganiserNotice({
-          organiserName: owner.name,
-          pageTitle: page.title,
-          visitorName: booking.visitorName,
-          visitorEmail: booking.visitorEmail,
-          visitorNote: booking.visitorNote,
-          when: organiserWhen,
-          location: page.location,
-          viewUrl: dashboardUrl,
-          locale: organiserLocale,
-        }),
-        attachments,
-      )
+      if (owner) {
+        await deliver(
+          owner.email,
+          await renderBookingOrganiserNotice({
+            organiserName: owner.name,
+            pageTitle: page.title,
+            visitorName: booking.visitorName,
+            visitorEmail: booking.visitorEmail,
+            visitorNote: booking.visitorNote,
+            when: organiserWhen,
+            location: page.location,
+            viewUrl: dashboardUrl,
+            locale: organiserLocale,
+          }),
+          attachments,
+        )
+      }
 
       return { sent, failed }
     }
@@ -304,7 +312,7 @@ export async function sendBookingEmails(
         await renderBookingRescheduled({
           visitorName: booking.visitorName,
           pageTitle: page.title,
-          organiserName: owner.name,
+          organiserName,
           previousWhen: previousVisitorWhen,
           when: visitorWhen,
           location: page.location,
@@ -314,27 +322,29 @@ export async function sendBookingEmails(
         attachments,
       )
 
-      const previousOrganiserWhen = opts.previousStartAt
-        ? bookingWhen(opts.previousStartAt, null, organiserLocale, page.timezone)
-        : organiserWhen
+      if (owner) {
+        const previousOrganiserWhen = opts.previousStartAt
+          ? bookingWhen(opts.previousStartAt, null, organiserLocale, page.timezone)
+          : organiserWhen
 
-      // The organiser gets its own "booking moved" template rather than the plain "new booking"
-      // notice (`BookingOrganiserNotice`, reused for `confirmed`) — a reschedule is not a new
-      // booking, and the organiser needs the previous time alongside the new one.
-      await deliver(
-        owner.email,
-        await renderBookingRescheduledOrganiser({
-          organiserName: owner.name,
-          pageTitle: page.title,
-          visitorName: booking.visitorName,
-          previousWhen: previousOrganiserWhen,
-          when: organiserWhen,
-          location: page.location,
-          viewUrl: dashboardUrl,
-          locale: organiserLocale,
-        }),
-        attachments,
-      )
+        // The organiser gets its own "booking moved" template rather than the plain "new booking"
+        // notice (`BookingOrganiserNotice`, reused for `confirmed`) — a reschedule is not a new
+        // booking, and the organiser needs the previous time alongside the new one.
+        await deliver(
+          owner.email,
+          await renderBookingRescheduledOrganiser({
+            organiserName: owner.name,
+            pageTitle: page.title,
+            visitorName: booking.visitorName,
+            previousWhen: previousOrganiserWhen,
+            when: organiserWhen,
+            location: page.location,
+            viewUrl: dashboardUrl,
+            locale: organiserLocale,
+          }),
+          attachments,
+        )
+      }
 
       return { sent, failed }
     }
@@ -354,18 +364,20 @@ export async function sendBookingEmails(
         }),
       )
 
-      await deliver(
-        owner.email,
-        await renderBookingCancelled({
-          recipientName: owner.name,
-          pageTitle: page.title,
-          when: organiserWhen,
-          cancelledBy: cancelledBy === 'organiser' ? 'you' : 'visitor',
-          visitorName: booking.visitorName,
-          viewUrl: dashboardUrl,
-          locale: organiserLocale,
-        }),
-      )
+      if (owner) {
+        await deliver(
+          owner.email,
+          await renderBookingCancelled({
+            recipientName: owner.name,
+            pageTitle: page.title,
+            when: organiserWhen,
+            cancelledBy: cancelledBy === 'organiser' ? 'you' : 'visitor',
+            visitorName: booking.visitorName,
+            viewUrl: dashboardUrl,
+            locale: organiserLocale,
+          }),
+        )
+      }
 
       return { sent, failed }
     }
@@ -383,17 +395,19 @@ export async function sendBookingEmails(
       }),
     )
 
-    await deliver(
-      owner.email,
-      await renderBookingReminder({
-        recipientName: owner.name,
-        pageTitle: page.title,
-        when: organiserWhen,
-        location: page.location,
-        viewUrl: dashboardUrl,
-        locale: organiserLocale,
-      }),
-    )
+    if (owner) {
+      await deliver(
+        owner.email,
+        await renderBookingReminder({
+          recipientName: owner.name,
+          pageTitle: page.title,
+          when: organiserWhen,
+          location: page.location,
+          viewUrl: dashboardUrl,
+          locale: organiserLocale,
+        }),
+      )
+    }
 
     return { sent, failed }
   } catch (err) {

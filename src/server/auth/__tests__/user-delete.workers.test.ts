@@ -158,4 +158,70 @@ describe('deleting a user', () => {
     })
     expect(remainingMembers.map((m) => m.userId)).toEqual([ownerBId])
   })
+
+  it('promotes the oldest remaining member to owner (rather than deleting the org) when the sole owner leaves but a plain member is still around', async () => {
+    const auth = createAuth({ d1: env.DB, env: authEnv })
+    const password = 'password-123456'
+    const {
+      userId: ownerId,
+      orgId,
+      cookie,
+    } = await signUpVerifiedWithOrg(auth, 'Sole Owner', password)
+    const { userId: memberId } = await signUpVerifiedWithOrg(auth, 'Plain Member', password)
+
+    const db = createDb(env.DB)
+    await db.insert(member).values({
+      id: crypto.randomUUID(),
+      organizationId: orgId,
+      userId: memberId,
+      role: 'member',
+      createdAt: new Date(),
+    })
+
+    const { id: pollId } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'options',
+        title: 'Lunch spot',
+        timezone: 'Europe/Oslo',
+        options: [{ kind: 'text', label: 'Pizza' }],
+      },
+    )
+    const { id: pageId } = await createPage(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        slug: 'intro-call-promote',
+        title: 'Intro call',
+        timezone: 'Europe/Oslo',
+        slotDurationMin: 30,
+        bufferBeforeMin: 0,
+        bufferAfterMin: 0,
+        minNoticeMin: 0,
+        maxDaysAhead: 60,
+        availability: {},
+        googleSync: false,
+        reminders: true,
+      },
+    )
+
+    await auth.api.deleteUser({
+      headers: new Headers({ ...Object.fromEntries(captchaHeaders), cookie }),
+      body: { password },
+    })
+
+    expect(await db.query.user.findFirst({ where: eq(user.id, ownerId) })).toBeUndefined()
+    expect(
+      await db.query.organization.findFirst({ where: eq(organization.id, orgId) }),
+    ).toBeTruthy()
+    expect(await db.query.polls.findFirst({ where: eq(polls.id, pollId) })).toBeTruthy()
+    expect(
+      await db.query.bookingPages.findFirst({ where: eq(bookingPages.id, pageId) }),
+    ).toBeTruthy()
+
+    const remaining = await db.query.member.findFirst({ where: eq(member.organizationId, orgId) })
+    expect(remaining?.userId).toBe(memberId)
+    expect(remaining?.role).toBe('owner')
+  })
 })

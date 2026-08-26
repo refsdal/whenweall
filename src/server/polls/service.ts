@@ -177,7 +177,7 @@ export async function getPollView(
     notifications: isOwner
       ? { notifyOnVote: poll.notifyOnVote, notifyOnComment: poll.notifyOnComment }
       : null,
-    owner: { id: poll.organization.id, name: poll.organization.name },
+    owner: { name: poll.organization.name },
     isOwner,
     options: poll.options.map((o) => ({
       id: o.id,

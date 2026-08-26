@@ -1,4 +1,4 @@
-import { betterAuth } from 'better-auth'
+import { APIError, betterAuth } from 'better-auth'
 import { captcha, organization } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
@@ -11,7 +11,22 @@ import { member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
 import { sendMail } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
+import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
+
+/** Shared by `beforeCreateOrganization`/`beforeUpdateOrganization`: any slug the caller supplies
+ * (direct API calls included — this is what actually stops `POST /api/auth/organization/create|
+ * update` from bypassing `handleSchema`) must satisfy the same rules as a booking-page handle,
+ * since an org's slug *is* its public booking handle (`/book/<slug>/...`). */
+function assertValidOrgSlug(slug: string | undefined): void {
+  if (slug === undefined) return
+  const result = handleSchema.safeParse(slug)
+  if (!result.success) {
+    throw new APIError('BAD_REQUEST', {
+      message: result.error.issues[0]?.message ?? 'Invalid organization slug',
+    })
+  }
+}
 
 type AuthEnv = Pick<
   Env,
@@ -98,6 +113,24 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       passkey({ rpID: url.hostname, rpName: appConfig.name, origin: env.APP_URL }),
       organization({
         creatorRole: 'owner',
+        // Every (currently Free-tier) org can have at most 5 — counts the user's personal org too.
+        organizationLimit: 5,
+        organizationHooks: {
+          beforeCreateOrganization: async ({ organization: org }) => {
+            assertValidOrgSlug(org.slug)
+          },
+          beforeUpdateOrganization: async ({ organization: org }) => {
+            assertValidOrgSlug(org.slug)
+          },
+          // Phase 1 has no seat model and no `/accept-invitation` route yet — every (Free) org
+          // can't invite anyway, so block it here rather than ship a dead-end invite flow.
+          // `sendInvitationEmail`/`renderOrgInvite` stay wired below for Phase 2/3.
+          beforeCreateInvitation: async () => {
+            throw new APIError('FORBIDDEN', {
+              message: 'Invitations are not available yet',
+            })
+          },
+        },
         sendInvitationEmail: async ({ email, organization: org, inviter, id }) => {
           const locale = (inviter.user as { locale?: string }).locale ?? appConfig.defaultLocale
           await sendMail(env, {

@@ -45,7 +45,7 @@ function SettingsPage() {
 
       <Separator />
 
-      {session.org && session.org.role !== 'member' && (
+      {session.org && session.org.role === 'owner' && (
         <>
           <section>
             <HandleSection handle={session.org.slug} appUrl={publicConfig.appUrl} />

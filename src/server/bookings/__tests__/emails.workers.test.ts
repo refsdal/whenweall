@@ -142,6 +142,46 @@ describe('sendBookingEmails', () => {
     expect(ownerCall?.[1].html).toContain('26')
   })
 
+  it('still sends the visitor a confirmed email (with manage link + ics) when the page has no assigned member, and skips the organiser send', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
+      name: 'Ada',
+      email: 'ada-no-member@example.com',
+    })
+    await setOrgSlug(db, orgId, 'ada-no-member')
+    const { id: pageId } = await makeBookingPage(db, {
+      orgId,
+      createdBy: ownerId,
+      memberUserId: null,
+    })
+    const { bookingId, manageToken } = await createBooking(
+      db,
+      pageId,
+      {
+        startAt: TUE_9AM,
+        name: 'Bob',
+        email: 'bob-no-member@example.com',
+        timezone: 'Europe/Oslo',
+      },
+      [],
+      new Date('2026-08-20T00:00:00Z'),
+    )
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    const result = await sendBookingEmails(testEnv, 'confirmed', bookingId, {
+      db,
+      mailer,
+      manageToken,
+    })
+
+    expect(result).toEqual({ sent: 1, failed: 0 })
+    expect(mailer).toHaveBeenCalledTimes(1)
+    const [visitorCall] = mailer.mock.calls
+    expect(visitorCall?.[1].to).toBe('bob-no-member@example.com')
+    expect(visitorCall?.[1].html).toContain(manageToken)
+    expect(visitorCall?.[1].attachments?.[0]?.filename).toBe('calendar.ics')
+  })
+
   it('counts a mailer failure without throwing', async () => {
     const db = createDb(env.DB)
     const { userId: ownerId, orgId } = await makeUserWithOrg(db, {

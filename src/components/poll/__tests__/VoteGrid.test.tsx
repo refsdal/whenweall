@@ -28,7 +28,7 @@ function makePoll(overrides: Partial<PollView> = {}): PollView {
       signupMaxClaims: 1,
     },
     notifications: null,
-    owner: { id: 'user_1', name: 'Ada' },
+    owner: { name: 'Ada' },
     isOwner: false,
     options: [
       {

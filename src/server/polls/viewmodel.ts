@@ -47,7 +47,9 @@ export type PollView = {
     signupMaxClaims: number
   }
   notifications: { notifyOnVote: boolean; notifyOnComment: boolean } | null
-  owner: { id: string; name: string }
+  // No `id` here — this view is public (any participant/viewer sees it), and nothing in the
+  // client reads the org id; the booking public view deliberately omits it the same way.
+  owner: { name: string }
   isOwner: boolean
   options: PollOptionView[]
   participants: ParticipantView[]
