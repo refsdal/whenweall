@@ -68,6 +68,17 @@ export function TimeSlotEditor({
     setCapacity(1)
   }
 
+  /**
+   * The end field's options should begin at the newly chosen start time (so "the first available
+   * option is the start time" per the add-slot form), and an already-entered end that is now
+   * earlier than the start no longer makes sense as a plain same-day window — bump it up to the
+   * new minimum rather than leaving a stale, invalid-looking value behind.
+   */
+  function handleStartChange(value: string) {
+    setStart(value)
+    if (end && end < value) setEnd(value)
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== 'Enter') return
     event.preventDefault()
@@ -146,7 +157,7 @@ export function TimeSlotEditor({
             id={startId}
             type="time"
             value={start}
-            onChange={(e) => setStart(e.target.value)}
+            onChange={(e) => handleStartChange(e.target.value)}
             onKeyDown={handleKeyDown}
             className="h-9 w-[7.5rem] tabular-nums"
           />
@@ -159,6 +170,7 @@ export function TimeSlotEditor({
             id={endId}
             type="time"
             value={end}
+            min={start || undefined}
             onChange={(e) => setEnd(e.target.value)}
             onKeyDown={handleKeyDown}
             className="h-9 w-[7.5rem] tabular-nums"

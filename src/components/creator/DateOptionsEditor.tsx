@@ -68,6 +68,8 @@ export function DateOptionsEditor({
           disabled={{ before: today }}
           startMonth={today}
           showOutsideDays={false}
+          showWeekNumber
+          ISOWeek
           onSelect={(_selected, triggerDate) => toggleDate(toKey(triggerDate))}
           className="w-fit bg-transparent p-3 [--cell-size:--spacing(9)]"
         />

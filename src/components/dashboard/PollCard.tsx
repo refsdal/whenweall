@@ -111,7 +111,7 @@ export function PollCard({
         )}
       </div>
 
-      <div className="mt-1 flex items-center gap-1.5">
+      <div className="mt-1 flex flex-wrap items-center gap-1.5">
         <Button asChild size="sm" variant="outline">
           <Link to="/p/$id" params={{ id: poll.id }}>
             {m.dashboard_open_action()}
