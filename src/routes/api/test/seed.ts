@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 import { eq } from 'drizzle-orm'
 import { getAuth } from '#/server/auth/auth'
 import { getDb } from '#/server/db/client'
-import { member } from '#/server/db/schema'
+import { member, subscription } from '#/server/db/schema'
 import * as pollService from '#/server/polls/service'
 import { createPage, setOrgSlug } from '#/server/bookings/pages'
 import type { CreateBookingPageInput } from '#/server/bookings/schemas'
@@ -15,6 +15,9 @@ type SeedBody = {
   withPoll?: boolean
   withSignup?: boolean
   withBookingPage?: boolean
+  /** Inserts an active premium subscription row for the seeded org, so e2e can exercise premium
+   * billing states (seat usage, "Manage billing", etc.) without going through real Stripe. */
+  plan?: 'premium'
 }
 
 /** Weekday (Mon–Fri) 09:00–17:00, 30-min slots, Europe/Oslo — mirrors `test/helpers.ts`'
@@ -121,6 +124,17 @@ export async function seedResponse(body: SeedBody): Promise<Response> {
     const created = await createPage(db, { organizationId, createdBy }, page)
     pageId = created.id
     slug = page.slug
+  }
+
+  if (body.plan === 'premium') {
+    await db.insert(subscription).values({
+      id: crypto.randomUUID(),
+      plan: 'premium',
+      referenceId: organizationId,
+      status: 'active',
+      periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      cancelAtPeriodEnd: false,
+    })
   }
 
   return Response.json({ email, password, name, pollId, pageId, handle, slug })

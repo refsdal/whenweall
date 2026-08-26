@@ -4,6 +4,11 @@ import { getDb } from '#/server/db/client'
 import { sessionMiddleware } from './middleware'
 import type { Session } from './auth'
 import { resolveActiveOrg, type OrgRole } from './org'
+import {
+  FREE_ENTITLEMENTS,
+  getEntitlements,
+  type Entitlements,
+} from '#/server/billing/entitlements'
 
 export type ClientSessionPayload = {
   user: {
@@ -14,6 +19,7 @@ export type ClientSessionPayload = {
     locale: string | null
   }
   org: { id: string; slug: string; name: string; role: OrgRole } | null
+  entitlements: Entitlements
 }
 
 /**
@@ -30,6 +36,7 @@ export async function buildClientSession(
   if (!s) return null
 
   const org = await resolveActiveOrg(db, s)
+  const entitlements = org ? await getEntitlements(db, org.id) : FREE_ENTITLEMENTS
 
   return {
     user: {
@@ -40,6 +47,7 @@ export async function buildClientSession(
       locale: (s.user as { locale?: string }).locale ?? null,
     },
     org: org ? { id: org.id, slug: org.slug, name: org.name, role: org.role } : null,
+    entitlements,
   }
 }
 

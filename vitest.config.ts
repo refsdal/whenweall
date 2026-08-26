@@ -31,6 +31,11 @@ export default defineConfig(async () => {
           test: {
             name: 'workers',
             include: ['**/*.workers.test.ts'],
+            // Unanchored so it also matches `test/**`; that also matches sibling agent
+            // worktrees under `.claude/worktrees/**` (see `using-git-worktrees`) when one
+            // happens to be checked out alongside this repo — those are separate checkouts,
+            // sometimes on other branches, never this repo's own tests to run.
+            exclude: ['.claude/**'],
             setupFiles: ['./test/apply-migrations.ts'],
           },
           resolve: { alias: { '#': path.resolve(import.meta.dirname, 'src') } },

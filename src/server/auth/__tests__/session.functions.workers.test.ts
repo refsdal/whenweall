@@ -5,7 +5,8 @@ import { createDb } from '#/server/db/client'
 import { member } from '#/server/db/schema'
 import { buildClientSession } from '#/server/auth/session.functions'
 import type { Session } from '#/server/auth/auth'
-import { makeOrg, makeUser } from '../../../../test/helpers'
+import { FREE_ENTITLEMENTS } from '#/server/billing/entitlements'
+import { makeOrg, makeSubscription, makeUser } from '../../../../test/helpers'
 
 /** A minimal stand-in for Better-Auth's `Session` shape — just the fields `buildClientSession`
  * actually reads (`user.{id,name,email,image}`, `user.locale` as an additional field, and
@@ -39,6 +40,26 @@ describe('buildClientSession', () => {
     expect(result).toEqual({
       user: { id: userId, name: 'Ada', email, image: null, locale: 'nb' },
       org: { id: orgId, slug, name: 'Ada Org', role: 'admin' },
+      entitlements: FREE_ENTITLEMENTS,
+    })
+  })
+
+  it('includes premium entitlements once the org has an active premium subscription', async () => {
+    const db = createDb(env.DB)
+    const { id: userId, email } = await makeUser(db)
+    const { id: orgId } = await makeOrg(db, userId)
+    await makeSubscription(db, orgId, { plan: 'premium', status: 'active' })
+
+    const result = await buildClientSession(
+      db,
+      fakeSession({ id: userId, name: 'Test User', email }, orgId),
+    )
+
+    expect(result?.entitlements).toEqual({
+      plan: 'premium',
+      maxSeats: 10,
+      googleSync: true,
+      branding: true,
     })
   })
 
@@ -52,6 +73,7 @@ describe('buildClientSession', () => {
     )
 
     expect(result?.org).toBeNull()
+    expect(result?.entitlements).toEqual(FREE_ENTITLEMENTS)
   })
 
   it('falls back to a lazily-created personal org when the active org no longer has a membership row for this user (dangling activeOrganizationId)', async () => {

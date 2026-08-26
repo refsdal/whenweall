@@ -3,6 +3,7 @@ import { createFileRoute, redirect, useNavigate, useRouter } from '@tanstack/rea
 import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import { PasskeyManager } from '#/components/auth/PasskeyManager'
+import { BillingSection } from '#/components/billing/BillingSection'
 import { HandleField } from '#/components/booking/HandleField'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
 import { Button } from '#/components/ui/button'
@@ -20,6 +21,7 @@ import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { m } from '#/lib/i18n'
 import { authClient } from '#/server/auth/client'
+import { getBillingSnapshot } from '#/server/billing/billing.functions'
 import { setHandle } from '#/server/bookings/pages.functions'
 
 export const Route = createFileRoute('/settings')({
@@ -28,11 +30,18 @@ export const Route = createFileRoute('/settings')({
       throw redirect({ to: '/login', search: { next: '/settings' } })
     }
   },
+  // `getBillingSnapshot` requires org owner (throws otherwise), so it's only ever called when
+  // the session's org role is already known to be 'owner' — fetched here rather than folded
+  // into `getSession`/`buildClientSession` since it's only needed on this one page.
+  loader: async ({ context }) => ({
+    billing: context.session?.org?.role === 'owner' ? await getBillingSnapshot() : null,
+  }),
   component: SettingsPage,
 })
 
 function SettingsPage() {
   const { session, publicConfig } = Route.useRouteContext()
+  const { billing } = Route.useLoaderData()
   if (!session) return null
 
   return (
@@ -49,6 +58,18 @@ function SettingsPage() {
         <>
           <section>
             <HandleSection handle={session.org.slug} appUrl={publicConfig.appUrl} />
+          </section>
+
+          <Separator />
+
+          <section>
+            <BillingSection
+              orgId={session.org.id}
+              role={session.org.role}
+              entitlements={session.entitlements}
+              subscription={billing?.subscription ?? null}
+              seatsUsed={billing?.seatsUsed ?? 0}
+            />
           </section>
 
           <Separator />
