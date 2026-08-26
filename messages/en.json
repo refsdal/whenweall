@@ -610,6 +610,7 @@
   "settings_handle_invalid": "Use 3–30 lowercase letters, digits or hyphens.",
   "settings_handle_current": "Your booking pages live at {url}",
   "billing_title": "Billing",
+  "billing_subtitle": "Manage your plan and billing details.",
   "billing_free_plan": "Free plan",
   "billing_premium_plan": "Premium plan",
   "billing_upgrade_cta": "Upgrade to Premium",
