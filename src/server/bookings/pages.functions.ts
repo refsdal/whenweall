@@ -2,6 +2,8 @@ import { createServerFn } from '@tanstack/react-start'
 import * as z from 'zod'
 import { getDb } from '#/server/db/client'
 import { requireSessionMiddleware } from '#/server/auth/middleware'
+import { requireOrgMiddleware } from '#/server/auth/org'
+import { AppError } from '#/lib/errors'
 import { getGoogleCalendarStatus as googleCalendarStatus } from '#/server/google/calendar'
 import { notifyPageChanged } from '#/server/notifications/booking-client'
 import * as pagesService from './pages'
@@ -15,14 +17,17 @@ import { createBookingPageSchema, handleSchema, updateBookingPageSchema } from '
  * manifest can never drift from what a function actually runs.
  */
 const REQUIRE_SESSION = [requireSessionMiddleware] as const
+const REQUIRE_ORG = [requireOrgMiddleware] as const
 
 export const SERVER_FN_MIDDLEWARE = {
-  createBookingPage: REQUIRE_SESSION,
-  updateBookingPage: REQUIRE_SESSION,
-  deleteBookingPage: REQUIRE_SESSION,
-  listMyBookingPages: REQUIRE_SESSION,
-  getBookingPage: REQUIRE_SESSION,
-  setHandle: REQUIRE_SESSION,
+  createBookingPage: REQUIRE_ORG,
+  updateBookingPage: REQUIRE_ORG,
+  deleteBookingPage: REQUIRE_ORG,
+  listMyBookingPages: REQUIRE_ORG,
+  getBookingPage: REQUIRE_ORG,
+  setHandle: REQUIRE_ORG,
+  // Google Calendar connection status/disconnect is about the signed-in user's own account, not
+  // the org — a plain session (not necessarily an org membership) is enough.
   getGoogleCalendarStatus: REQUIRE_SESSION,
   disconnectGoogleCalendar: REQUIRE_SESSION,
 } as const
@@ -31,7 +36,11 @@ export const createBookingPage = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.createBookingPage)
   .validator(createBookingPageSchema)
   .handler(async ({ data, context }) => {
-    return pagesService.createPage(getDb(), context.session.user.id, data)
+    return pagesService.createPage(
+      getDb(),
+      { organizationId: context.org.id, createdBy: context.session.user.id },
+      data,
+    )
   })
 
 export const updateBookingPage = createServerFn({ method: 'POST' })
@@ -39,7 +48,7 @@ export const updateBookingPage = createServerFn({ method: 'POST' })
   .validator(updateBookingPageSchema)
   .handler(async ({ data, context }) => {
     const { pageId, ...input } = data
-    await pagesService.updatePage(getDb(), pageId, context.session.user.id, input)
+    await pagesService.updatePage(getDb(), pageId, context.org, context.session.user.id, input)
     await notifyPageChanged(pageId)
   })
 
@@ -47,28 +56,31 @@ export const deleteBookingPage = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.deleteBookingPage)
   .validator(z.object({ pageId: z.string() }))
   .handler(async ({ data, context }) => {
-    await pagesService.deletePage(getDb(), data.pageId, context.session.user.id)
+    await pagesService.deletePage(getDb(), data.pageId, context.org, context.session.user.id)
     await notifyPageChanged(data.pageId)
   })
 
 export const listMyBookingPages = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.listMyBookingPages)
   .handler(async ({ context }) => {
-    return pagesService.listMyPages(getDb(), context.session.user.id)
+    return pagesService.listMyPages(getDb(), context.org.id)
   })
 
 export const getBookingPage = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.getBookingPage)
   .validator(z.object({ pageId: z.string() }))
   .handler(async ({ data, context }) => {
-    return pagesService.getOwnedPage(getDb(), data.pageId, context.session.user.id)
+    return pagesService.getOwnedPage(getDb(), data.pageId, context.org, context.session.user.id)
   })
 
 export const setHandle = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.setHandle)
   .validator(z.object({ handle: handleSchema }))
   .handler(async ({ data, context }) => {
-    await pagesService.setUserHandle(getDb(), context.session.user.id, data.handle)
+    // Only owner/admin may change the org's public slug — a plain member's own booking pages
+    // still live under it, so letting them rename it would move everyone else's links too.
+    if (context.org.role === 'member') throw new AppError('FORBIDDEN')
+    await pagesService.setOrgSlug(getDb(), context.org.id, data.handle)
   })
 
 /** Token probe: whether this owner currently has a usable Google Calendar connection, without

@@ -13,7 +13,7 @@ import { asLocaleOptions } from '#/lib/i18n'
 import { formatOptionLabel } from '#/lib/time'
 import * as m from '#/paraglide/messages'
 import type { Db } from '#/server/db/client'
-import { bookingPages, bookings, user, type CancelledBy } from '#/server/db/schema'
+import { bookingPages, bookings, organization, user, type CancelledBy } from '#/server/db/schema'
 import { sendMail } from '#/server/mailer/mailer'
 
 type Rendered = { subject: string; html: string; text: string }
@@ -220,7 +220,17 @@ export async function sendBookingEmails(
     })
     if (!page) return { sent, failed }
 
-    const owner = await db.query.user.findFirst({ where: eq(user.id, page.ownerId) })
+    const org = await db.query.organization.findFirst({
+      where: eq(organization.id, page.organizationId),
+    })
+    if (!org) return { sent, failed }
+
+    // The organiser email/name/locale come from `memberUserId` — whoever's calendar this page
+    // reads/writes (see `google-sync.ts`) — not the org itself (organizations have no email).
+    // Best-effort: if the page has no member assigned, there's simply no one to notify.
+    const owner = page.memberUserId
+      ? await db.query.user.findFirst({ where: eq(user.id, page.memberUserId) })
+      : null
     if (!owner) return { sent, failed }
 
     const visitorLocale = booking.visitorLocale ?? 'en'
@@ -239,9 +249,7 @@ export async function sendBookingEmails(
     )
     const manageUrl = `${env.APP_URL}/booking/${bookingId}${opts.manageToken ? `?t=${opts.manageToken}` : ''}`
     const dashboardUrl = `${env.APP_URL}/bookings/${page.id}`
-    const publicPageUrl = owner.handle
-      ? `${env.APP_URL}/book/${owner.handle}/${page.slug}`
-      : env.APP_URL
+    const publicPageUrl = `${env.APP_URL}/book/${org.slug}/${page.slug}`
 
     if (kind === 'confirmed') {
       const ics = bookingIcs(bookingId, page, booking.startAt, booking.endAt, env.APP_URL)
@@ -418,7 +426,9 @@ export async function sendGoogleSyncFailedNotice(
     })
     if (!page) return
 
-    const owner = await db.query.user.findFirst({ where: eq(user.id, page.ownerId) })
+    const owner = page.memberUserId
+      ? await db.query.user.findFirst({ where: eq(user.id, page.memberUserId) })
+      : null
     if (!owner) return
 
     const rendered = await renderBookingSyncFailed({

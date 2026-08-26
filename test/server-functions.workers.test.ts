@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { requireSessionMiddleware, sessionMiddleware } from '#/server/auth/middleware'
+import { requireOrgMiddleware } from '#/server/auth/org'
 import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { resolveVerifiedParticipantId } from '#/server/polls/comment-auth'
 import { addParticipant } from '#/server/polls/participants'
@@ -13,7 +14,7 @@ import {
 import * as participantsFunctions from '#/server/polls/participants.functions'
 import * as pagesFunctions from '#/server/bookings/pages.functions'
 import * as bookingsFunctions from '#/server/bookings/bookings.functions'
-import { makePoll, makeUser } from './helpers'
+import { makePoll, makeUserWithOrg } from './helpers'
 
 // Server functions pull in `cloudflare:workers`, better-auth, and rate-limit/turnstile modules
 // that only resolve correctly inside the Workers runtime. This proves the module graph for both
@@ -75,8 +76,8 @@ describe('polls.functions middleware wiring', () => {
     'duplicatePoll',
     'listMyPolls',
     'updateNotificationPrefs',
-  ] as const)('%s requires a session via requireSessionMiddleware', (name) => {
-    expect(M[name]).toContain(requireSessionMiddleware)
+  ] as const)('%s requires an active org via requireOrgMiddleware', (name) => {
+    expect(M[name]).toContain(requireOrgMiddleware)
   })
 
   it('getPoll only requires the (optional) session lookup, not requireSessionMiddleware', () => {
@@ -158,11 +159,17 @@ describe('pages.functions middleware wiring', () => {
     'listMyBookingPages',
     'getBookingPage',
     'setHandle',
-    'getGoogleCalendarStatus',
-    'disconnectGoogleCalendar',
-  ] as const)('%s requires a session via requireSessionMiddleware', (name) => {
-    expect(M[name]).toContain(requireSessionMiddleware)
+  ] as const)('%s requires an active org via requireOrgMiddleware', (name) => {
+    expect(M[name]).toContain(requireOrgMiddleware)
   })
+
+  it.each(['getGoogleCalendarStatus', 'disconnectGoogleCalendar'] as const)(
+    "%s is about the signed-in user's own Google connection, so it only requires a session",
+    (name) => {
+      expect(M[name]).toContain(requireSessionMiddleware)
+      expect(M[name]).not.toContain(requireOrgMiddleware)
+    },
+  )
 })
 
 describe('bookings.functions middleware wiring', () => {
@@ -194,16 +201,16 @@ describe('bookings.functions middleware wiring', () => {
     }
   })
 
-  it('listPageBookings requires a session (owner-only)', () => {
-    expect(M.listPageBookings).toContain(requireSessionMiddleware)
+  it('listPageBookings requires an active org (owner/admin/creator-only)', () => {
+    expect(M.listPageBookings).toContain(requireOrgMiddleware)
   })
 })
 
 describe('resolveVerifiedParticipantId (addComment participantId-verification branch)', () => {
   it('resolves the participant id when the edit token matches', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const { participantId, editToken } = await addParticipant(db, pollId, {
       name: 'Alice',
       answers: {},
@@ -217,8 +224,8 @@ describe('resolveVerifiedParticipantId (addComment participantId-verification br
 
   it('returns null for a wrong edit token', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const { participantId } = await addParticipant(db, pollId, {
       name: 'Alice',
       answers: {},
@@ -232,9 +239,9 @@ describe('resolveVerifiedParticipantId (addComment participantId-verification br
 
   it('returns null when the participant belongs to a different poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
-    const { id: otherPollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
+    const { id: otherPollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const { participantId, editToken } = await addParticipant(db, otherPollId, {
       name: 'Alice',
       answers: {},

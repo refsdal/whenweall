@@ -26,7 +26,7 @@ function EditBookingPageRoute() {
       // Remounts when a different page is opened, so the draft never carries over from the last.
       key={page.id}
       page={page}
-      handle={session?.user.handle ?? null}
+      handle={session?.org?.slug ?? null}
       appUrl={publicConfig.appUrl}
       googleEnabled={publicConfig.googleEnabled}
     />

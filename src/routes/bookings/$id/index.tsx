@@ -94,7 +94,7 @@ function BookingPageRoute() {
   const router = useRouter()
   const cancelFn = useServerFn(cancelBooking)
 
-  const handle = session?.user.handle ?? null
+  const handle = session?.org?.slug ?? null
   const publicUrl = `${publicConfig.appUrl}/book/${handle ?? ''}/${page.slug}`
   const display = `${bookingPrefix(publicConfig.appUrl)}${handle ?? ''}/${page.slug}`
 

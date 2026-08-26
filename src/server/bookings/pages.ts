@@ -1,10 +1,24 @@
 import { and, eq, gte, isNull } from 'drizzle-orm'
 import type { Db } from '#/server/db/client'
-import { bookingPages, bookings, user, type BookingPage } from '#/server/db/schema'
+import { bookingPages, bookings, organization, type BookingPage } from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
 import { newId } from '#/lib/ids'
+import { canManageContent, type OrgRole } from '#/server/auth/org'
 import type { CreateBookingPageInput, UpdateBookingPageInput } from './schemas'
 import type { PageSummary, PageView, PublicPageView } from './viewmodel'
+
+/** The creator/org pair a page is created under. `createdBy` is nullable on the row (cleared if
+ * the creator's account is later deleted), but a fresh creation always has one. `memberUserId`
+ * defaults to `createdBy` when omitted — the page's calendar/availability starts as the
+ * creator's own, reassignable later (e.g. handed off to a teammate). */
+export type PageOwner = {
+  organizationId: string
+  createdBy: string | null
+  memberUserId?: string | null
+}
+
+/** The acting org + role, as `requireOrgMiddleware` produces it. */
+export type ActingOrg = { id: string; role: OrgRole }
 
 /**
  * D1/SQLite reports a unique-index violation as a `DrizzleQueryError` whose own `message` is just
@@ -51,16 +65,19 @@ function toPageView(page: BookingPage): PageView {
 
 export async function createPage(
   db: Db,
-  ownerId: string,
+  owner: PageOwner,
   input: CreateBookingPageInput,
 ): Promise<{ id: string }> {
   const id = newId()
   const now = new Date().toISOString()
+  const memberUserId = owner.memberUserId !== undefined ? owner.memberUserId : owner.createdBy
 
   try {
     await db.insert(bookingPages).values({
       id,
-      ownerId,
+      organizationId: owner.organizationId,
+      createdBy: owner.createdBy,
+      memberUserId,
       slug: input.slug,
       title: input.title,
       description: input.description ?? null,
@@ -87,24 +104,31 @@ export async function createPage(
   return { id }
 }
 
-export async function requireOwnedPage(
+/**
+ * NOT_FOUND when the page doesn't exist, is soft-deleted, or belongs to a different org (no
+ * leaking whether a page id exists at all outside the caller's own org); FORBIDDEN when it's in
+ * the right org but the caller can't manage it (a plain member managing someone else's page).
+ */
+export async function requireManagedPage(
   db: Db,
   pageId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
 ): Promise<BookingPage> {
   const page = await db.query.bookingPages.findFirst({ where: eq(bookingPages.id, pageId) })
-  if (!page || page.deletedAt) throw new AppError('NOT_FOUND')
-  if (page.ownerId !== ownerId) throw new AppError('FORBIDDEN')
+  if (!page || page.deletedAt || page.organizationId !== org.id) throw new AppError('NOT_FOUND')
+  if (!canManageContent(org, userId, page.createdBy)) throw new AppError('FORBIDDEN')
   return page
 }
 
 export async function updatePage(
   db: Db,
   pageId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
   input: Omit<UpdateBookingPageInput, 'pageId'>,
 ): Promise<void> {
-  await requireOwnedPage(db, pageId, ownerId)
+  await requireManagedPage(db, pageId, org, userId)
   const now = new Date().toISOString()
 
   const set: Partial<typeof bookingPages.$inferInsert> = { updatedAt: now }
@@ -134,8 +158,13 @@ export async function updatePage(
   }
 }
 
-export async function deletePage(db: Db, pageId: string, ownerId: string): Promise<void> {
-  await requireOwnedPage(db, pageId, ownerId)
+export async function deletePage(
+  db: Db,
+  pageId: string,
+  org: ActingOrg,
+  userId: string,
+): Promise<void> {
+  await requireManagedPage(db, pageId, org, userId)
   const now = new Date().toISOString()
   await db
     .update(bookingPages)
@@ -143,10 +172,10 @@ export async function deletePage(db: Db, pageId: string, ownerId: string): Promi
     .where(eq(bookingPages.id, pageId))
 }
 
-export async function listMyPages(db: Db, ownerId: string): Promise<PageSummary[]> {
+export async function listMyPages(db: Db, organizationId: string): Promise<PageSummary[]> {
   const now = new Date().toISOString()
   const rows = await db.query.bookingPages.findMany({
-    where: and(eq(bookingPages.ownerId, ownerId), isNull(bookingPages.deletedAt)),
+    where: and(eq(bookingPages.organizationId, organizationId), isNull(bookingPages.deletedAt)),
     orderBy: (p, { desc }) => [desc(p.createdAt)],
     with: {
       bookings: {
@@ -166,8 +195,13 @@ export async function listMyPages(db: Db, ownerId: string): Promise<PageSummary[
   }))
 }
 
-export async function getOwnedPage(db: Db, pageId: string, ownerId: string): Promise<PageView> {
-  const page = await requireOwnedPage(db, pageId, ownerId)
+export async function getOwnedPage(
+  db: Db,
+  pageId: string,
+  org: ActingOrg,
+  userId: string,
+): Promise<PageView> {
+  const page = await requireManagedPage(db, pageId, org, userId)
   return toPageView(page)
 }
 
@@ -175,24 +209,25 @@ export async function getOwnedPage(db: Db, pageId: string, ownerId: string): Pro
  * Public lookup for `/book/<handle>/<slug>`. Returns the page (including a paused `status`, so
  * the route can show a "not currently accepting bookings" message) for any handle/slug pair that
  * resolves to a page that hasn't been soft-deleted — `createBooking` is what actually rejects a
- * paused page (`PAGE_PAUSED`), not this lookup.
+ * paused page (`PAGE_PAUSED`), not this lookup. `handle` is the organization's slug (formerly the
+ * owning user's `handle`, before content ownership moved to organizations).
  */
 export async function getPublicPage(
   db: Db,
   handle: string,
   slug: string,
 ): Promise<PublicPageView | null> {
-  const owner = await db.query.user.findFirst({ where: eq(user.handle, handle) })
-  if (!owner) return null
+  const org = await db.query.organization.findFirst({ where: eq(organization.slug, handle) })
+  if (!org) return null
 
   const page = await db.query.bookingPages.findFirst({
-    where: and(eq(bookingPages.ownerId, owner.id), eq(bookingPages.slug, slug)),
+    where: and(eq(bookingPages.organizationId, org.id), eq(bookingPages.slug, slug)),
   })
   if (!page || page.deletedAt) return null
 
   return {
     id: page.id,
-    handle: owner.handle ?? handle,
+    handle: org.slug,
     slug: page.slug,
     title: page.title,
     description: page.description,
@@ -201,23 +236,25 @@ export async function getPublicPage(
     slotDurationMin: page.slotDurationMin,
     maxDaysAhead: page.maxDaysAhead,
     status: page.status,
-    owner: { name: owner.name },
+    owner: { name: org.name },
   }
 }
 
-/** `disconnectGoogleCalendar` server fn: turns off `googleSync` on every page this owner has —
- * the linked Google account itself is unlinked separately (via settings/Better-Auth), so this is
- * just the booking-side switch that stops calendar reads/writes for their pages. */
-export async function disconnectGoogleSync(db: Db, ownerId: string): Promise<void> {
+/** `disconnectGoogleCalendar` server fn: turns off `googleSync` on every page whose calendar is
+ * this user's (`memberUserId`) — the linked Google account itself is unlinked separately (via
+ * settings/Better-Auth), so this is just the booking-side switch that stops calendar reads/writes
+ * for pages reading/writing their calendar. Deliberately scoped by `memberUserId`, not the org —
+ * disconnecting *your* Google account must not silently turn off sync on a teammate's pages. */
+export async function disconnectGoogleSync(db: Db, userId: string): Promise<void> {
   await db
     .update(bookingPages)
     .set({ googleSync: false, updatedAt: new Date().toISOString() })
-    .where(eq(bookingPages.ownerId, ownerId))
+    .where(eq(bookingPages.memberUserId, userId))
 }
 
-export async function setUserHandle(db: Db, userId: string, handle: string): Promise<void> {
+export async function setOrgSlug(db: Db, orgId: string, slug: string): Promise<void> {
   try {
-    await db.update(user).set({ handle }).where(eq(user.id, userId))
+    await db.update(organization).set({ slug }).where(eq(organization.id, orgId))
   } catch (err) {
     if (isUniqueConstraintError(err)) throw new AppError('HANDLE_TAKEN')
     throw err

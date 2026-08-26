@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { AppError } from '#/lib/errors'
 import { localToUtcIso } from '#/lib/time'
-import { setUserHandle, updatePage } from '#/server/bookings/pages'
+import { setOrgSlug, updatePage } from '#/server/bookings/pages'
 import {
   bookedIntervals,
   cancelBooking,
@@ -12,7 +12,13 @@ import {
   listBookings,
   rescheduleBooking,
 } from '#/server/bookings/bookings'
-import { makeBooking, makeBookingPage, makeUser } from '../../../../test/helpers'
+import {
+  addOrgMember,
+  makeBooking,
+  makeBookingPage,
+  makeUser,
+  makeUserWithOrg,
+} from '../../../../test/helpers'
 
 const NOW = new Date('2026-08-20T00:00:00Z')
 // 2026-08-25 is a Tuesday; the default makeBookingPage fixture is available Mon–Fri 09:00–17:00.
@@ -22,8 +28,8 @@ const TUE_930AM = localToUtcIso('2026-08-25', '09:30', 'Europe/Oslo')
 describe('createBooking', () => {
   it('creates a confirmed booking and returns a 43-char manage token', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
 
     const { bookingId, manageToken } = await createBooking(
       db,
@@ -43,9 +49,10 @@ describe('createBooking', () => {
 
   it('throws PAGE_PAUSED for a paused page', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
-    await updatePage(db, pageId, ownerId, { status: 'paused' })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
+    await updatePage(db, pageId, org, ownerId, { status: 'paused' })
 
     await expect(
       createBooking(
@@ -60,8 +67,8 @@ describe('createBooking', () => {
 
   it('throws BOOKING_PAST when startAt is before now', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
 
     await expect(
       createBooking(
@@ -76,8 +83,8 @@ describe('createBooking', () => {
 
   it('throws SLOT_UNAVAILABLE outside availability', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const outsideHours = localToUtcIso('2026-08-25', '08:00', 'Europe/Oslo')
 
     await expect(
@@ -93,11 +100,18 @@ describe('createBooking', () => {
 
   it('throws SLOT_UNAVAILABLE when the candidate collides with an existing booking plus buffer', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, {
-      bufferBeforeMin: 15,
-      bufferAfterMin: 15,
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      {
+        orgId,
+        createdBy: ownerId,
+      },
+      {
+        bufferBeforeMin: 15,
+        bufferAfterMin: 15,
+      },
+    )
     await makeBooking(db, pageId, TUE_9AM, { endAt: TUE_930AM })
 
     // Adjacent slot: 09:30–10:00 — its own 15-min bufferBeforeMin pads it back to 09:15, which
@@ -115,15 +129,22 @@ describe('createBooking', () => {
 
   it('buffers apply once (via the candidate), not twice via the stored busy interval', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     // 15-min slots so 09:30/09:45/10:30/10:45 (quarter-hour offsets from the 10:00 booking) are
     // all valid slot starts on the generateSlots grid — the existing 10:00–10:30 booking itself
     // is seeded as a raw row via makeBooking, so it doesn't need to be grid-aligned.
-    const { id: pageId } = await makeBookingPage(db, ownerId, {
-      slotDurationMin: 15,
-      bufferBeforeMin: 15,
-      bufferAfterMin: 15,
-    })
+    const { id: pageId } = await makeBookingPage(
+      db,
+      {
+        orgId,
+        createdBy: ownerId,
+      },
+      {
+        slotDurationMin: 15,
+        bufferBeforeMin: 15,
+        bufferAfterMin: 15,
+      },
+    )
     const tenAm = localToUtcIso('2026-08-25', '10:00', 'Europe/Oslo')
     const tenThirtyAm = localToUtcIso('2026-08-25', '10:30', 'Europe/Oslo')
     await makeBooking(db, pageId, tenAm, { endAt: tenThirtyAm })
@@ -168,8 +189,8 @@ describe('createBooking', () => {
 
   it('rejects a slot blocked by a caller-supplied busy interval (e.g. Google Calendar)', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
 
     await expect(
       createBooking(
@@ -186,14 +207,21 @@ describe('createBooking', () => {
 describe('bookedIntervals', () => {
   it('returns confirmed bookings as raw [start, end) intervals (no buffer applied) and excludes cancelled ones', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     // Buffers configured but must NOT show up in the returned intervals — generateSlots is the
     // single place buffers apply (applied to whichever candidate slot it's checking), so
     // expanding the stored interval here too would double-apply them.
-    const { id: pageId } = await makeBookingPage(db, ownerId, {
-      bufferBeforeMin: 5,
-      bufferAfterMin: 10,
-    })
+    const { id: pageId } = await makeBookingPage(
+      db,
+      {
+        orgId,
+        createdBy: ownerId,
+      },
+      {
+        bufferBeforeMin: 5,
+        bufferAfterMin: 10,
+      },
+    )
     await makeBooking(db, pageId, TUE_9AM, { endAt: TUE_930AM })
     await makeBooking(db, pageId, TUE_930AM, { status: 'cancelled', cancelledBy: 'visitor' })
 
@@ -209,8 +237,8 @@ describe('bookedIntervals', () => {
 describe('cancelBooking', () => {
   it('cancels a confirmed booking and is idempotent on a second call', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM)
 
     await expect(cancelBooking(db, bookingId, 'visitor')).resolves.toEqual({ changed: true })
@@ -228,8 +256,8 @@ describe('cancelBooking', () => {
 describe('rescheduleBooking', () => {
   it('moves the booking, keeps the manage token, and does not block on its own prior slot', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { bookingId, manageToken } = await createBooking(
       db,
       pageId,
@@ -248,11 +276,18 @@ describe('rescheduleBooking', () => {
 
   it('rescheduling to the exact same slot succeeds (its own interval does not self-block)', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, {
-      bufferBeforeMin: 15,
-      bufferAfterMin: 15,
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      {
+        orgId,
+        createdBy: ownerId,
+      },
+      {
+        bufferBeforeMin: 15,
+        bufferAfterMin: 15,
+      },
+    )
     const { bookingId } = await createBooking(
       db,
       pageId,
@@ -269,8 +304,8 @@ describe('rescheduleBooking', () => {
 
   it('throws SLOT_UNAVAILABLE when the new slot collides with another booking', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { bookingId } = await createBooking(
       db,
       pageId,
@@ -287,11 +322,16 @@ describe('rescheduleBooking', () => {
 })
 
 describe('getBookingForManage', () => {
-  it('authorises by token, by owner, and rejects both a bad token and a non-owner', async () => {
+  it('authorises by token, by a manager (owner/admin) of the page org, and rejects a bad token, a same-org non-manager, and a different org', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: otherId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: memberId } = await makeUser(db)
+    await addOrgMember(db, orgId, memberId)
+    const memberOrg = { id: orgId, role: 'member' as const }
+    const { userId: otherId, orgId: otherOrgId } = await makeUserWithOrg(db)
+    const otherOrg = { id: otherOrgId, role: 'owner' as const }
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { bookingId, manageToken } = await createBooking(
       db,
       pageId,
@@ -303,25 +343,32 @@ describe('getBookingForManage', () => {
     await expect(getBookingForManage(db, bookingId, { token: manageToken })).resolves.toMatchObject(
       { id: bookingId },
     )
-    await expect(getBookingForManage(db, bookingId, { ownerId })).resolves.toMatchObject({
-      id: bookingId,
-    })
+    await expect(
+      getBookingForManage(db, bookingId, { org, userId: ownerId }),
+    ).resolves.toMatchObject({ id: bookingId })
     await expect(
       getBookingForManage(db, bookingId, { token: 'wrong-token' }),
     ).rejects.toMatchObject(new AppError('INVALID_TOKEN'))
-    await expect(getBookingForManage(db, bookingId, { ownerId: otherId })).rejects.toMatchObject(
-      new AppError('FORBIDDEN'),
-    )
-    await expect(getBookingForManage(db, 'missing', { ownerId })).rejects.toMatchObject(
-      new AppError('NOT_FOUND'),
-    )
+    await expect(
+      getBookingForManage(db, bookingId, { org: memberOrg, userId: memberId }),
+    ).rejects.toMatchObject(new AppError('FORBIDDEN'))
+    await expect(
+      getBookingForManage(db, bookingId, { org: otherOrg, userId: otherId }),
+    ).rejects.toMatchObject(new AppError('NOT_FOUND'))
+    await expect(
+      getBookingForManage(db, 'missing', { org, userId: ownerId }),
+    ).rejects.toMatchObject(new AppError('NOT_FOUND'))
   })
 
-  it('carries the page handle, slug, duration and organiser name so the manage page can reschedule', async () => {
+  it('carries the page handle (org slug), slug, duration and organiser name so the manage page can reschedule', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, { name: 'Ada' })
-    await setUserHandle(db, ownerId, `ada-${Math.random().toString(36).slice(2, 8)}`)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { slug: 'chat' })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, { name: 'Ada' })
+    await setOrgSlug(db, orgId, `ada-${Math.random().toString(36).slice(2, 8)}`)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { slug: 'chat' },
+    )
     const { bookingId, manageToken } = await createBooking(
       db,
       pageId,
@@ -335,51 +382,42 @@ describe('getBookingForManage', () => {
     expect(view.page.slug).toBe('chat')
     expect(view.page.handle).toMatch(/^ada-/)
     expect(view.page.slotDurationMin).toBe(30)
-    expect(view.page.owner).toEqual({ name: 'Ada' })
-    // Never the owner's internal id — a token-bearing visitor gets this exact shape.
-    expect(view.page).not.toHaveProperty('ownerId')
-  })
-
-  it('reports a null handle when the organiser has not picked one yet', async () => {
-    const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
-    const { bookingId } = await createBooking(
-      db,
-      pageId,
-      { startAt: TUE_9AM, name: 'Bob', email: 'bob@example.com', timezone: 'Europe/Oslo' },
-      [],
-      NOW,
-    )
-
-    const view = await getBookingForManage(db, bookingId, { ownerId })
-
-    expect(view.page.handle).toBeNull()
+    expect(view.page.owner).toEqual({ name: 'Test Org' })
+    // Never the org's internal id — a token-bearing visitor gets this exact shape.
+    expect(view.page).not.toHaveProperty('organizationId')
   })
 })
 
 describe('listBookings', () => {
-  it('returns bookings within range for the owner and rejects a non-owner', async () => {
+  it('returns bookings within range for a manager and rejects a same-org non-manager and a different org', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: otherId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: memberId } = await makeUser(db)
+    await addOrgMember(db, orgId, memberId)
+    const memberOrg = { id: orgId, role: 'member' as const }
+    const { userId: otherId, orgId: otherOrgId } = await makeUserWithOrg(db)
+    const otherOrg = { id: otherOrgId, role: 'owner' as const }
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     await makeBooking(db, pageId, TUE_9AM)
     const outOfRange = localToUtcIso('2026-09-25', '09:00', 'Europe/Oslo')
     await makeBooking(db, pageId, outOfRange)
 
-    const rows = await listBookings(db, pageId, ownerId, {
+    const rows = await listBookings(db, pageId, org, ownerId, {
       from: new Date('2026-08-01T00:00:00Z'),
       to: new Date('2026-09-01T00:00:00Z'),
     })
     expect(rows).toHaveLength(1)
     expect(rows[0]?.startAt).toBe(TUE_9AM)
 
-    await expect(listBookings(db, pageId, otherId, { from: NOW, to: NOW })).rejects.toMatchObject(
-      new AppError('FORBIDDEN'),
-    )
     await expect(
-      listBookings(db, 'missing', ownerId, { from: NOW, to: NOW }),
+      listBookings(db, pageId, memberOrg, memberId, { from: NOW, to: NOW }),
+    ).rejects.toMatchObject(new AppError('FORBIDDEN'))
+    await expect(
+      listBookings(db, pageId, otherOrg, otherId, { from: NOW, to: NOW }),
+    ).rejects.toMatchObject(new AppError('NOT_FOUND'))
+    await expect(
+      listBookings(db, 'missing', org, ownerId, { from: NOW, to: NOW }),
     ).rejects.toMatchObject(new AppError('NOT_FOUND'))
   })
 })

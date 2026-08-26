@@ -3,7 +3,7 @@ import type { Db } from '#/server/db/client'
 import {
   bookingPages,
   bookings,
-  user,
+  organization,
   type Booking,
   type BookingPage,
   type CancelledBy,
@@ -12,7 +12,11 @@ import { AppError } from '#/lib/errors'
 import { isSlotAvailable, type Interval, type PageRules } from '#/lib/availability'
 import { newId } from '#/lib/ids'
 import { generateToken, hashToken, verifyToken } from '#/lib/tokens'
+import { canManageContent, type OrgRole } from '#/server/auth/org'
 import type { BookingForManage, BookingView } from './viewmodel'
+
+/** The acting org + role, as `requireOrgMiddleware` produces it. */
+export type ActingOrg = { id: string; role: OrgRole }
 
 export function pageRulesFrom(page: BookingPage): PageRules {
   return {
@@ -201,10 +205,16 @@ export async function rescheduleBooking(
   return { changed: true, previousStartAt }
 }
 
+/**
+ * Auth: a visitor's manage token always works; the org path additionally requires the page to
+ * belong to the caller's active org (NOT_FOUND otherwise — no leaking whether a booking id exists
+ * outside the caller's own org) and a role that can manage it (FORBIDDEN — a plain member acting
+ * on a page they didn't create).
+ */
 export async function getBookingForManage(
   db: Db,
   bookingId: string,
-  auth: { token: string } | { ownerId: string },
+  auth: { token: string } | { org: ActingOrg; userId: string },
 ): Promise<BookingForManage> {
   const booking = await db.query.bookings.findFirst({ where: eq(bookings.id, bookingId) })
   if (!booking) throw new AppError('NOT_FOUND')
@@ -215,23 +225,26 @@ export async function getBookingForManage(
   if ('token' in auth) {
     const valid = await verifyToken(auth.token, booking.manageTokenHash)
     if (!valid) throw new AppError('INVALID_TOKEN')
-  } else if (page.ownerId !== auth.ownerId) {
-    throw new AppError('FORBIDDEN')
+  } else {
+    if (page.organizationId !== auth.org.id) throw new AppError('NOT_FOUND')
+    if (!canManageContent(auth.org, auth.userId, page.createdBy)) throw new AppError('FORBIDDEN')
   }
 
-  const owner = await db.query.user.findFirst({ where: eq(user.id, page.ownerId) })
+  const org = await db.query.organization.findFirst({
+    where: eq(organization.id, page.organizationId),
+  })
 
   return {
     ...toBookingView(booking),
     page: {
       id: page.id,
-      handle: owner?.handle ?? null,
+      handle: org?.slug ?? null,
       slug: page.slug,
       title: page.title,
       location: page.location,
       timezone: page.timezone,
       slotDurationMin: page.slotDurationMin,
-      owner: { name: owner?.name ?? '' },
+      owner: { name: org?.name ?? '' },
     },
   }
 }
@@ -253,12 +266,13 @@ export async function setGoogleEventId(
 export async function listBookings(
   db: Db,
   pageId: string,
-  ownerId: string,
+  org: ActingOrg,
+  userId: string,
   range: { from: Date; to: Date },
 ): Promise<BookingView[]> {
   const page = await db.query.bookingPages.findFirst({ where: eq(bookingPages.id, pageId) })
-  if (!page || page.deletedAt) throw new AppError('NOT_FOUND')
-  if (page.ownerId !== ownerId) throw new AppError('FORBIDDEN')
+  if (!page || page.deletedAt || page.organizationId !== org.id) throw new AppError('NOT_FOUND')
+  if (!canManageContent(org, userId, page.createdBy)) throw new AppError('FORBIDDEN')
 
   const rows = await db.query.bookings.findMany({
     where: and(

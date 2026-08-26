@@ -66,7 +66,7 @@ function EmptyState() {
 function BookingPagesRoute() {
   const pages = Route.useLoaderData()
   const { session, publicConfig } = Route.useRouteContext()
-  const handle = session?.user.handle ?? null
+  const handle = session?.org?.slug ?? null
 
   return (
     <div

@@ -82,7 +82,7 @@ orgs), **branding** (org accent colour + logo on poll/booking pages and emails, 
 ## §5 UI
 
 - Header: org switcher (list orgs, create org, settings link) — rendered only when the user has
-  >1 org or their org has >1 member/invitation; otherwise invisible (personal org stays silent).
+  > 1 org or their org has >1 member/invitation; otherwise invisible (personal org stays silent).
 - `/settings/organization`: profile (name, slug with same live validation as today's handle
   field), members (role management, remove), invitations (send/revoke), billing (plan card,
   upgrade checkout, Stripe portal link), branding (Premium: colour + logo), danger zone (delete).

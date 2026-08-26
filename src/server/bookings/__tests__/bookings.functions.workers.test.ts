@@ -10,7 +10,13 @@ import {
   syncGoogleEventDelete,
   syncGoogleEventsForReschedule,
 } from '#/server/bookings/google-sync'
-import { makeBooking, makeBookingPage, makeUser } from '../../../../test/helpers'
+import {
+  makeBooking,
+  makeBookingPage,
+  makeOrg,
+  makeUser,
+  makeUserWithOrg,
+} from '../../../../test/helpers'
 
 const testEnv = {
   EMAIL_FROM: 'whenweall <no-reply@whenweall.test>',
@@ -46,8 +52,12 @@ async function googleEventIdOf(db: ReturnType<typeof createDb>, bookingId: strin
 describe('syncGoogleEventCreate', () => {
   it('does nothing when the page has googleSync off', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: false })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { googleSync: false },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })
@@ -77,8 +87,12 @@ describe('syncGoogleEventCreate', () => {
       http.post(EVENTS_URL, () => HttpResponse.json({ id: 'evt_created' }, { status: 200 })),
     )
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: true })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { googleSync: true },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })
@@ -107,10 +121,15 @@ describe('syncGoogleEventCreate', () => {
     network.use(http.post(EVENTS_URL, () => HttpResponse.json({}, { status: 500 })))
     const db = createDb(env.DB)
     const { id: ownerId, email: ownerEmail } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, {
-      googleSync: true,
-      title: 'Sync test page',
-    })
+    const { id: orgId } = await makeOrg(db, ownerId)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      {
+        googleSync: true,
+        title: 'Sync test page',
+      },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })
@@ -143,10 +162,14 @@ describe('syncGoogleEventDelete', () => {
   it('clears googleEventId to null when the delete succeeds', async () => {
     network.use(http.delete(`${EVENTS_URL}/evt_1`, () => new HttpResponse(null, { status: 204 })))
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     // googleSync is now off (simulating the page setting having changed since the event was
     // created) — the delete must still run (finding 7).
-    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: false })
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { googleSync: false },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })
@@ -165,7 +188,12 @@ describe('syncGoogleEventDelete', () => {
     network.use(http.delete(`${EVENTS_URL}/evt_2`, () => HttpResponse.json({}, { status: 500 })))
     const db = createDb(env.DB)
     const { id: ownerId, email: ownerEmail } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { title: 'Delete-fail page' })
+    const { id: orgId } = await makeOrg(db, ownerId)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { title: 'Delete-fail page' },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })
@@ -191,8 +219,12 @@ describe('syncGoogleEventsForReschedule', () => {
     network.use(http.post(EVENTS_URL, createHandler))
 
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: true })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { googleSync: true },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })
@@ -226,8 +258,12 @@ describe('syncGoogleEventsForReschedule', () => {
     network.use(http.post(EVENTS_URL, () => HttpResponse.json({ id: 'evt_new' }, { status: 200 })))
 
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { googleSync: true })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { googleSync: true },
+    )
     const page = await db.query.bookingPages.findFirst({
       where: (p, { eq: eqOp }) => eqOp(p.id, pageId),
     })

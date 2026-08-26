@@ -72,8 +72,8 @@ export type BookingView = {
 
 /**
  * `getBookingForManage`'s return: the booking plus enough of its page to render a manage page.
- * Deliberately omits the page's `ownerId` — a token-authenticated visitor gets this same shape as
- * an authenticated owner, and nothing in this codebase reads the owner's internal id off it.
+ * Deliberately omits the page's `organizationId` — a token-authenticated visitor gets this same
+ * shape as an authenticated owner, and nothing in this codebase reads the org's internal id off it.
  */
 export type BookingForManage = BookingView & {
   page: {

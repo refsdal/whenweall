@@ -26,6 +26,7 @@
 ### Task 1: Organization plugin, personal-org hooks, invitation email
 
 **Files:**
+
 - Modify: `src/server/auth/auth.ts`
 - Modify: `src/server/auth/auth.cli.ts` (mirror plugin so `bun run auth:generate` emits org tables)
 - Modify: `src/server/auth/client.ts`
@@ -37,6 +38,7 @@
 - Test: `src/server/auth/__tests__/personal-org.workers.test.ts`, `src/server/auth/__tests__/personal-org.test.ts`
 
 **Interfaces:**
+
 - Consumes: `createDb(d1: D1Database): Db` from `#/server/db/client`; `sendMail` + template pattern from `#/server/mailer`.
 - Produces: `createPersonalOrganization(db: Db, user: { id: string; name: string; email: string }): Promise<{ orgId: string; slug: string }>`; `slugifyOrgName(name: string): string`; org tables exported from `#/server/db/schema` (`organization`, `member`, `invitation`); sessions carry `activeOrganizationId`.
 
@@ -107,9 +109,13 @@ export async function createPersonalOrganization(
   const orgId = crypto.randomUUID()
   const now = new Date()
   await db.insert(organization).values({ id: orgId, name: user.name, slug, createdAt: now })
-  await db
-    .insert(member)
-    .values({ id: crypto.randomUUID(), organizationId: orgId, userId: user.id, role: 'owner', createdAt: now })
+  await db.insert(member).values({
+    id: crypto.randomUUID(),
+    organizationId: orgId,
+    userId: user.id,
+    role: 'owner',
+    createdAt: now,
+  })
   return { orgId, slug }
 }
 ```
@@ -247,11 +253,13 @@ Commit: `feat(auth): organization plugin with auto-created personal orgs`
 ### Task 2: Org access layer
 
 **Files:**
+
 - Create: `src/server/auth/org.ts`
 - Modify: `src/server/auth/session.functions.ts`
 - Test: `src/server/auth/__tests__/org.workers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `requireSessionMiddleware` from `#/server/auth/middleware`; `member`, `organization` from `#/server/db/schema`; `AppError` (same import path the middleware file uses).
 - Produces:
   - `type OrgRole = 'owner' | 'admin' | 'member'`
@@ -304,7 +312,9 @@ export async function makeOrg(
   const id = `org_${newId()}`
   const slug = overrides?.slug ?? `org-${unique()}`
   const now = new Date()
-  await db.insert(organization).values({ id, name: overrides?.name ?? 'Test Org', slug, createdAt: now })
+  await db
+    .insert(organization)
+    .values({ id, name: overrides?.name ?? 'Test Org', slug, createdAt: now })
   await db.insert(member).values({
     id: `mem_${newId()}`,
     organizationId: id,
@@ -336,7 +346,9 @@ export function canManageContent(
   userId: string,
   createdBy: string | null,
 ): boolean {
-  return org.role === 'owner' || org.role === 'admin' || (createdBy !== null && createdBy === userId)
+  return (
+    org.role === 'owner' || org.role === 'admin' || (createdBy !== null && createdBy === userId)
+  )
 }
 
 export const requireOrgMiddleware = createMiddleware({ type: 'function' })
@@ -346,7 +358,10 @@ export const requireOrgMiddleware = createMiddleware({ type: 'function' })
       .activeOrganizationId
     if (!activeOrgId) throw new AppError('UNAUTHORIZED')
     const membership = await getDb().query.member.findFirst({
-      where: and(eq(member.organizationId, activeOrgId), eq(member.userId, context.session.user.id)),
+      where: and(
+        eq(member.organizationId, activeOrgId),
+        eq(member.userId, context.session.user.id),
+      ),
     })
     if (!membership) throw new AppError('FORBIDDEN')
     return next({ context: { org: { id: activeOrgId, role: membership.role as OrgRole } } })
@@ -364,6 +379,7 @@ export const requireOrgMiddleware = createMiddleware({ type: 'function' })
 This is the big mechanical sweep. Everything below lands in ONE task because the schema change breaks compilation of all its consumers — the tree must be green only at the end. Work through it in the order given; run `bun run typecheck` continuously as the to-fix list.
 
 **Files (from the exploration report — the authoritative list):**
+
 - Modify: `src/server/db/schema.ts`
 - Regenerate: `drizzle/` — **squash**: delete `drizzle/*.sql` and `drizzle/meta/`, run `bun run db:generate` for a fresh `0000` baseline containing the full new schema, then `rm -f .wrangler/state -r || true` and `bun run db:migrate:local`
 - Modify: `src/server/auth/auth.ts` + `auth.cli.ts` (remove the `handle` additionalField), regenerate `auth-schema.ts` (`bun run auth:generate` — drops `user.handle`)
@@ -376,28 +392,29 @@ This is the big mechanical sweep. Everything below lands in ONE task because the
 - Test (new): `src/server/polls/__tests__/org-authz.workers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `requireOrgMiddleware`, `canManageContent`, `OrgRole` (Task 2); org tables (Task 1).
 - Produces: the transform below, relied on by Phase 2/3.
 
 **The transform (apply everywhere; the report's file list is the checklist):**
 
-| Before | After |
-|---|---|
-| `polls.ownerId` (FK user, cascade) | `polls.organizationId` (FK organization, cascade) + `polls.createdBy` (FK user, `set null`, nullable) |
-| `bookingPages.ownerId` | `bookingPages.organizationId` + `createdBy` (as above) + `bookingPages.memberUserId` (FK user, `set null`, nullable — whose calendar/availability the page uses; set to creator on create) |
-| `polls_owner_created_idx` | `polls_org_created_idx` on `(organizationId, createdAt)` |
-| `booking_pages_owner_slug_uidx` | `booking_pages_org_slug_uidx` on `(organizationId, slug)`, still partial `WHERE deleted_at IS NULL` |
-| `user.handle` (column + additionalField + validation UI) | `organization.slug` (already unique; validated by existing `handleSchema`) |
-| service fn `(db, ownerId: string)` for listing | `(db, organizationId: string)` |
-| service fn create `(db, ownerId, input)` | `(db, owner: { organizationId: string; createdBy: string }, input)` |
-| authz `content.ownerId !== userId → FORBIDDEN` | `content.organizationId !== org.id → NOT_FOUND`; `!canManageContent(org, userId, content.createdBy) → FORBIDDEN` |
-| server fn `context.session.user.id` as owner | middleware → `requireOrgMiddleware`; pass `context.org.id` (+ `context.session.user.id` as `createdBy`) |
-| `getPublicPage(db, handle, slug)` resolving via `user.handle` | resolve `organization` by `eq(organization.slug, handle)`, then page by `(organizationId, slug)`; `owner: { name: org.name }` |
-| `setUserHandle(db, userId, handle)` | `setOrgSlug(db, orgId, slug)` — update `organization.slug`, map unique-constraint error to `HANDLE_TAKEN`; server fn gated `owner`/`admin` role (403 for `member`) |
-| `getGoogleAccessToken(page.ownerId)` | `page.memberUserId ? getGoogleAccessToken(page.memberUserId) : null` (null → skip sync silently, same as no-token today) |
-| emails `owner.handle` URL | load org via `page.organizationId`; `org.slug` in `/book/{slug}/{pageSlug}` |
-| settings `HandleSection(session.user.handle)` | `HandleSection(session.org?.slug)` calling new `setOrgSlug` server fn; visible only when `session.org.role !== 'member'` |
-| seed route creating users with handle | create user → personal org already auto-created; look up its org id/slug for seeding content |
+| Before                                                        | After                                                                                                                                                                                      |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `polls.ownerId` (FK user, cascade)                            | `polls.organizationId` (FK organization, cascade) + `polls.createdBy` (FK user, `set null`, nullable)                                                                                      |
+| `bookingPages.ownerId`                                        | `bookingPages.organizationId` + `createdBy` (as above) + `bookingPages.memberUserId` (FK user, `set null`, nullable — whose calendar/availability the page uses; set to creator on create) |
+| `polls_owner_created_idx`                                     | `polls_org_created_idx` on `(organizationId, createdAt)`                                                                                                                                   |
+| `booking_pages_owner_slug_uidx`                               | `booking_pages_org_slug_uidx` on `(organizationId, slug)`, still partial `WHERE deleted_at IS NULL`                                                                                        |
+| `user.handle` (column + additionalField + validation UI)      | `organization.slug` (already unique; validated by existing `handleSchema`)                                                                                                                 |
+| service fn `(db, ownerId: string)` for listing                | `(db, organizationId: string)`                                                                                                                                                             |
+| service fn create `(db, ownerId, input)`                      | `(db, owner: { organizationId: string; createdBy: string }, input)`                                                                                                                        |
+| authz `content.ownerId !== userId → FORBIDDEN`                | `content.organizationId !== org.id → NOT_FOUND`; `!canManageContent(org, userId, content.createdBy) → FORBIDDEN`                                                                           |
+| server fn `context.session.user.id` as owner                  | middleware → `requireOrgMiddleware`; pass `context.org.id` (+ `context.session.user.id` as `createdBy`)                                                                                    |
+| `getPublicPage(db, handle, slug)` resolving via `user.handle` | resolve `organization` by `eq(organization.slug, handle)`, then page by `(organizationId, slug)`; `owner: { name: org.name }`                                                              |
+| `setUserHandle(db, userId, handle)`                           | `setOrgSlug(db, orgId, slug)` — update `organization.slug`, map unique-constraint error to `HANDLE_TAKEN`; server fn gated `owner`/`admin` role (403 for `member`)                         |
+| `getGoogleAccessToken(page.ownerId)`                          | `page.memberUserId ? getGoogleAccessToken(page.memberUserId) : null` (null → skip sync silently, same as no-token today)                                                                   |
+| emails `owner.handle` URL                                     | load org via `page.organizationId`; `org.slug` in `/book/{slug}/{pageSlug}`                                                                                                                |
+| settings `HandleSection(session.user.handle)`                 | `HandleSection(session.org?.slug)` calling new `setOrgSlug` server fn; visible only when `session.org.role !== 'member'`                                                                   |
+| seed route creating users with handle                         | create user → personal org already auto-created; look up its org id/slug for seeding content                                                                                               |
 
 **Read-only viewers stay read-only:** public poll pages, voting, comments, public booking flows have no owner checks — do not add org checks there. The `getPoll` viewer-context `userId` stays a user id (it drives "is this my vote" UI), unchanged.
 
@@ -415,6 +432,7 @@ This is the big mechanical sweep. Everything below lands in ONE task because the
 ### Task 4: e2e + verification + PR
 
 **Files:**
+
 - Modify: `e2e/*.spec.ts` where journeys set or assert handles/URLs (booking journey sets handle in settings — now edits org slug; `/book/{slug}/...` URLs come from the seeded org)
 - Modify: `README.md` — data-model paragraph: content belongs to organizations; personal org auto-created
 - Modify: `src/routes/api/test/seed.ts` if e2e needs deterministic org slugs (give the seed a fixed slug)

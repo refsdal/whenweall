@@ -21,7 +21,7 @@ function NewBookingPageRoute() {
   return (
     <PageEditor
       page={null}
-      handle={session?.user.handle ?? null}
+      handle={session?.org?.slug ?? null}
       appUrl={publicConfig.appUrl}
       googleEnabled={publicConfig.googleEnabled}
     />
