@@ -14,11 +14,12 @@ const ANSWER_STYLES: Record<Answer, { bg: string; ink: string; Icon: typeof Chec
 const OPTION_DATES = [new Date(2027, 4, 11), new Date(2027, 4, 12), new Date(2027, 4, 13)]
 const BEST_COLUMN = 1
 
+// The first four users of the system, immortalised. Lars famously never can.
 const PEOPLE: { name: string; answers: [Answer, Answer, Answer] }[] = [
-  { name: 'Ada', answers: ['no', 'yes', 'ifneedbe'] },
-  { name: 'Iben', answers: ['ifneedbe', 'yes', 'no'] },
-  { name: 'Jonas', answers: ['yes', 'yes', 'yes'] },
-  { name: 'Mira', answers: ['no', 'yes', 'ifneedbe'] },
+  { name: 'Kristine', answers: ['yes', 'yes', 'ifneedbe'] },
+  { name: 'Anette', answers: ['ifneedbe', 'yes', 'yes'] },
+  { name: 'Robin', answers: ['no', 'yes', 'yes'] },
+  { name: 'Lars', answers: ['no', 'yes', 'no'] },
 ]
 
 /**
