@@ -17,6 +17,7 @@ import { AppError } from '#/lib/errors'
 import { newId, newPollId } from '#/lib/ids'
 import { bestOptionId, scoreOptions } from '#/lib/scoring'
 import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { chunkedInsert } from '#/server/db/chunked-insert'
 import { countClaims } from './claims'
 import type { OptionInput, UpdatePollInput, CreatePollInput } from './schemas'
 import type { PollSummary, PollView } from './viewmodel'
@@ -100,7 +101,7 @@ export async function createPoll(
       createdAt: now,
       updatedAt: now,
     }),
-    db.insert(pollOptions).values(optionRows),
+    ...chunkedInsert(db, pollOptions, optionRows),
   ] as [Query, ...Query[]])
 
   return { id }
@@ -458,7 +459,7 @@ export async function duplicatePoll(
       createdAt: now,
       updatedAt: now,
     }),
-    db.insert(pollOptions).values(optionRows),
+    ...chunkedInsert(db, pollOptions, optionRows),
   ] as [Query, ...Query[]])
 
   return { id }

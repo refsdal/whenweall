@@ -3,6 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BillingSection } from '#/components/billing/BillingSection'
 import { authClient } from '#/server/auth/client'
+import { m } from '#/lib/i18n'
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
@@ -57,6 +58,34 @@ describe('BillingSection', () => {
 
     expect(screen.getByRole('button', { name: /upgrade to premium/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /manage billing/i })).not.toBeInTheDocument()
+  })
+
+  it('shows a subtitle under the section heading, like every sibling settings section', () => {
+    render(
+      <BillingSection
+        orgId="org_1"
+        role="owner"
+        entitlements={FREE}
+        subscription={null}
+        seatsUsed={1}
+      />,
+    )
+
+    expect(screen.getByText(m.billing_subtitle())).toBeInTheDocument()
+  })
+
+  it('gives the plan-status card the same surface background as every other bordered card', () => {
+    render(
+      <BillingSection
+        orgId="org_1"
+        role="owner"
+        entitlements={FREE}
+        subscription={null}
+        seatsUsed={1}
+      />,
+    )
+
+    expect(screen.getByText(m.billing_free_plan()).closest('div')).toHaveClass('bg-card')
   })
 
   it('calls subscription.upgrade with the org as referenceId and disables the button while pending', async () => {
