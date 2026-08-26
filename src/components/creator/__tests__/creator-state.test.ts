@@ -573,7 +573,7 @@ function pollView(overrides: Partial<PollView> = {}): PollView {
       signupMaxClaims: 1,
     },
     notifications: null,
-    owner: { id: 'user1', name: 'Ada' },
+    owner: { name: 'Ada' },
     isOwner: true,
     options: [],
     participants: [],

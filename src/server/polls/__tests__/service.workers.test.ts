@@ -3,7 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { AppError } from '#/lib/errors'
 import { applyClaim } from '#/server/polls/claims'
-import { makeParticipant, makePoll, makeSignupPoll, makeUser } from '../../../../test/helpers'
+import {
+  addOrgMember,
+  makeOrg,
+  makeParticipant,
+  makePoll,
+  makeSignupPoll,
+  makeUser,
+  makeUserWithOrg,
+} from '../../../../test/helpers'
 import {
   closeExpiredPoll,
   createPoll,
@@ -12,7 +20,7 @@ import {
   finalizePoll,
   getPollView,
   listMyPolls,
-  requireOwnedPoll,
+  requireManagedPoll,
   setPollStatus,
   updateNotificationPrefs,
   updatePoll,
@@ -26,16 +34,20 @@ function tomorrowAt(hour: string): string {
 describe('createPoll', () => {
   it('stores options in order with kinds, and returns a 12-char id', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id } = await createPoll(db, ownerId, {
-      type: 'options',
-      title: 'Lunch spot',
-      timezone: 'Europe/Oslo',
-      options: [
-        { kind: 'text', label: 'Pizza' },
-        { kind: 'text', label: 'Sushi' },
-      ],
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'options',
+        title: 'Lunch spot',
+        timezone: 'Europe/Oslo',
+        options: [
+          { kind: 'text', label: 'Pizza' },
+          { kind: 'text', label: 'Sushi' },
+        ],
+      },
+    )
 
     expect(id).toHaveLength(12)
 
@@ -50,13 +62,17 @@ describe('createPoll', () => {
 
   it('maps a date option kind to startAt as YYYY-MM-DD', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id } = await createPoll(db, ownerId, {
-      type: 'datetime',
-      title: 'Offsite',
-      timezone: 'Europe/Oslo',
-      options: [{ kind: 'date', date: '2026-09-15' }],
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'datetime',
+        title: 'Offsite',
+        timezone: 'Europe/Oslo',
+        options: [{ kind: 'date', date: '2026-09-15' }],
+      },
+    )
 
     const view = await getPollView(db, id, { userId: ownerId })
     expect(view?.options[0]).toMatchObject({ kind: 'date', startAt: '2026-09-15', endAt: null })
@@ -64,13 +80,17 @@ describe('createPoll', () => {
 
   it('maps a datetime option kind to startAt/endAt', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id } = await createPoll(db, ownerId, {
-      type: 'datetime',
-      title: 'Sync',
-      timezone: 'Europe/Oslo',
-      options: [{ kind: 'datetime', startAt: tomorrowAt('10:00'), endAt: tomorrowAt('11:00') }],
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'datetime',
+        title: 'Sync',
+        timezone: 'Europe/Oslo',
+        options: [{ kind: 'datetime', startAt: tomorrowAt('10:00'), endAt: tomorrowAt('11:00') }],
+      },
+    )
 
     const view = await getPollView(db, id, { userId: ownerId })
     expect(view?.options[0]).toMatchObject({
@@ -82,8 +102,8 @@ describe('createPoll', () => {
 
   it('applies default settings and notification prefs', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id } = await makePoll(db, { orgId, createdBy: ownerId })
     const view = await getPollView(db, id, { userId: ownerId })
     expect(view?.settings).toEqual({
       requireParticipantEmail: false,
@@ -97,18 +117,22 @@ describe('createPoll', () => {
 
   it('persists per-option capacity and signupMaxClaims for a signup poll, forcing allowIfNeedBe false', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id } = await createPoll(db, ownerId, {
-      type: 'signup',
-      title: 'Bring a dish',
-      timezone: 'Europe/Oslo',
-      allowIfNeedBe: true,
-      signupMaxClaims: 3,
-      options: [
-        { kind: 'text', label: 'Starter', capacity: 2 },
-        { kind: 'text', label: 'Dessert', capacity: null },
-      ],
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'signup',
+        title: 'Bring a dish',
+        timezone: 'Europe/Oslo',
+        allowIfNeedBe: true,
+        signupMaxClaims: 3,
+        options: [
+          { kind: 'text', label: 'Starter', capacity: 2 },
+          { kind: 'text', label: 'Dessert', capacity: null },
+        ],
+      },
+    )
 
     const view = await getPollView(db, id, { userId: ownerId })
     expect(view?.settings.allowIfNeedBe).toBe(false)
@@ -121,13 +145,17 @@ describe('createPoll', () => {
 
   it('forces capacity to null and signupMaxClaims to 1 for a non-signup poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id } = await createPoll(db, ownerId, {
-      type: 'options',
-      title: 'Lunch spot',
-      timezone: 'Europe/Oslo',
-      options: [{ kind: 'text', label: 'Pizza' }],
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'options',
+        title: 'Lunch spot',
+        timezone: 'Europe/Oslo',
+        options: [{ kind: 'text', label: 'Pizza' }],
+      },
+    )
 
     const view = await getPollView(db, id, { userId: ownerId })
     expect(view?.options[0]?.capacity).toBeNull()
@@ -138,9 +166,9 @@ describe('createPoll', () => {
 describe('getPollView', () => {
   it('reflects isOwner for the owner and null notifications for others, without leaking email', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const { id: otherId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
     const asOwner = await getPollView(db, pollId, { userId: ownerId })
     expect(asOwner?.isOwner).toBe(true)
@@ -154,13 +182,15 @@ describe('getPollView', () => {
     expect(asAnon?.isOwner).toBe(false)
     expect(asAnon?.notifications).toBeNull()
 
-    expect(asOwner?.owner).toEqual({ id: ownerId, name: 'Test User' })
+    // No org id leak to the public/participant view — only the owning org's name is exposed.
+    expect(asOwner?.owner).toEqual({ name: 'Test Org' })
+    expect(asOwner?.owner).not.toHaveProperty('id')
   })
 
   it('reports hasEmail true/false per participant without exposing the email', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [opt1, opt2] = view0!.options
     const withEmail = await makeParticipant(
@@ -185,19 +215,24 @@ describe('getPollView', () => {
     const db = createDb(env.DB)
     expect(await getPollView(db, 'missing12345', { userId: null })).toBeNull()
 
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
-    await deletePoll(db, pollId, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
+    await deletePoll(db, pollId, org, ownerId)
     expect(await getPollView(db, pollId, { userId: ownerId })).toBeNull()
   })
 
   it('exposes a claims map with full flags and empty scores for a signup poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, {
-      capacities: [1, null],
-      maxClaims: 2,
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      {
+        capacities: [1, null],
+        maxClaims: 2,
+      },
+    )
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [slot1, slot2] = view0!.options
     await applyClaim(db, pollId, slot1!.id, { name: 'Alice', userId: null })
@@ -215,21 +250,22 @@ describe('getPollView', () => {
 describe('listMyPolls', () => {
   it('lists only the owner non-deleted polls, newest first, with participantCount', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: otherId } = await makeUser(db)
-    const { id: poll1 } = await makePoll(db, ownerId, { title: 'First' })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { userId: otherId, orgId: otherOrgId } = await makeUserWithOrg(db)
+    const { id: poll1 } = await makePoll(db, { orgId, createdBy: ownerId }, { title: 'First' })
     await new Promise((r) => setTimeout(r, 5))
-    const { id: poll2 } = await makePoll(db, ownerId, { title: 'Second' })
-    const { id: poll3 } = await makePoll(db, ownerId, { title: 'Deleted' })
-    await makePoll(db, otherId, { title: 'Not mine' })
-    await deletePoll(db, poll3, ownerId)
+    const { id: poll2 } = await makePoll(db, { orgId, createdBy: ownerId }, { title: 'Second' })
+    const { id: poll3 } = await makePoll(db, { orgId, createdBy: ownerId }, { title: 'Deleted' })
+    await makePoll(db, { orgId: otherOrgId, createdBy: otherId }, { title: 'Not mine' })
+    await deletePoll(db, poll3, org, ownerId)
 
     const view = await getPollView(db, poll1, { userId: ownerId })
     const [opt1] = view!.options
     await makeParticipant(db, poll1, 'Alice', { [opt1!.id]: 'yes' })
     await makeParticipant(db, poll1, 'Bob', { [opt1!.id]: 'no' })
 
-    const list = await listMyPolls(db, ownerId)
+    const list = await listMyPolls(db, orgId)
     expect(list.map((p) => p.title)).toEqual(['Second', 'First'])
     const first = list.find((p) => p.id === poll1)
     expect(first?.participantCount).toBe(2)
@@ -239,11 +275,15 @@ describe('listMyPolls', () => {
 
   it('reports claimCount as the sum of yes-votes, distinct from participantCount, for a sign-up sheet', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, {
-      capacities: [null, null],
-      maxClaims: 2,
-    })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      {
+        capacities: [null, null],
+        maxClaims: 2,
+      },
+    )
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [slot1, slot2] = view0!.options
 
@@ -252,7 +292,7 @@ describe('listMyPolls', () => {
     await applyClaim(db, pollId, slot2!.id, { participantId: alice.participantId })
     await applyClaim(db, pollId, slot1!.id, { name: 'Bob', userId: null })
 
-    const list = await listMyPolls(db, ownerId)
+    const list = await listMyPolls(db, orgId)
     const summary = list.find((p) => p.id === pollId)
     expect(summary?.participantCount).toBe(2)
     expect(summary?.claimCount).toBe(3)
@@ -260,26 +300,41 @@ describe('listMyPolls', () => {
 })
 
 describe('updatePoll', () => {
-  it('is owner-only: FORBIDDEN for a non-owner', async () => {
+  it('is manager-only: FORBIDDEN for a same-org member who did not create it', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: otherId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: memberId } = await makeUser(db)
+    await addOrgMember(db, orgId, memberId)
+    const memberOrg = { id: orgId, role: 'member' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
-    await expect(updatePoll(db, pollId, otherId, { title: 'Hacked' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    })
+    await expect(
+      updatePoll(db, pollId, memberOrg, memberId, { title: 'Hacked' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
+  it('is org-scoped: NOT_FOUND for a user in a different org entirely', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { userId: otherId, orgId: otherOrgId } = await makeUserWithOrg(db)
+    const otherOrg = { id: otherOrgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
+
+    await expect(
+      updatePoll(db, pollId, otherOrg, otherId, { title: 'Hacked' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
   it('removing an option deletes its votes; adding an option keeps positions', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const before = await getPollView(db, pollId, { userId: ownerId })
     const [opt1, opt2] = before!.options
     await makeParticipant(db, pollId, 'Alice', { [opt1!.id]: 'yes', [opt2!.id]: 'no' })
 
-    await updatePoll(db, pollId, ownerId, {
+    await updatePoll(db, pollId, org, ownerId, {
       options: [
         { id: opt1!.id, kind: 'datetime', startAt: opt1!.startAt! },
         { kind: 'datetime', startAt: tomorrowAt('12:00') },
@@ -299,14 +354,15 @@ describe('updatePoll', () => {
 
   it('throws POLL_FINALIZED when editing options on a finalized poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view = await getPollView(db, pollId, { userId: ownerId })
     const [opt1] = view!.options
-    await finalizePoll(db, pollId, ownerId, opt1!.id)
+    await finalizePoll(db, pollId, org, ownerId, opt1!.id)
 
     await expect(
-      updatePoll(db, pollId, ownerId, {
+      updatePoll(db, pollId, org, ownerId, {
         options: [{ id: opt1!.id, kind: 'datetime', startAt: opt1!.startAt! }],
       }),
     ).rejects.toMatchObject({ code: 'POLL_FINALIZED' })
@@ -314,12 +370,13 @@ describe('updatePoll', () => {
 
   it('still allows non-option edits (e.g. title) on a finalized poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view = await getPollView(db, pollId, { userId: ownerId })
-    await finalizePoll(db, pollId, ownerId, view!.options[0]!.id)
+    await finalizePoll(db, pollId, org, ownerId, view!.options[0]!.id)
 
-    await updatePoll(db, pollId, ownerId, { title: 'Renamed after finalizing' })
+    await updatePoll(db, pollId, org, ownerId, { title: 'Renamed after finalizing' })
 
     const after = await getPollView(db, pollId, { userId: ownerId })
     expect(after?.title).toBe('Renamed after finalizing')
@@ -327,11 +384,12 @@ describe('updatePoll', () => {
 
   it('changing the deadline updates it', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const newDeadline = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
 
-    await updatePoll(db, pollId, ownerId, { deadlineAt: newDeadline })
+    await updatePoll(db, pollId, org, ownerId, { deadlineAt: newDeadline })
 
     const view = await getPollView(db, pollId, { userId: ownerId })
     expect(view?.deadlineAt).toBe(newDeadline)
@@ -339,15 +397,20 @@ describe('updatePoll', () => {
 
   it('throws CAPACITY_BELOW_CLAIMS when lowering a slot capacity under its current claim count', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [slot] = view0!.options
     await applyClaim(db, pollId, slot!.id, { name: 'Alice', userId: null })
     await applyClaim(db, pollId, slot!.id, { name: 'Bob', userId: null })
 
     await expect(
-      updatePoll(db, pollId, ownerId, {
+      updatePoll(db, pollId, org, ownerId, {
         options: [{ id: slot!.id, kind: 'text', label: slot!.label!, capacity: 1 }],
       }),
     ).rejects.toMatchObject({ code: 'CAPACITY_BELOW_CLAIMS' })
@@ -355,13 +418,18 @@ describe('updatePoll', () => {
 
   it('allows raising a slot capacity to at or above its current claim count', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [1] },
+    )
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [slot] = view0!.options
     await applyClaim(db, pollId, slot!.id, { name: 'Alice', userId: null })
 
-    await updatePoll(db, pollId, ownerId, {
+    await updatePoll(db, pollId, org, ownerId, {
       options: [{ id: slot!.id, kind: 'text', label: slot!.label!, capacity: 5 }],
     })
 
@@ -371,13 +439,18 @@ describe('updatePoll', () => {
 
   it('keeps a retained option’s existing capacity when the update omits it', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [7] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [7] },
+    )
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [slot] = view0!.options
 
     // No `capacity` on the retained option — must keep 7, not reset to the create-time default of 1.
-    await updatePoll(db, pollId, ownerId, {
+    await updatePoll(db, pollId, org, ownerId, {
       options: [{ id: slot!.id, kind: 'text', label: 'Renamed slot' }],
     })
 
@@ -388,12 +461,17 @@ describe('updatePoll', () => {
 
   it('still defaults a brand-new option to capacity 1 when the update omits it', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [7] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [7] },
+    )
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [slot] = view0!.options
 
-    await updatePoll(db, pollId, ownerId, {
+    await updatePoll(db, pollId, org, ownerId, {
       options: [
         { id: slot!.id, kind: 'text', label: 'Slot 1', capacity: 7 },
         { kind: 'text', label: 'New slot' },
@@ -409,24 +487,26 @@ describe('updatePoll', () => {
 describe('setPollStatus', () => {
   it('closes then reopens', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
-    await setPollStatus(db, pollId, ownerId, 'closed')
+    await setPollStatus(db, pollId, org, ownerId, 'closed')
     expect((await getPollView(db, pollId, { userId: ownerId }))?.status).toBe('closed')
 
-    await setPollStatus(db, pollId, ownerId, 'open')
+    await setPollStatus(db, pollId, org, ownerId, 'open')
     expect((await getPollView(db, pollId, { userId: ownerId }))?.status).toBe('open')
   })
 
   it('throws POLL_FINALIZED for a finalized poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view = await getPollView(db, pollId, { userId: ownerId })
-    await finalizePoll(db, pollId, ownerId, view!.options[0]!.id)
+    await finalizePoll(db, pollId, org, ownerId, view!.options[0]!.id)
 
-    await expect(setPollStatus(db, pollId, ownerId, 'closed')).rejects.toMatchObject({
+    await expect(setPollStatus(db, pollId, org, ownerId, 'closed')).rejects.toMatchObject({
       code: 'POLL_FINALIZED',
     })
   })
@@ -436,7 +516,9 @@ describe('finalizePoll', () => {
   it('sets status + finalizedOptionId, computes recipients (deduped, lower-cased) + owner', async () => {
     const db = createDb(env.DB)
     const { id: ownerId, email: ownerEmail } = await makeUser(db, { name: 'Owner', locale: 'nb' })
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { id: orgId } = await makeOrg(db, ownerId)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [opt1] = view0!.options
 
@@ -450,7 +532,7 @@ describe('finalizePoll', () => {
     await makeParticipant(db, pollId, 'Alice again', {}, { email: 'alice@example.com' })
     await makeParticipant(db, pollId, 'Bob', {})
 
-    const result = await finalizePoll(db, pollId, ownerId, opt1!.id)
+    const result = await finalizePoll(db, pollId, org, ownerId, opt1!.id)
 
     expect(result.poll.status).toBe('finalized')
     expect(result.poll.finalizedOptionId).toBe(opt1!.id)
@@ -469,33 +551,36 @@ describe('finalizePoll', () => {
 
   it('throws NOT_FOUND when the option does not belong to the poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
-    const { id: otherPollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
+    const { id: otherPollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const otherView = await getPollView(db, otherPollId, { userId: ownerId })
 
     await expect(
-      finalizePoll(db, pollId, ownerId, otherView!.options[0]!.id),
+      finalizePoll(db, pollId, org, ownerId, otherView!.options[0]!.id),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
   it('throws CONFLICT when finalizing an already-finalized poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view = await getPollView(db, pollId, { userId: ownerId })
     const [opt1, opt2] = view!.options
-    await finalizePoll(db, pollId, ownerId, opt1!.id)
+    await finalizePoll(db, pollId, org, ownerId, opt1!.id)
 
-    await expect(finalizePoll(db, pollId, ownerId, opt2!.id)).rejects.toMatchObject({
+    await expect(finalizePoll(db, pollId, org, ownerId, opt2!.id)).rejects.toMatchObject({
       code: 'CONFLICT',
     })
   })
 
   it('leaves bestOptionId in the view unaffected by finalization', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const view0 = await getPollView(db, pollId, { userId: ownerId })
     const [opt1, opt2] = view0!.options
     await makeParticipant(db, pollId, 'Alice', { [opt1!.id]: 'yes', [opt2!.id]: 'no' })
@@ -503,7 +588,7 @@ describe('finalizePoll', () => {
     const before = await getPollView(db, pollId, { userId: ownerId })
     expect(before?.bestOptionId).toBe(opt1!.id)
 
-    await finalizePoll(db, pollId, ownerId, opt2!.id)
+    await finalizePoll(db, pollId, org, ownerId, opt2!.id)
 
     const after = await getPollView(db, pollId, { userId: ownerId })
     expect(after?.bestOptionId).toBe(opt1!.id)
@@ -512,11 +597,18 @@ describe('finalizePoll', () => {
 
   it('throws VALIDATION for a signup poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
 
-    await expect(finalizePoll(db, pollId, ownerId, view!.options[0]!.id)).rejects.toMatchObject({
+    await expect(
+      finalizePoll(db, pollId, org, ownerId, view!.options[0]!.id),
+    ).rejects.toMatchObject({
       code: 'VALIDATION',
     })
   })
@@ -525,34 +617,37 @@ describe('finalizePoll', () => {
 describe('deletePoll', () => {
   it('soft deletes: getPollView returns null and listMyPolls excludes it', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
-    await deletePoll(db, pollId, ownerId)
+    await deletePoll(db, pollId, org, ownerId)
 
     expect(await getPollView(db, pollId, { userId: ownerId })).toBeNull()
-    expect((await listMyPolls(db, ownerId)).some((p) => p.id === pollId)).toBe(false)
+    expect((await listMyPolls(db, orgId)).some((p) => p.id === pollId)).toBe(false)
   })
 
   it('deleting twice throws NOT_FOUND', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
-    await deletePoll(db, pollId, ownerId)
-    await expect(deletePoll(db, pollId, ownerId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await deletePoll(db, pollId, org, ownerId)
+    await expect(deletePoll(db, pollId, org, ownerId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 })
 
 describe('duplicatePoll', () => {
   it('creates a new poll with same options, zero participants, and title suffix', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId, { title: 'Original' })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { title: 'Original' })
     const original = await getPollView(db, pollId, { userId: ownerId })
     await makeParticipant(db, pollId, 'Alice', { [original!.options[0]!.id]: 'yes' })
 
-    const { id: copyId } = await duplicatePoll(db, pollId, ownerId)
+    const { id: copyId } = await duplicatePoll(db, pollId, org, ownerId)
     expect(copyId).not.toBe(pollId)
 
     const copy = await getPollView(db, copyId, { userId: ownerId })
@@ -569,10 +664,11 @@ describe('duplicatePoll', () => {
 describe('closeExpiredPoll', () => {
   it('closes an open poll past its deadline and returns true', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const past = new Date(Date.now() - 60_000).toISOString()
-    await updatePoll(db, pollId, ownerId, { deadlineAt: past })
+    await updatePoll(db, pollId, org, ownerId, { deadlineAt: past })
 
     const changed = await closeExpiredPoll(db, pollId)
     expect(changed).toBe(true)
@@ -581,8 +677,9 @@ describe('closeExpiredPoll', () => {
 
   it('closes a poll whose deadline has no milliseconds (string comparison would treat it as still future)', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     // A deadline truncated to whole seconds, set to "now". As a *string* comparison,
     // `poll.deadlineAt > now` reads this as still in the future: "Z" (0x5A) sorts after "."
     // (0x2E), the point where `now`'s own ISO string continues on with milliseconds — e.g.
@@ -590,7 +687,7 @@ describe('closeExpiredPoll', () => {
     // earlier. `Date.parse` compares them as instants instead, so a deadline that has just
     // passed correctly closes the poll.
     const deadline = `${new Date().toISOString().slice(0, 19)}Z`
-    await updatePoll(db, pollId, ownerId, { deadlineAt: deadline })
+    await updatePoll(db, pollId, org, ownerId, { deadlineAt: deadline })
 
     const changed = await closeExpiredPoll(db, pollId)
     expect(changed).toBe(true)
@@ -599,10 +696,11 @@ describe('closeExpiredPoll', () => {
 
   it('returns false for a future deadline', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const future = new Date(Date.now() + 60_000).toISOString()
-    await updatePoll(db, pollId, ownerId, { deadlineAt: future })
+    await updatePoll(db, pollId, org, ownerId, { deadlineAt: future })
 
     expect(await closeExpiredPoll(db, pollId)).toBe(false)
     expect((await getPollView(db, pollId, { userId: ownerId }))?.status).toBe('open')
@@ -610,42 +708,56 @@ describe('closeExpiredPoll', () => {
 
   it('returns false for an already-finalized poll', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const past = new Date(Date.now() - 60_000).toISOString()
-    await updatePoll(db, pollId, ownerId, { deadlineAt: past })
+    await updatePoll(db, pollId, org, ownerId, { deadlineAt: past })
     const view = await getPollView(db, pollId, { userId: ownerId })
-    await finalizePoll(db, pollId, ownerId, view!.options[0]!.id)
+    await finalizePoll(db, pollId, org, ownerId, view!.options[0]!.id)
 
     expect(await closeExpiredPoll(db, pollId)).toBe(false)
   })
 })
 
-describe('requireOwnedPoll', () => {
-  it('throws NOT_FOUND when missing and FORBIDDEN when owned by someone else', async () => {
+describe('requireManagedPoll', () => {
+  it('throws NOT_FOUND when missing or in a different org, FORBIDDEN for a same-org non-manager', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: otherId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: memberId } = await makeUser(db)
+    await addOrgMember(db, orgId, memberId)
+    const memberOrg = { id: orgId, role: 'member' as const }
+    const { userId: otherId, orgId: otherOrgId } = await makeUserWithOrg(db)
+    const otherOrg = { id: otherOrgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
-    await expect(requireOwnedPoll(db, 'missing12345', ownerId)).rejects.toBeInstanceOf(AppError)
-    await expect(requireOwnedPoll(db, 'missing12345', ownerId)).rejects.toMatchObject({
+    await expect(requireManagedPoll(db, 'missing12345', org, ownerId)).rejects.toBeInstanceOf(
+      AppError,
+    )
+    await expect(requireManagedPoll(db, 'missing12345', org, ownerId)).rejects.toMatchObject({
       code: 'NOT_FOUND',
     })
-    await expect(requireOwnedPoll(db, pollId, otherId)).rejects.toMatchObject({
+    await expect(requireManagedPoll(db, pollId, otherOrg, otherId)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await expect(requireManagedPoll(db, pollId, memberOrg, memberId)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     })
-    await expect(requireOwnedPoll(db, pollId, ownerId)).resolves.toMatchObject({ id: pollId })
+    await expect(requireManagedPoll(db, pollId, org, ownerId)).resolves.toMatchObject({
+      id: pollId,
+    })
   })
 })
 
 describe('updateNotificationPrefs', () => {
   it('updates owner notification prefs', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
-    await updateNotificationPrefs(db, pollId, ownerId, {
+    await updateNotificationPrefs(db, pollId, org, ownerId, {
       notifyOnVote: false,
       notifyOnComment: false,
     })

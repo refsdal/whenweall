@@ -127,7 +127,12 @@ that script.
 - **CSP with inline scripts allowed** (required by TanStack Start hydration), HSTS in
   production, `nosniff`, `Referrer-Policy` and a `Permissions-Policy` applied by a request
   middleware to every response.
-- **686 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
+- **Every sign-up gets a personal organization**, created silently by a Better-Auth hook —
+  polls, sign-up sheets and booking pages all belong to an organization, not to a user
+  directly, so inviting teammates into existing content is a membership change, not a data
+  migration. A booking URL's `<handle>` segment is that organization's slug: auto-generated
+  at signup, and editable from Settings by an owner or admin (hidden for plain members).
+- **743 tests** across three runners: jsdom unit tests, integration tests in real `workerd`
   with a real D1 and Durable Objects, and Playwright end-to-end flows.
 
 ## Architecture
@@ -380,7 +385,7 @@ bunx wrangler deploy --dry-run --outdir /tmp/whenweall-dryrun
 Three layers, all runnable from a clean checkout:
 
 ```bash
-bun run test        # 69 files / 686 tests: unit (jsdom) + integration (workerd)
+bun run test        # 77 files / 743 tests: unit (jsdom) + integration (workerd)
 bun run test:e2e    # 12 Playwright flows against the built Worker
 ```
 
@@ -390,9 +395,9 @@ bun run test:e2e    # 12 Playwright flows against the built Worker
   `messages/**`.
 - **Integration** (`vitest --project workers`, `@cloudflare/vitest-plugin`) — anything named
   `*.workers.test.ts` runs inside real workerd with a real D1 (migrations applied per run)
-  and real Durable Objects. This is where server functions, ownership guards, edit-token
-  and manage-token checks, digest batching, the deadline alarm, double-booking races and
-  the reminder alarm are proven.
+  and real Durable Objects. This is where server functions, organization-authorization
+  guards, edit-token and manage-token checks, digest batching, the deadline alarm,
+  double-booking races and the reminder alarm are proven.
 - **End-to-end** (Playwright, Chromium) — account sign-up, sign-in, the full create → vote →
   edit → finalise → `.ics` flow, a live update landing in a second browser context, dashboard
   duplicate/delete, the locale switch, the sign-up sheet journey (a guest claims a slot, a
@@ -450,7 +455,8 @@ src/
     dashboard/ landing/ layout/ auth/
   server/
     db/                   Drizzle schema (app + Better-Auth tables), client
-    auth/                 Better-Auth config, session/owner middleware, session server fns
+    auth/                 Better-Auth config with an organization plugin (auto-created
+                          personal orgs), session/org-access middleware, session server fns
     polls/                server functions, service layer, Zod schemas, view models,
                           claims.ts (capacity/limit rules), roster.ts (CSV builder)
     bookings/              pages.ts/bookings.ts (service layer), *.functions.ts (server fns),

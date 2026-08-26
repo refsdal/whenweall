@@ -4,7 +4,7 @@ import { createDb } from '#/server/db/client'
 import type { MailMessage } from '#/server/mailer/mailer'
 import { finalizePoll, getPollView } from '#/server/polls/service'
 import { sendFinalizedEmails } from '#/server/notifications/finalize-emails'
-import { makeParticipant, makePoll, makeUser } from '../../../../test/helpers'
+import { makeParticipant, makePoll, makeUserWithOrg } from '../../../../test/helpers'
 
 async function firstOptionId(
   db: ReturnType<typeof createDb>,
@@ -28,13 +28,14 @@ function recordingMailer(sentMessages: MailMessage[], results: boolean[] = []) {
 describe('sendFinalizedEmails', () => {
   it('sends one email per recipient, each with a calendar.ics attachment', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const optionId = await firstOptionId(db, pollId, ownerId)
     await makeParticipant(db, pollId, 'Alice', {}, { email: 'alice@example.com' })
     await makeParticipant(db, pollId, 'Bob', {}, { email: 'bob@example.com' })
 
-    const result = await finalizePoll(db, pollId, ownerId, optionId)
+    const result = await finalizePoll(db, pollId, org, ownerId, optionId)
     expect(result.recipients).toHaveLength(3) // Alice + Bob + owner
 
     const sentMessages: MailMessage[] = []
@@ -54,13 +55,14 @@ describe('sendFinalizedEmails', () => {
 
   it('counts a duplicate participant email once', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const optionId = await firstOptionId(db, pollId, ownerId)
     await makeParticipant(db, pollId, 'Alice', {}, { email: 'dup@example.com' })
     await makeParticipant(db, pollId, 'Alice again', {}, { email: 'dup@example.com' })
 
-    const result = await finalizePoll(db, pollId, ownerId, optionId)
+    const result = await finalizePoll(db, pollId, org, ownerId, optionId)
     expect(result.recipients).toHaveLength(2) // dup email (once) + owner
 
     const sentMessages: MailMessage[] = []
@@ -74,12 +76,13 @@ describe('sendFinalizedEmails', () => {
 
   it('counts a failing send in failed without throwing', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const optionId = await firstOptionId(db, pollId, ownerId)
     await makeParticipant(db, pollId, 'Alice', {}, { email: 'alice@example.com' })
 
-    const result = await finalizePoll(db, pollId, ownerId, optionId)
+    const result = await finalizePoll(db, pollId, org, ownerId, optionId)
     expect(result.recipients).toHaveLength(2) // Alice + owner
 
     const sentMessages: MailMessage[] = []

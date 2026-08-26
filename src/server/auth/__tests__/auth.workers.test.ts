@@ -58,33 +58,4 @@ describe('auth', () => {
       ]),
     )
   })
-
-  it('does not allow the client to set handle via updateUser (server-managed field)', async () => {
-    const auth = createAuth({ d1: env.DB, env })
-    const email = `handle-guard-${crypto.randomUUID()}@example.com`
-    const password = 'correct horse battery staple'
-    const signUp = await auth.api.signUpEmail({
-      body: { name: 'Handle Guard', email, password, locale: 'en' },
-      headers: captchaHeaders,
-    })
-    await env.DB.prepare('update user set email_verified = 1 where email = ?').bind(email).run()
-    const signIn = await auth.api.signInEmail({
-      body: { email, password },
-      headers: captchaHeaders,
-      asResponse: true,
-    })
-    const cookie = signIn.headers.get('set-cookie')!.split(';')[0]!
-
-    await expect(
-      auth.api.updateUser({
-        body: { handle: 'hijacked' } as unknown as Record<string, never>,
-        headers: new Headers({ ...Object.fromEntries(captchaHeaders), cookie }),
-      }),
-    ).rejects.toThrow(/not allowed to be set/)
-
-    const row = await env.DB.prepare('select handle from user where id = ?')
-      .bind(signUp.user.id)
-      .first<{ handle: string | null }>()
-    expect(row?.handle).not.toBe('hijacked')
-  })
 })

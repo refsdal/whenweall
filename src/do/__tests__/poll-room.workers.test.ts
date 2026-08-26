@@ -9,7 +9,7 @@ import type { MailMessage } from '#/server/mailer/mailer'
 import { DIGEST_DELAY_MS, MAX_RETRIES, PollRoom, RETRY_DELAY_MS } from '#/do/PollRoom'
 import type { PollEvent } from '#/do/protocol'
 import { getPollView, setPollStatus } from '#/server/polls/service'
-import { makePoll, makeSignupPoll, makeUser } from '../../../test/helpers'
+import { makeOrg, makePoll, makeSignupPoll, makeUser, makeUserWithOrg } from '../../../test/helpers'
 
 // `vi.mock` cannot reach code running inside a Durable Object's own module graph in
 // @cloudflare/vitest-plugin 1.0 — `alarm()`/RPC methods load via a separate `importModule()` path
@@ -75,8 +75,8 @@ async function throwingMailer(): Promise<boolean> {
 describe('enqueueDigest', () => {
   it('schedules the digest alarm ~10 minutes out and accumulates items', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
     const before = Date.now()
 
@@ -97,7 +97,8 @@ describe('alarm — digest', () => {
   it('sends exactly one digest mail to the owner and clears storage', async () => {
     const db = createDb(env.DB)
     const { id: ownerId, email: ownerEmail } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { id: orgId } = await makeOrg(db, ownerId)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
     await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
@@ -121,8 +122,8 @@ describe('alarm — digest', () => {
 
   it('sends no mail and clears storage when nothing matches the owner notification flags', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     await db.update(polls).set({ notifyOnVote: false }).where(eq(polls.id, pollId))
     const stub = stubFor(pollId)
 
@@ -141,8 +142,8 @@ describe('alarm — digest', () => {
 
   it('retries on mail failure and drops the digest after MAX_RETRIES failures', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
     await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
@@ -179,9 +180,10 @@ describe('alarm — deadline', () => {
   it('closes an expired poll, emails the owner, and clears the deadline alarm', async () => {
     const db = createDb(env.DB)
     const { id: ownerId, email: ownerEmail } = await makeUser(db)
+    const { id: orgId } = await makeOrg(db, ownerId)
     // D1's deadlineAt is what closeExpiredPoll checks — keep it genuinely in the past.
     const past = new Date(Date.now() - 60_000).toISOString()
-    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: past })
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { deadlineAt: past })
     const stub = stubFor(pollId)
 
     // Schedule the DO's own alarm for the future so miniflare doesn't auto-fire it before we're
@@ -207,9 +209,9 @@ describe('alarm — deadline', () => {
 
   it('deletes the alarm when the deadline is cleared', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const future = new Date(Date.now() + 60_000).toISOString()
-    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: future })
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { deadlineAt: future })
     const stub = stubFor(pollId)
 
     await stub.syncDeadline(pollId, future)
@@ -223,9 +225,9 @@ describe('alarm — deadline', () => {
 describe('alarm — branch isolation', () => {
   it('does not reject when the deadline mailer throws, closes the poll, and still arms a pending digest afterwards', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const past = new Date(Date.now() - 60_000).toISOString()
-    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: past })
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { deadlineAt: past })
     const stub = stubFor(pollId)
 
     const future = new Date(Date.now() + 60_000).toISOString()
@@ -254,9 +256,9 @@ describe('alarm — branch isolation', () => {
 
   it('still runs the deadline branch when the digest mailer throws, and applies digest retry bookkeeping', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const past = new Date(Date.now() - 60_000).toISOString()
-    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: past })
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { deadlineAt: past })
     const stub = stubFor(pollId)
 
     const future = new Date(Date.now() + 60_000).toISOString()
@@ -283,9 +285,9 @@ describe('alarm — branch isolation', () => {
 describe('alarm — rearm ordering', () => {
   it('schedules the alarm for the earlier of digest and deadline', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const soon = new Date(Date.now() + 3 * 60_000).toISOString()
-    const { id: pollId } = await makePoll(db, ownerId, { deadlineAt: soon })
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { deadlineAt: soon })
     const stub = stubFor(pollId)
 
     await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
@@ -300,8 +302,8 @@ describe('alarm — rearm ordering', () => {
 describe('websocket fan-out', () => {
   it('rejects non-websocket requests with 426', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
     const res = await stub.fetch(`https://do/ws?pollId=${pollId}`)
@@ -310,8 +312,8 @@ describe('websocket fan-out', () => {
 
   it('accepts a websocket upgrade, sends presence, and fans out broadcasts', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
     const res = await stub.fetch(`https://do/ws?pollId=${pollId}`, {
@@ -347,8 +349,8 @@ describe('websocket fan-out', () => {
 
   it('excludes the closing socket from the presence count broadcast on close', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makePoll(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
     async function connect() {
@@ -408,8 +410,12 @@ describe('claim / unclaim RPC', () => {
 
   it('claims a slot inside the DO and broadcasts poll.changed vote', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const stub = stubFor(pollId)
@@ -426,8 +432,12 @@ describe('claim / unclaim RPC', () => {
 
   it('does not broadcast when re-claiming a slot already held (changed: false)', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const stub = stubFor(pollId)
@@ -451,8 +461,12 @@ describe('claim / unclaim RPC', () => {
 
   it('unclaims a slot inside the DO and broadcasts poll.changed vote', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const stub = stubFor(pollId)
@@ -470,14 +484,18 @@ describe('claim / unclaim RPC', () => {
 
   it('unclaims on a closed sheet when allowClosed is set, and rejects it otherwise', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [null] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [null] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const stub = stubFor(pollId)
 
     const claimed = await stub.claim(pollId, slot.id, { name: 'Alice', userId: null })
-    await setPollStatus(db, pollId, ownerId, 'closed')
+    await setPollStatus(db, pollId, { id: orgId, role: 'owner' as const }, ownerId, 'closed')
 
     let caught: unknown
     try {
@@ -495,8 +513,12 @@ describe('claim / unclaim RPC', () => {
 
   it('propagates an AppError code thrown inside the DO to the caller via errorCode()', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [1] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const stub = stubFor(pollId)
@@ -515,8 +537,12 @@ describe('claim / unclaim RPC', () => {
 
   it('serialises concurrent claims on a capacity-1 slot: exactly one succeeds', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pollId } = await makeSignupPoll(db, ownerId, { capacities: [1] })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makeSignupPoll(
+      db,
+      { orgId, createdBy: ownerId },
+      { capacities: [1] },
+    )
     const view = await getPollView(db, pollId, { userId: ownerId })
     const slot = view!.options[0]!
     const stub = stubFor(pollId)

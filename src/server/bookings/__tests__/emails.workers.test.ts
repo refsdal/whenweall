@@ -1,10 +1,10 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it, vi } from 'vitest'
 import { createDb } from '#/server/db/client'
-import { setUserHandle } from '#/server/bookings/pages'
+import { setOrgSlug } from '#/server/bookings/pages'
 import { sendBookingEmails, sendGoogleSyncFailedNotice } from '#/server/bookings/emails'
 import { createBooking } from '#/server/bookings/bookings'
-import { makeBooking, makeBookingPage, makeUser } from '../../../../test/helpers'
+import { makeBooking, makeBookingPage, makeUserWithOrg } from '../../../../test/helpers'
 import { localToUtcIso } from '#/lib/time'
 
 const TUE_9AM = localToUtcIso('2026-08-25', '09:00', 'Europe/Oslo')
@@ -18,9 +18,12 @@ const testEnv = {
 describe('sendBookingEmails', () => {
   it('sends confirmed emails to visitor + owner with an ics attachment', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-confirmed@example.com' })
-    await setUserHandle(db, ownerId, 'ada-confirmed')
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
+      name: 'Ada',
+      email: 'ada-confirmed@example.com',
+    })
+    await setOrgSlug(db, orgId, 'ada-confirmed')
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { bookingId, manageToken } = await createBooking(
       db,
       pageId,
@@ -49,9 +52,12 @@ describe('sendBookingEmails', () => {
 
   it('sends cancelled emails without an ics attachment', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-cancelled@example.com' })
-    await setUserHandle(db, ownerId, 'ada-cancelled')
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
+      name: 'Ada',
+      email: 'ada-cancelled@example.com',
+    })
+    await setOrgSlug(db, orgId, 'ada-cancelled')
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM, {
       status: 'cancelled',
       cancelledBy: 'visitor',
@@ -79,12 +85,12 @@ describe('sendBookingEmails', () => {
 
   it('sends rescheduled emails to visitor + owner, mentioning the previous and new time', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, {
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
       name: 'Ada',
       email: 'ada-rescheduled@example.com',
     })
-    await setUserHandle(db, ownerId, 'ada-rescheduled')
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    await setOrgSlug(db, orgId, 'ada-rescheduled')
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const WED_10AM = localToUtcIso('2026-08-26', '10:00', 'Europe/Oslo')
     const { id: bookingId } = await makeBooking(db, pageId, WED_10AM, {
       visitorEmail: 'bob-rescheduled@example.com',
@@ -109,12 +115,12 @@ describe('sendBookingEmails', () => {
 
   it('sends the organiser a dedicated "booking moved" notice, not "New booking"', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, {
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
       name: 'Ada',
       email: 'ada-org-rescheduled@example.com',
     })
-    await setUserHandle(db, ownerId, 'ada-org-rescheduled')
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    await setOrgSlug(db, orgId, 'ada-org-rescheduled')
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const WED_10AM = localToUtcIso('2026-08-26', '10:00', 'Europe/Oslo')
     const { id: bookingId } = await makeBooking(db, pageId, WED_10AM, {
       visitorEmail: 'bob-org-rescheduled@example.com',
@@ -136,11 +142,54 @@ describe('sendBookingEmails', () => {
     expect(ownerCall?.[1].html).toContain('26')
   })
 
+  it('still sends the visitor a confirmed email (with manage link + ics) when the page has no assigned member, and skips the organiser send', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
+      name: 'Ada',
+      email: 'ada-no-member@example.com',
+    })
+    await setOrgSlug(db, orgId, 'ada-no-member')
+    const { id: pageId } = await makeBookingPage(db, {
+      orgId,
+      createdBy: ownerId,
+      memberUserId: null,
+    })
+    const { bookingId, manageToken } = await createBooking(
+      db,
+      pageId,
+      {
+        startAt: TUE_9AM,
+        name: 'Bob',
+        email: 'bob-no-member@example.com',
+        timezone: 'Europe/Oslo',
+      },
+      [],
+      new Date('2026-08-20T00:00:00Z'),
+    )
+
+    const mailer = vi.fn().mockResolvedValue(true)
+    const result = await sendBookingEmails(testEnv, 'confirmed', bookingId, {
+      db,
+      mailer,
+      manageToken,
+    })
+
+    expect(result).toEqual({ sent: 1, failed: 0 })
+    expect(mailer).toHaveBeenCalledTimes(1)
+    const [visitorCall] = mailer.mock.calls
+    expect(visitorCall?.[1].to).toBe('bob-no-member@example.com')
+    expect(visitorCall?.[1].html).toContain(manageToken)
+    expect(visitorCall?.[1].attachments?.[0]?.filename).toBe('calendar.ics')
+  })
+
   it('counts a mailer failure without throwing', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-failure@example.com' })
-    await setUserHandle(db, ownerId, 'ada-failure')
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
+      name: 'Ada',
+      email: 'ada-failure@example.com',
+    })
+    await setOrgSlug(db, orgId, 'ada-failure')
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM, {
       visitorEmail: 'bob@example.com',
     })
@@ -155,9 +204,16 @@ describe('sendBookingEmails', () => {
 describe('sendGoogleSyncFailedNotice', () => {
   it('sends a best-effort notice to the organiser, mentioning the page title', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, { name: 'Ada', email: 'ada-sync@example.com' })
-    await setUserHandle(db, ownerId, 'ada-sync')
-    const { id: pageId } = await makeBookingPage(db, ownerId, { title: 'Coffee chat' })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
+      name: 'Ada',
+      email: 'ada-sync@example.com',
+    })
+    await setOrgSlug(db, orgId, 'ada-sync')
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { title: 'Coffee chat' },
+    )
     const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM, {
       visitorEmail: 'bob@example.com',
     })
@@ -183,12 +239,12 @@ describe('sendGoogleSyncFailedNotice', () => {
 
   it('swallows a mailer failure without throwing', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db, {
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db, {
       name: 'Ada',
       email: 'ada-sync-fail@example.com',
     })
-    await setUserHandle(db, ownerId, 'ada-sync-fail')
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    await setOrgSlug(db, orgId, 'ada-sync-fail')
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { id: bookingId } = await makeBooking(db, pageId, TUE_9AM, {
       visitorEmail: 'bob@example.com',
     })

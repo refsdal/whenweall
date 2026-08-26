@@ -8,12 +8,13 @@ import {
   user,
   votes,
   participants,
+  organization,
   bookingPages,
   bookings,
 } from '#/server/db/schema'
 
 describe('schema', () => {
-  it('inserts a user, a poll with options, a participant and votes, and cascades on delete', async () => {
+  it('inserts a user, an org, a poll with options, a participant and votes, and cascades on delete', async () => {
     const db = createDb(env.DB)
     const now = new Date().toISOString()
     await db.insert(user).values({
@@ -24,9 +25,13 @@ describe('schema', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     })
+    await db
+      .insert(organization)
+      .values({ id: 'org1', name: 'Ada Org', slug: 'ada-org', createdAt: new Date() })
     await db.insert(polls).values({
       id: 'p'.repeat(12),
-      ownerId: 'u1',
+      organizationId: 'org1',
+      createdBy: 'u1',
       type: 'options',
       title: 'Lunch',
       timezone: 'Europe/Oslo',
@@ -61,9 +66,13 @@ describe('schema', () => {
   it('inserts a signup poll with signupMaxClaims and an option with capacity, and reads them back', async () => {
     const db = createDb(env.DB)
     const now = new Date().toISOString()
+    await db
+      .insert(organization)
+      .values({ id: 'org-signup', name: 'Signup Org', slug: 'signup-org', createdAt: new Date() })
     await db.insert(polls).values({
       id: 's'.repeat(12),
-      ownerId: 'u1',
+      organizationId: 'org-signup',
+      createdBy: null,
       type: 'signup',
       title: 'Bring a dish',
       timezone: 'Europe/Oslo',
@@ -101,11 +110,15 @@ describe('schema', () => {
       emailVerified: true,
       createdAt: new Date(),
       updatedAt: new Date(),
-      handle: 'grace',
     })
+    await db
+      .insert(organization)
+      .values({ id: 'org-booking-1', name: 'Grace Org', slug: 'grace', createdAt: new Date() })
     await db.insert(bookingPages).values({
       id: 'bp1',
-      ownerId: 'u-booking-1',
+      organizationId: 'org-booking-1',
+      createdBy: 'u-booking-1',
+      memberUserId: 'u-booking-1',
       slug: 'intro-call',
       title: '15 min intro',
       timezone: 'Europe/Oslo',
@@ -133,9 +146,10 @@ describe('schema', () => {
 
     const loadedPage = await db.query.bookingPages.findFirst({
       where: eq(bookingPages.id, 'bp1'),
-      with: { owner: true, bookings: true },
+      with: { organization: true, member: true, bookings: true },
     })
-    expect(loadedPage?.owner.handle).toBe('grace')
+    expect(loadedPage?.organization.slug).toBe('grace')
+    expect(loadedPage?.member?.id).toBe('u-booking-1')
     expect(loadedPage?.status).toBe('active')
     expect(loadedPage?.googleSync).toBe(false)
     expect(loadedPage?.reminders).toBe(true)
@@ -152,19 +166,14 @@ describe('schema', () => {
     expect(await db.select().from(bookings).where(eq(bookings.pageId, 'bp1'))).toHaveLength(0)
   })
 
-  it('rejects a second booking page with the same (ownerId, slug)', async () => {
+  it('rejects a second booking page with the same (organizationId, slug)', async () => {
     const db = createDb(env.DB)
     const now = new Date().toISOString()
-    await db.insert(user).values({
-      id: 'u-booking-2',
-      name: 'Hedy',
-      email: 'hedy@example.com',
-      emailVerified: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })
+    await db
+      .insert(organization)
+      .values({ id: 'org-booking-2', name: 'Hedy Org', slug: 'hedy-org', createdAt: new Date() })
     const page = {
-      ownerId: 'u-booking-2',
+      organizationId: 'org-booking-2',
       slug: 'dup-slug',
       title: 'A page',
       timezone: 'Europe/Oslo',
@@ -181,49 +190,18 @@ describe('schema', () => {
     await expect(db.insert(bookingPages).values({ id: 'bp-dup-2', ...page })).rejects.toThrow()
   })
 
-  it('rejects a second user with the same handle', async () => {
+  it('rejects a second organization with the same slug', async () => {
     const db = createDb(env.DB)
-    await db.insert(user).values({
-      id: 'u-handle-1',
-      name: 'Ida',
-      email: 'ida@example.com',
-      emailVerified: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      handle: 'shared-handle',
-    })
+    await db
+      .insert(organization)
+      .values({ id: 'org-handle-1', name: 'Ida Org', slug: 'shared-slug', createdAt: new Date() })
     await expect(
-      db.insert(user).values({
-        id: 'u-handle-2',
-        name: 'Iris',
-        email: 'iris@example.com',
-        emailVerified: true,
+      db.insert(organization).values({
+        id: 'org-handle-2',
+        name: 'Iris Org',
+        slug: 'shared-slug',
         createdAt: new Date(),
-        updatedAt: new Date(),
-        handle: 'shared-handle',
       }),
     ).rejects.toThrow()
-  })
-
-  it('allows multiple users with no handle set', async () => {
-    const db = createDb(env.DB)
-    await db.insert(user).values({
-      id: 'u-nohandle-1',
-      name: 'Nora',
-      email: 'nora@example.com',
-      emailVerified: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })
-    await db.insert(user).values({
-      id: 'u-nohandle-2',
-      name: 'Nadia',
-      email: 'nadia@example.com',
-      emailVerified: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })
-    const rows = await db.select().from(user).where(eq(user.id, 'u-nohandle-1'))
-    expect(rows).toHaveLength(1)
   })
 })

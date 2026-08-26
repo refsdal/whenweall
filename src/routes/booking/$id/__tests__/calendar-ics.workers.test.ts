@@ -1,10 +1,12 @@
 import { env } from 'cloudflare:workers'
+import { eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { getAuth } from '#/server/auth/auth'
+import { member } from '#/server/db/schema'
 import { localToUtcIso } from '#/lib/time'
 import { createBooking } from '#/server/bookings/bookings'
-import { makeBookingPage, makeUser } from '../../../../../test/helpers'
+import { addOrgMember, makeBookingPage, makeUserWithOrg } from '../../../../../test/helpers'
 import { bookingIcsResponse } from '../calendar[.]ics'
 
 const captchaHeaders = { 'x-captcha-response': 'test-token' }
@@ -19,7 +21,15 @@ async function signedInCookie(email: string, password: string): Promise<string> 
   return setCookie.split(';')[0]!
 }
 
-async function makeVerifiedOwner(): Promise<{ id: string; email: string; cookie: string }> {
+/** A real signed-up user, whose personal organization was auto-created by Better-Auth's
+ * `databaseHooks` (see `createPersonalOrganization`) — unlike `makeUser`, which inserts a bare
+ * `user` row with no org at all. */
+async function makeVerifiedOwner(): Promise<{
+  id: string
+  email: string
+  cookie: string
+  orgId: string
+}> {
   const email = `owner-${crypto.randomUUID()}@example.com`
   const password = 'correct horse battery staple'
   const signUp = await getAuth().api.signUpEmail({
@@ -28,7 +38,9 @@ async function makeVerifiedOwner(): Promise<{ id: string; email: string; cookie:
   })
   await env.DB.prepare('update user set email_verified = 1 where email = ?').bind(email).run()
   const cookie = await signedInCookie(email, password)
-  return { id: signUp.user.id, email, cookie }
+  const db = createDb(env.DB)
+  const m = await db.query.member.findFirst({ where: eq(member.userId, signUp.user.id) })
+  return { id: signUp.user.id, email, cookie, orgId: m!.organizationId }
 }
 
 const TUE_9AM = localToUtcIso('2026-08-25', '09:00', 'Europe/Oslo')
@@ -50,7 +62,7 @@ describe('GET /booking/$id/calendar.ics', () => {
   it('returns 403 for a wrong manage token', async () => {
     const db = createDb(env.DB)
     const owner = await makeVerifiedOwner()
-    const { id: pageId } = await makeBookingPage(db, owner.id)
+    const { id: pageId } = await makeBookingPage(db, { orgId: owner.orgId, createdBy: owner.id })
     const { bookingId } = await createBooking(
       db,
       pageId,
@@ -63,10 +75,38 @@ describe('GET /booking/$id/calendar.ics', () => {
     expect(res.status).toBe(403)
   })
 
-  it('returns 403 when the session user does not own the booking page', async () => {
+  it('returns 403 when the session user is a same-org member who did not create the page', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const owner = await makeVerifiedOwner()
+    const { id: pageId } = await makeBookingPage(db, { orgId: owner.orgId, createdBy: owner.id })
+    const { bookingId } = await createBooking(
+      db,
+      pageId,
+      { startAt: TUE_9AM, name: 'Bob', email: 'bob@example.com', timezone: 'Europe/Oslo' },
+      [],
+      new Date('2026-08-20T00:00:00Z'),
+    )
+    const other = await makeVerifiedOwner()
+    await addOrgMember(db, owner.orgId, other.id)
+    // `other`'s session was created against their own personal org (the "first org by
+    // createdAt" the session.create.before hook picks) before they were added as a member of
+    // `owner`'s org above — force their *active* org to `owner`'s so the request actually
+    // exercises the same-org-but-wrong-role path, not the different-org one.
+    await env.DB.prepare('update session set active_organization_id = ? where user_id = ?')
+      .bind(owner.orgId, other.id)
+      .run()
+
+    const res = await bookingIcsResponse(
+      new Request('https://x', { headers: { cookie: other.cookie } }),
+      bookingId,
+    )
+    expect(res.status).toBe(403)
+  })
+
+  it('returns 404 when the session user is signed in with a different org entirely', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { bookingId } = await createBooking(
       db,
       pageId,
@@ -80,13 +120,13 @@ describe('GET /booking/$id/calendar.ics', () => {
       new Request('https://x', { headers: { cookie: other.cookie } }),
       bookingId,
     )
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('returns 200 with the ics calendar for a valid manage token', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const { bookingId, manageToken } = await createBooking(
       db,
       pageId,
@@ -107,7 +147,7 @@ describe('GET /booking/$id/calendar.ics', () => {
   it('returns 200 with the ics calendar for the owning organiser', async () => {
     const db = createDb(env.DB)
     const owner = await makeVerifiedOwner()
-    const { id: pageId } = await makeBookingPage(db, owner.id)
+    const { id: pageId } = await makeBookingPage(db, { orgId: owner.orgId, createdBy: owner.id })
     const { bookingId } = await createBooking(
       db,
       pageId,

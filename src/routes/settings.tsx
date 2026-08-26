@@ -45,11 +45,15 @@ function SettingsPage() {
 
       <Separator />
 
-      <section>
-        <HandleSection handle={session.user.handle} appUrl={publicConfig.appUrl} />
-      </section>
+      {session.org && session.org.role === 'owner' && (
+        <>
+          <section>
+            <HandleSection handle={session.org.slug} appUrl={publicConfig.appUrl} />
+          </section>
 
-      <Separator />
+          <Separator />
+        </>
+      )}
 
       <section className="flex flex-col gap-3">
         <div>

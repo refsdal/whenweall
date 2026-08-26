@@ -1,14 +1,21 @@
 import { createServerFn } from '@tanstack/react-start'
 import { env } from 'cloudflare:workers'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import * as z from 'zod'
 import type { Db } from '#/server/db/client'
 import { getDb } from '#/server/db/client'
-import { bookingPages, bookings, type BookingPage, type CancelledBy } from '#/server/db/schema'
+import {
+  bookingPages,
+  bookings,
+  member,
+  type BookingPage,
+  type CancelledBy,
+} from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
 import { generateSlots, type Interval } from '#/lib/availability'
 import { getLocale } from '#/paraglide/runtime'
-import { requireSessionMiddleware, sessionMiddleware } from '#/server/auth/middleware'
+import { sessionMiddleware } from '#/server/auth/middleware'
+import { requireOrgMiddleware, type OrgRole } from '#/server/auth/org'
 import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { requireTurnstile } from '#/server/http/turnstile'
 import { createCalendarClient, getGoogleAccessToken } from '#/server/google/calendar'
@@ -25,6 +32,7 @@ import {
 } from './google-sync'
 import { getPublicPage } from './pages'
 import * as bookingService from './bookings'
+import type { ActingOrg } from './bookings'
 import {
   bookSlotSchema,
   manageBookingSchema,
@@ -40,23 +48,27 @@ import {
 const BOOK_LIMIT_ONLY = [rateLimitMiddleware('book')] as const
 const SESSION_ONLY = [sessionMiddleware] as const
 const SESSION_AND_BOOK_LIMIT = [sessionMiddleware, rateLimitMiddleware('book')] as const
-const REQUIRE_SESSION = [requireSessionMiddleware] as const
+const REQUIRE_ORG = [requireOrgMiddleware] as const
 
 export const SERVER_FN_MIDDLEWARE = {
   getPublicAvailability: BOOK_LIMIT_ONLY,
   bookSlot: SESSION_AND_BOOK_LIMIT,
+  // A visitor's manage token always works without a session at all; the owner path needs a
+  // session but not necessarily *this* org — `manageAuthFor` falls back to a plain session id,
+  // and `getBookingForManage`/`cancelBooking`/`rescheduleBooking` do their own org auth once
+  // they've loaded the booking's page (its org, not the caller's active one, is what matters).
   getManagedBooking: SESSION_ONLY,
   cancelBooking: SESSION_AND_BOOK_LIMIT,
   rescheduleBooking: SESSION_AND_BOOK_LIMIT,
-  listPageBookings: REQUIRE_SESSION,
+  listPageBookings: REQUIRE_ORG,
 } as const
 
 /**
  * Busy intervals for a booking-page's slot generation/validation: the page's own confirmed
- * bookings, plus — when the page has Google Calendar sync on and its owner still has a usable
- * token — their Google freebusy over the same range. A freebusy failure degrades to "no extra
- * busy intervals" rather than failing the caller; Google sync is always optional (spec decision
- * 3).
+ * bookings, plus — when the page has Google Calendar sync on and its `memberUserId` (whose
+ * calendar the page reads/writes) still has a usable token — their Google freebusy over the same
+ * range. A freebusy failure degrades to "no extra busy intervals" rather than failing the caller;
+ * Google sync is always optional (spec decision 3).
  */
 async function computeBusy(
   db: Db,
@@ -64,10 +76,10 @@ async function computeBusy(
   range: { from: Date; to: Date },
 ): Promise<Interval[]> {
   const busy = await bookingService.bookedIntervals(db, page.id, range)
-  if (!page.googleSync) return busy
+  if (!page.googleSync || !page.memberUserId) return busy
 
   try {
-    const token = await getGoogleAccessToken(page.ownerId)
+    const token = await getGoogleAccessToken(page.memberUserId)
     if (!token) return busy
     const google = await createCalendarClient().getFreeBusy(token, {
       timeMin: range.from.toISOString(),
@@ -84,6 +96,26 @@ async function requireDbPage(db: Db, pageId: string): Promise<BookingPage> {
   const page = await db.query.bookingPages.findFirst({ where: eq(bookingPages.id, pageId) })
   if (!page || page.deletedAt) throw new AppError('NOT_FOUND')
   return page
+}
+
+/**
+ * Resolves the signed-in owner's org auth for `getManagedBooking`/`cancelBooking`/
+ * `rescheduleBooking`'s no-token path — the same "active org + membership role" `requireOrgMiddleware`
+ * derives, duplicated here because those three server fns also serve a visitor's manage-token path
+ * with no session at all, so they can't unconditionally require one via middleware.
+ */
+async function requireOwnerAuth(
+  session: { user: { id: string }; session: unknown } | null | undefined,
+): Promise<{ org: ActingOrg; userId: string }> {
+  if (!session) throw new AppError('UNAUTHORIZED')
+  const activeOrgId = (session.session as { activeOrganizationId?: string | null })
+    .activeOrganizationId
+  if (!activeOrgId) throw new AppError('UNAUTHORIZED')
+  const membership = await getDb().query.member.findFirst({
+    where: and(eq(member.organizationId, activeOrgId), eq(member.userId, session.user.id)),
+  })
+  if (!membership) throw new AppError('FORBIDDEN')
+  return { org: { id: activeOrgId, role: membership.role as OrgRole }, userId: session.user.id }
 }
 
 export const getPublicAvailability = createServerFn({ method: 'GET' })
@@ -151,24 +183,22 @@ export const bookSlot = createServerFn({ method: 'POST' })
   })
 
 /** Resolves who's allowed to see/manage one booking: the visitor's manage token, or the signed-in
- * owner (checked inside `getBookingForManage`/`cancelBooking`/`rescheduleBooking` themselves). */
-function manageAuthFor(
+ * owner's active-org auth (`requireOwnerAuth` — checked inside
+ * `getBookingForManage`/`cancelBooking`/`rescheduleBooking` themselves). */
+async function manageAuthFor(
   token: string | undefined,
-  userId: string | null,
-): { token: string } | { ownerId: string } {
-  return token ? { token } : { ownerId: userId ?? '' }
+  session: { user: { id: string }; session: unknown } | null | undefined,
+): Promise<{ token: string } | { org: ActingOrg; userId: string }> {
+  if (token) return { token }
+  return requireOwnerAuth(session)
 }
 
 export const getManagedBooking = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.getManagedBooking)
   .validator(manageBookingSchema)
   .handler(async ({ data, context }) => {
-    const userId = context.session?.user.id ?? null
-    return bookingService.getBookingForManage(
-      getDb(),
-      data.bookingId,
-      manageAuthFor(data.token, userId),
-    )
+    const auth = await manageAuthFor(data.token, context.session)
+    return bookingService.getBookingForManage(getDb(), data.bookingId, auth)
   })
 
 export const cancelBooking = createServerFn({ method: 'POST' })
@@ -176,12 +206,8 @@ export const cancelBooking = createServerFn({ method: 'POST' })
   .validator(manageBookingSchema)
   .handler(async ({ data, context }) => {
     const db = getDb()
-    const userId = context.session?.user.id ?? null
-    const view = await bookingService.getBookingForManage(
-      db,
-      data.bookingId,
-      manageAuthFor(data.token, userId),
-    )
+    const auth = await manageAuthFor(data.token, context.session)
+    const view = await bookingService.getBookingForManage(db, data.bookingId, auth)
     const by: CancelledBy = data.token ? 'visitor' : 'organiser'
 
     const result = await cancelViaRoom(view.page.id, data.bookingId, by)
@@ -211,12 +237,8 @@ export const rescheduleBooking = createServerFn({ method: 'POST' })
   .validator(rescheduleSchema)
   .handler(async ({ data, context }) => {
     const db = getDb()
-    const userId = context.session?.user.id ?? null
-    const view = await bookingService.getBookingForManage(
-      db,
-      data.bookingId,
-      manageAuthFor(data.token, userId),
-    )
+    const auth = await manageAuthFor(data.token, context.session)
+    const view = await bookingService.getBookingForManage(db, data.bookingId, auth)
 
     const page = await requireDbPage(db, view.page.id)
     const startMs = new Date(data.startAt).getTime()
@@ -258,7 +280,7 @@ export const listPageBookings = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.listPageBookings)
   .validator(z.object({ pageId: z.string(), from: z.iso.datetime(), to: z.iso.datetime() }))
   .handler(async ({ data, context }) => {
-    return bookingService.listBookings(getDb(), data.pageId, context.session.user.id, {
+    return bookingService.listBookings(getDb(), data.pageId, context.org, context.session.user.id, {
       from: new Date(data.from),
       to: new Date(data.to),
     })

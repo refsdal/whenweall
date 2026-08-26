@@ -1,9 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { env } from 'cloudflare:workers'
+import { eq } from 'drizzle-orm'
 import { getAuth } from '#/server/auth/auth'
 import { getDb } from '#/server/db/client'
+import { member } from '#/server/db/schema'
 import * as pollService from '#/server/polls/service'
-import { createPage, setUserHandle } from '#/server/bookings/pages'
+import { createPage, setOrgSlug } from '#/server/bookings/pages'
 import type { CreateBookingPageInput } from '#/server/bookings/schemas'
 
 type SeedBody = {
@@ -64,33 +66,48 @@ export async function seedResponse(body: SeedBody): Promise<Response> {
 
   await env.DB.prepare('update user set email_verified = 1 where email = ?').bind(email).run()
 
+  // Every signup auto-gets a personal organization (Task 1) — content ownership lives there now,
+  // so seeded content is created under that org rather than directly under the user.
+  const db = getDb()
+  const membership = await db.query.member.findFirst({ where: eq(member.userId, signUp.user.id) })
+  const organizationId = membership!.organizationId
+  const createdBy = signUp.user.id
+
   let pollId: string | null = null
   if (body.withPoll) {
-    const created = await pollService.createPoll(getDb(), signUp.user.id, {
-      type: 'datetime',
-      title: 'Seeded test poll',
-      description: 'Created by the test seed route.',
-      timezone: 'Europe/Oslo',
-      options: samplePollOptions(),
-      allowComments: true,
-      allowIfNeedBe: true,
-      requireParticipantEmail: false,
-    })
+    const created = await pollService.createPoll(
+      db,
+      { organizationId, createdBy },
+      {
+        type: 'datetime',
+        title: 'Seeded test poll',
+        description: 'Created by the test seed route.',
+        timezone: 'Europe/Oslo',
+        options: samplePollOptions(),
+        allowComments: true,
+        allowIfNeedBe: true,
+        requireParticipantEmail: false,
+      },
+    )
     pollId = created.id
   }
   // Two text slots — one capped at 1, one unlimited — enough for an e2e test to fill a slot, see
   // it go "full", and still claim the other one.
   if (body.withSignup) {
-    const created = await pollService.createPoll(getDb(), signUp.user.id, {
-      type: 'signup',
-      title: 'Seeded sign-up sheet',
-      description: 'Created by the test seed route.',
-      timezone: 'Europe/Oslo',
-      options: [
-        { kind: 'text', label: 'Slot 1', capacity: 1 },
-        { kind: 'text', label: 'Slot 2', capacity: null },
-      ],
-    })
+    const created = await pollService.createPoll(
+      db,
+      { organizationId, createdBy },
+      {
+        type: 'signup',
+        title: 'Seeded sign-up sheet',
+        description: 'Created by the test seed route.',
+        timezone: 'Europe/Oslo',
+        options: [
+          { kind: 'text', label: 'Slot 1', capacity: 1 },
+          { kind: 'text', label: 'Slot 2', capacity: null },
+        ],
+      },
+    )
     pollId = created.id
   }
 
@@ -99,9 +116,9 @@ export async function seedResponse(body: SeedBody): Promise<Response> {
   let slug: string | null = null
   if (body.withBookingPage) {
     handle = `test-${crypto.randomUUID().slice(0, 8)}`
-    await setUserHandle(getDb(), signUp.user.id, handle)
+    await setOrgSlug(db, organizationId, handle)
     const page = sampleBookingPage()
-    const created = await createPage(getDb(), signUp.user.id, page)
+    const created = await createPage(db, { organizationId, createdBy }, page)
     pageId = created.id
     slug = page.slug
   }

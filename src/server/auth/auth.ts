@@ -1,14 +1,32 @@
-import { betterAuth } from 'better-auth'
-import { captcha } from 'better-auth/plugins'
+import { APIError, betterAuth } from 'better-auth'
+import { captcha, organization } from 'better-auth/plugins'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
+import { eq } from 'drizzle-orm'
 import { env as workerEnv } from 'cloudflare:workers'
 import { createDb } from '#/server/db/client'
 import * as schema from '#/server/db/schema'
+import { member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
 import { sendMail } from '#/server/mailer/mailer'
-import { renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
+import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
+import { handleSchema } from '#/server/bookings/schemas'
+import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
+
+/** Shared by `beforeCreateOrganization`/`beforeUpdateOrganization`: any slug the caller supplies
+ * (direct API calls included — this is what actually stops `POST /api/auth/organization/create|
+ * update` from bypassing `handleSchema`) must satisfy the same rules as a booking-page handle,
+ * since an org's slug *is* its public booking handle (`/book/<slug>/...`). */
+function assertValidOrgSlug(slug: string | undefined): void {
+  if (slug === undefined) return
+  const result = handleSchema.safeParse(slug)
+  if (!result.success) {
+    throw new APIError('BAD_REQUEST', {
+      message: result.error.issues[0]?.message ?? 'Invalid organization slug',
+    })
+  }
+}
 
 type AuthEnv = Pick<
   Env,
@@ -57,15 +75,75 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
     user: {
       additionalFields: {
         locale: { type: 'string', required: false, input: true },
-        // handle is server-managed (see setUserHandle in src/server/bookings/pages.ts) and must
-        // never be client-writable, or /update-user and /sign-up could set it directly and bypass
-        // handleSchema's slug/uniqueness validation.
-        handle: { type: 'string', required: false, input: false },
       },
       deleteUser: { enabled: true },
     },
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (u) => {
+            await createPersonalOrganization(
+              createDb(d1),
+              u as { id: string; name: string; email: string },
+            )
+          },
+        },
+        delete: {
+          before: async (u) => {
+            // Runs before the user row (and its `member` rows, via their own cascading FK) is
+            // actually deleted — see `deleteOrphanedOwnerOrganizations`'s own doc comment.
+            await deleteOrphanedOwnerOrganizations(createDb(d1), (u as { id: string }).id)
+          },
+        },
+      },
+      session: {
+        create: {
+          before: async (s) => {
+            // Every session starts scoped to the user's first org (their personal one).
+            const m = await createDb(d1).query.member.findFirst({
+              where: eq(member.userId, s.userId),
+              orderBy: (mm, { asc }) => [asc(mm.createdAt)],
+            })
+            return { data: { ...s, activeOrganizationId: m?.organizationId ?? null } }
+          },
+        },
+      },
+    },
     plugins: [
       passkey({ rpID: url.hostname, rpName: appConfig.name, origin: env.APP_URL }),
+      organization({
+        creatorRole: 'owner',
+        // Every (currently Free-tier) org can have at most 5 — counts the user's personal org too.
+        organizationLimit: 5,
+        organizationHooks: {
+          beforeCreateOrganization: async ({ organization: org }) => {
+            assertValidOrgSlug(org.slug)
+          },
+          beforeUpdateOrganization: async ({ organization: org }) => {
+            assertValidOrgSlug(org.slug)
+          },
+          // Phase 1 has no seat model and no `/accept-invitation` route yet — every (Free) org
+          // can't invite anyway, so block it here rather than ship a dead-end invite flow.
+          // `sendInvitationEmail`/`renderOrgInvite` stay wired below for Phase 2/3.
+          beforeCreateInvitation: async () => {
+            throw new APIError('FORBIDDEN', {
+              message: 'Invitations are not available yet',
+            })
+          },
+        },
+        sendInvitationEmail: async ({ email, organization: org, inviter, id }) => {
+          const locale = (inviter.user as { locale?: string }).locale ?? appConfig.defaultLocale
+          await sendMail(env, {
+            to: email,
+            ...(await renderOrgInvite({
+              orgName: org.name,
+              inviterName: inviter.user.name,
+              url: `${env.APP_URL}/accept-invitation/${id}`,
+              locale,
+            })),
+          })
+        },
+      }),
       captcha({
         provider: 'cloudflare-turnstile',
         secretKey: env.TURNSTILE_SECRET_KEY,

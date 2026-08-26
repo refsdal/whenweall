@@ -11,7 +11,7 @@ import {
   notifyPageChanged,
   rescheduleViaRoom,
 } from '#/server/notifications/booking-client'
-import { makeBookingPage, makeUser } from '../../../../test/helpers'
+import { makeBookingPage, makeUserWithOrg } from '../../../../test/helpers'
 
 function stubFor(pageId: string) {
   return env.BOOKING_ROOM.getByName(pageId)
@@ -81,8 +81,8 @@ describe('notifyPageChanged', () => {
 describe('bookViaRoom / cancelViaRoom / rescheduleViaRoom', () => {
   it('bookViaRoom books through the room and returns a manage token', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const startAt = nextWeekdaySlot()
 
     const result = await bookViaRoom(
@@ -96,8 +96,8 @@ describe('bookViaRoom / cancelViaRoom / rescheduleViaRoom', () => {
 
   it('propagates a business error instead of swallowing it (NOT best-effort)', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const startAt = nextWeekdaySlot()
 
     await bookViaRoom(
@@ -121,8 +121,8 @@ describe('bookViaRoom / cancelViaRoom / rescheduleViaRoom', () => {
 
   it('cancelViaRoom cancels through the room', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const startAt = nextWeekdaySlot()
 
     const { bookingId } = await bookViaRoom(
@@ -136,8 +136,8 @@ describe('bookViaRoom / cancelViaRoom / rescheduleViaRoom', () => {
 
   it('rescheduleViaRoom moves the booking through the room', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const startAt = nextWeekdaySlot(2, '10:00')
     const newStartAt = nextWeekdaySlot(3, '13:00')
 

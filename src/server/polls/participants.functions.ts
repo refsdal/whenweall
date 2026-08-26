@@ -17,7 +17,7 @@ import {
   unclaimViaRoom,
 } from '#/server/notifications/do-client'
 import { sendClaimConfirmation } from '#/server/notifications/claim-emails'
-import { requireParticipantAuth, requireSignupPoll } from './claim-auth'
+import { canManagePoll, requireParticipantAuth, requireSignupPoll } from './claim-auth'
 import { resolveVerifiedParticipantId } from './comment-auth'
 import type { ClaimIdentity } from './claims'
 import * as participantService from './participants'
@@ -64,17 +64,18 @@ export function resolveAuthorName(
 }
 
 /**
- * `isOwner` for participant/comment auth: does the poll belong to the session user? Loaded
- * separately from the participant/comment lookups those services already do, since ownership is
- * an authorization concern the caller (this module) must resolve before delegating.
+ * `isOwner` for participant/comment auth: can this session user manage the poll (org owner/admin,
+ * or the poll's own creator)? Loaded separately from the participant/comment lookups those
+ * services already do, since authorization is a concern the caller (this module) must resolve
+ * before delegating.
  */
 async function requireIsOwner(db: Db, pollId: string, userId: string | null): Promise<boolean> {
   const poll = await db.query.polls.findFirst({
     where: eq(polls.id, pollId),
-    columns: { ownerId: true, deletedAt: true },
+    columns: { organizationId: true, createdBy: true, deletedAt: true },
   })
   if (!poll || poll.deletedAt) throw new AppError('NOT_FOUND')
-  return userId !== null && poll.ownerId === userId
+  return canManagePoll(db, poll, userId)
 }
 
 /**
@@ -208,7 +209,7 @@ export const claimSlot = createServerFn({ method: 'POST' })
 
     let identity: ClaimIdentity
     if (data.participantId) {
-      await requireParticipantAuth(db, data.pollId, data.participantId, poll.ownerId, {
+      await requireParticipantAuth(db, data.pollId, data.participantId, poll, {
         userId,
         editToken: data.editToken,
       })
@@ -259,9 +260,9 @@ export const unclaimSlot = createServerFn({ method: 'POST' })
     const db = getDb()
     const poll = await requireSignupPoll(db, data.pollId)
     const userId = context.session?.user.id ?? null
-    const isOwner = userId !== null && userId === poll.ownerId
+    const isOwner = await canManagePoll(db, poll, userId)
 
-    await requireParticipantAuth(db, data.pollId, data.participantId, poll.ownerId, {
+    await requireParticipantAuth(db, data.pollId, data.participantId, poll, {
       userId,
       editToken: data.editToken,
     })

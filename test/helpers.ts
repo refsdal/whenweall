@@ -1,6 +1,8 @@
 import type { Db } from '#/server/db/client'
 import {
   bookings,
+  member,
+  organization,
   participants,
   user,
   votes,
@@ -40,9 +42,60 @@ export async function makeUser(
   return { id, email }
 }
 
+export async function makeOrg(
+  db: Db,
+  ownerUserId: string,
+  overrides?: Partial<{ name: string; slug: string; role: 'owner' | 'admin' | 'member' }>,
+): Promise<{ id: string; slug: string }> {
+  const id = `org_${newId()}`
+  const slug = overrides?.slug ?? `org-${unique()}`
+  const now = new Date()
+  await db
+    .insert(organization)
+    .values({ id, name: overrides?.name ?? 'Test Org', slug, createdAt: now })
+  await db.insert(member).values({
+    id: `mem_${newId()}`,
+    organizationId: id,
+    userId: ownerUserId,
+    role: overrides?.role ?? 'owner',
+    createdAt: now,
+  })
+  return { id, slug }
+}
+
+/** Adds `userId` to an existing org as an additional member (default role `'member'`) — for
+ * tests that need a second, non-owner member of the same org (e.g. asserting FORBIDDEN for a
+ * plain member managing someone else's content, as distinct from NOT_FOUND for a different org
+ * entirely). */
+export async function addOrgMember(
+  db: Db,
+  orgId: string,
+  userId: string,
+  role: 'owner' | 'admin' | 'member' = 'member',
+): Promise<void> {
+  await db.insert(member).values({
+    id: `mem_${newId()}`,
+    organizationId: orgId,
+    userId,
+    role,
+    createdAt: new Date(),
+  })
+}
+
+/** `makeUser` + `makeOrg`: the common "one user owning one fresh org" fixture most tests build
+ * on, now that content ownership lives on organizations rather than directly on a user. */
+export async function makeUserWithOrg(
+  db: Db,
+  overrides?: Parameters<typeof makeUser>[1],
+): Promise<{ userId: string; orgId: string; slug: string }> {
+  const { id: userId } = await makeUser(db, overrides)
+  const { id: orgId, slug } = await makeOrg(db, userId)
+  return { userId, orgId, slug }
+}
+
 export async function makePoll(
   db: Db,
-  ownerId: string,
+  own: { orgId: string; createdBy?: string | null },
   overrides?: Partial<CreatePollInput>,
 ): Promise<{ id: string }> {
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
@@ -57,12 +110,12 @@ export async function makePoll(
     ],
     ...overrides,
   }
-  return createPoll(db, ownerId, input)
+  return createPoll(db, { organizationId: own.orgId, createdBy: own.createdBy ?? null }, input)
 }
 
 export async function makeSignupPoll(
   db: Db,
-  ownerId: string,
+  own: { orgId: string; createdBy?: string | null },
   opts: { capacities: (number | null)[]; maxClaims?: number; requireEmail?: boolean },
 ): Promise<{ id: string }> {
   const input: CreatePollInput = {
@@ -77,7 +130,7 @@ export async function makeSignupPoll(
     signupMaxClaims: opts.maxClaims,
     requireParticipantEmail: opts.requireEmail,
   }
-  return createPoll(db, ownerId, input)
+  return createPoll(db, { organizationId: own.orgId, createdBy: own.createdBy ?? null }, input)
 }
 
 export async function makeParticipant(
@@ -110,10 +163,11 @@ export async function makeParticipant(
 }
 
 /** Weekday (Mon–Fri) availability, 09:00–17:00, 30-min slots, Europe/Oslo — the default fixture
- * most booking tests build on, overridable per-field. */
+ * most booking tests build on, overridable per-field. `memberUserId` defaults to `createdBy`
+ * (matching `createPage`'s own default) when omitted. */
 export async function makeBookingPage(
   db: Db,
-  ownerId: string,
+  own: { orgId: string; memberUserId?: string | null; createdBy?: string | null },
   overrides?: Partial<CreateBookingPageInput>,
 ): Promise<{ id: string }> {
   const weekday = [{ start: '09:00', end: '17:00' }]
@@ -131,7 +185,15 @@ export async function makeBookingPage(
     reminders: true,
     ...overrides,
   }
-  return createPage(db, ownerId, input)
+  return createPage(
+    db,
+    {
+      organizationId: own.orgId,
+      createdBy: own.createdBy ?? null,
+      memberUserId: own.memberUserId,
+    },
+    input,
+  )
 }
 
 /** Inserts a `bookings` row directly (bypassing `createBooking`'s validation) so tests can seed

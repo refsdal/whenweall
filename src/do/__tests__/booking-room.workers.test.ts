@@ -9,7 +9,7 @@ import { BookingRoom } from '#/do/BookingRoom'
 import type { BookingRoomEvent } from '#/do/booking-protocol'
 import { cancelBooking } from '#/server/bookings/bookings'
 import { deletePage } from '#/server/bookings/pages'
-import { makeBookingPage, makeUser } from '../../../test/helpers'
+import { makeBookingPage, makeOrg, makeUser, makeUserWithOrg } from '../../../test/helpers'
 
 // `vi.mock` cannot reach code running inside a Durable Object's own module graph in
 // @cloudflare/vitest-plugin 1.0 — `alarm()`/RPC methods load via a separate `importModule()` path
@@ -104,8 +104,8 @@ async function connect(stub: ReturnType<typeof stubFor>) {
 describe('websocket upgrade', () => {
   it('rejects non-websocket requests with 426', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
 
     const res = await stub.fetch('https://do/ws')
@@ -116,8 +116,8 @@ describe('websocket upgrade', () => {
 describe('book RPC', () => {
   it('creates a booking and broadcasts page.changed', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const { messages, waitForMessage } = await connect(stub)
 
@@ -136,8 +136,8 @@ describe('book RPC', () => {
 
   it('serialises concurrent book calls on the same slot: exactly one succeeds', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -163,8 +163,8 @@ describe('book RPC', () => {
 
   it('schedules a reminder alarm 24h before the slot when the page has reminders on', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -181,8 +181,12 @@ describe('book RPC', () => {
 
   it('does not schedule a reminder when the page has reminders off', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId, { reminders: false })
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(
+      db,
+      { orgId, createdBy: ownerId },
+      { reminders: false },
+    )
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -200,8 +204,8 @@ describe('book RPC', () => {
 describe('cancel RPC', () => {
   it('cancels a booking, broadcasts page.changed, and clears its reminder', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -224,8 +228,8 @@ describe('cancel RPC', () => {
 
   it('is idempotent: cancelling an already-cancelled booking is a no-op, no broadcast', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -250,8 +254,8 @@ describe('cancel RPC', () => {
 describe('reschedule RPC', () => {
   it('moves the booking, broadcasts page.changed, and re-arms the reminder for the new time', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot(2, '10:00')
     const newStartAt = nextWeekdaySlot(3, '13:00')
@@ -276,8 +280,8 @@ describe('reschedule RPC', () => {
 
   it('propagates SLOT_UNAVAILABLE when the new slot is already taken', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot(2, '10:00')
     const takenStartAt = nextWeekdaySlot(3, '13:00')
@@ -307,7 +311,8 @@ describe('reminder alarm', () => {
   it('sends reminder mail to both parties via the DI mailer and clears the key', async () => {
     const db = createDb(env.DB)
     const { id: ownerId, email: ownerEmail } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { id: orgId } = await makeOrg(db, ownerId)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -339,8 +344,8 @@ describe('reminder alarm', () => {
 
   it('skips a booking that is no longer confirmed but still clears its key', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -368,8 +373,8 @@ describe('reminder alarm', () => {
 
   it('skips a booking on a soft-deleted page but still clears its key', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
     const startAt = nextWeekdaySlot()
 
@@ -380,7 +385,7 @@ describe('reminder alarm', () => {
     )
     // Soft-delete the page directly (bypassing the DO), as if the organiser deleted it after
     // booking — the reminder key is left stale, as with a stray cancellation above.
-    await deletePage(db, pageId, ownerId)
+    await deletePage(db, pageId, { id: orgId, role: 'owner' as const }, ownerId)
     await putStorage(stub, `reminder:${bookingId}`, Date.now() - 1000)
 
     const sent: MailMessage[] = []
@@ -397,8 +402,8 @@ describe('reminder alarm', () => {
 
   it('re-arms to the next-earliest reminder after one fires', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
-    const { id: pageId } = await makeBookingPage(db, ownerId)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pageId } = await makeBookingPage(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pageId)
 
     const soon = nextWeekdaySlot(2, '10:00')

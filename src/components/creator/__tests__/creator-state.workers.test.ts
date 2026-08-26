@@ -9,7 +9,7 @@ import {
   initialDraft,
   type CreatorDraft,
 } from '#/components/creator/creator-state'
-import { makeUser } from '../../../../test/helpers'
+import { makeUserWithOrg } from '../../../../test/helpers'
 
 /**
  * The wizard's payload has to survive the real validator and the real writer, not just a unit
@@ -23,7 +23,7 @@ function futureDate(daysAhead: number): string {
 describe('draftToInput against the real createPoll', () => {
   it('creates a date poll with an all-day option and two time slots', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
 
     const dayOne = futureDate(7)
     const dayTwo = futureDate(8)
@@ -36,7 +36,7 @@ describe('draftToInput against the real createPoll', () => {
     const input = draftToInput(draft)
     expect(createPollSchema.safeParse(input).success).toBe(true)
 
-    const { id } = await createPoll(db, ownerId, input)
+    const { id } = await createPoll(db, { organizationId: orgId, createdBy: ownerId }, input)
     const view = await getPollView(db, id, { userId: ownerId })
 
     expect(view?.title).toBe('Team lunch')
@@ -47,7 +47,7 @@ describe('draftToInput against the real createPoll', () => {
 
   it('creates an options poll from trimmed text lines', async () => {
     const db = createDb(env.DB)
-    const { id: ownerId } = await makeUser(db)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
 
     let draft: CreatorDraft = {
       ...initialDraft('Europe/Oslo'),
@@ -63,7 +63,7 @@ describe('draftToInput against the real createPoll', () => {
     const input = draftToInput(draft)
     expect(createPollSchema.safeParse(input).success).toBe(true)
 
-    const { id } = await createPoll(db, ownerId, input)
+    const { id } = await createPoll(db, { organizationId: orgId, createdBy: ownerId }, input)
     const view = await getPollView(db, id, { userId: ownerId })
 
     expect(view?.description).toBeNull()

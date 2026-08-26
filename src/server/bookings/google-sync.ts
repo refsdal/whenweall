@@ -35,7 +35,7 @@ export async function syncGoogleEventCreate(
 ): Promise<void> {
   if (!page.googleSync) return
   try {
-    const token = await getGoogleAccessToken(page.ownerId)
+    const token = page.memberUserId ? await getGoogleAccessToken(page.memberUserId) : null
     if (!token) return
     const { eventId } = await createCalendarClient(fetchImpl).createEvent(token, {
       summary: page.title,
@@ -75,7 +75,7 @@ export async function syncGoogleEventDelete(
   mailer?: typeof sendMail,
 ): Promise<boolean> {
   try {
-    const token = await getGoogleAccessToken(page.ownerId)
+    const token = page.memberUserId ? await getGoogleAccessToken(page.memberUserId) : null
     if (!token) return true
     await createCalendarClient(fetchImpl).deleteEvent(token, googleEventId)
     await bookingService.setGoogleEventId(db, bookingId, null)
