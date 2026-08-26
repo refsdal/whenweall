@@ -1,3 +1,4 @@
 {
-  "target": "react"
+  "target": "react",
+  "_comment": "tsr's `target` only supports vue/react/solid — there is no target that matches @tanstack/react-start's Vite plugin output. Running `bun run generate-routes` (this CLI) regenerates src/routeTree.gen.ts WITHOUT the trailing `declare module '@tanstack/react-start' { interface Register { ... } }` block; only `bun run build` (which runs through the tanstackStart() Vite plugin) re-adds it. If you run generate-routes standalone, re-run `bun run build` afterwards and commit the result — the build's output wins."
 }
