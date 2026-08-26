@@ -4,7 +4,7 @@ export const appConfig = {
   description:
     'whenweall is a free, fast scheduling poll: propose dates, share a link, let everyone vote, pick the winner.',
   supportEmail: 'hello@whenweall.com',
-  repoUrl: 'https://github.com/andersro93/scheduler',
+  repoUrl: 'https://github.com/refsdal/whenweall',
   locales: ['en', 'nb'] as const,
   defaultLocale: 'en' as const,
   /**
