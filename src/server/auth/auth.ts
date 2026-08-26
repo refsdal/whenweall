@@ -4,18 +4,18 @@ import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
 import { stripe } from '@better-auth/stripe'
-import { and, eq } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { env as workerEnv } from 'cloudflare:workers'
 import { createDb, type Db } from '#/server/db/client'
 import * as schema from '#/server/db/schema'
-import { invitation as invitationTable, member } from '#/server/db/schema'
+import { member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
 import { sendMail } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
 import { authorizeSubscriptionReference, createStripeClient } from '#/server/billing/stripe'
-import { getEntitlements } from '#/server/billing/entitlements'
+import { getEntitlements, getSeatsUsed } from '#/server/billing/entitlements'
 
 /** Shared by `beforeCreateOrganization`/`beforeUpdateOrganization`: any slug the caller supplies
  * (direct API calls included — this is what actually stops `POST /api/auth/organization/create|
@@ -41,16 +41,7 @@ async function assertSeatAvailable(db: Db, organizationId: string) {
     throw new APIError('FORBIDDEN', { message: 'UPGRADE_REQUIRED' })
   }
 
-  const [members, pendingInvitations] = await Promise.all([
-    db.query.member.findMany({ where: eq(member.organizationId, organizationId) }),
-    db.query.invitation.findMany({
-      where: and(
-        eq(invitationTable.organizationId, organizationId),
-        eq(invitationTable.status, 'pending'),
-      ),
-    }),
-  ])
-  const seatsUsed = members.length + pendingInvitations.length
+  const seatsUsed = await getSeatsUsed(db, organizationId)
   if (seatsUsed >= entitlements.maxSeats) {
     throw new APIError('FORBIDDEN', { message: 'SEAT_LIMIT_REACHED' })
   }

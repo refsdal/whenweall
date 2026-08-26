@@ -1,8 +1,9 @@
 import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { getDb } from '#/server/db/client'
-import { member, subscription } from '#/server/db/schema'
+import { subscription } from '#/server/db/schema'
 import { requireOrgMiddleware, requireOwnerRole } from '#/server/auth/org'
+import { getSeatsUsed } from '#/server/billing/entitlements'
 
 /*
  * Same "declare once, reuse for both the function and the manifest" convention as
@@ -26,19 +27,20 @@ export type BillingSnapshot = {
  * `getEntitlements` (spec: `entitlements.ts` is the ONE place plan RULES live; this is just
  * data to render, not a rule). Owner-only, same gate as the section it feeds.
  *
- * Seat usage is a plain member count (not members + pending invitations, unlike the seat *gate*
- * in `auth.ts`'s `assertSeatAvailable`) — simplest number an owner can sanity-check against
- * their roster, fetched here in the settings route loader rather than folded into every
- * `getSession` call, since it's only ever needed on this one page.
+ * Seat usage is `getSeatsUsed` (members + pending invitations) — the same count the invite seat
+ * *gate* in `auth.ts`'s `assertSeatAvailable` enforces, so an owner reading "6 of 10" here sees
+ * exactly why their next invite would (or wouldn't) be blocked, fetched here in the settings
+ * route loader rather than folded into every `getSession` call, since it's only ever needed on
+ * this one page.
  */
 export const getBillingSnapshot = createServerFn({ method: 'GET' })
   .middleware(SERVER_FN_MIDDLEWARE.getBillingSnapshot)
   .handler(async ({ context }): Promise<BillingSnapshot> => {
     requireOwnerRole(context.org.role)
     const db = getDb()
-    const [rows, members] = await Promise.all([
+    const [rows, seatsUsed] = await Promise.all([
       db.query.subscription.findMany({ where: eq(subscription.referenceId, context.org.id) }),
-      db.query.member.findMany({ where: eq(member.organizationId, context.org.id) }),
+      getSeatsUsed(db, context.org.id),
     ])
     const active = rows.find((s) => s.plan === 'premium' && ACTIVE_STATUSES.has(s.status)) ?? null
 
@@ -50,6 +52,6 @@ export const getBillingSnapshot = createServerFn({ method: 'GET' })
             cancelAtPeriodEnd: active.cancelAtPeriodEnd ?? false,
           }
         : null,
-      seatsUsed: members.length,
+      seatsUsed,
     }
   })
