@@ -4,6 +4,7 @@ import {
   member,
   organization,
   participants,
+  subscription,
   user,
   votes,
   type BookingStatus,
@@ -242,4 +243,19 @@ export async function makeBooking(
   })
 
   return { id, manageToken }
+}
+
+export async function makeSubscription(
+  db: Db,
+  orgId: string,
+  overrides?: Partial<{ plan: string; status: string }>,
+): Promise<{ id: string }> {
+  const id = `sub_${newId()}`
+  await db.insert(subscription).values({
+    id,
+    plan: overrides?.plan ?? 'premium',
+    referenceId: orgId,
+    status: overrides?.status ?? 'active',
+  })
+  return { id }
 }
