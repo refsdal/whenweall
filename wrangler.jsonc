@@ -5,7 +5,14 @@
   "routes": [{ "pattern": "whenweall.com", "custom_domain": true }],
   "compatibility_date": "2026-08-20",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // `traces` is off unless asked for: automatic tracing is in early beta, so enabling
+  // observability alone does not turn it on. Sampling at 1 (100%) is right at current volume —
+  // the value of tracing early is catching the rare request, which sampling throws away. Spans
+  // share the Workers Logs quota and are priced from 2026-10-01, so revisit the rate then.
+  "observability": {
+    "enabled": true,
+    "traces": { "enabled": true, "head_sampling_rate": 1 },
+  },
   "upload_source_maps": true,
   "vars": {
     "APP_URL": "https://whenweall.com",
@@ -48,6 +55,11 @@
     "test": {
       "name": "whenweall-test",
       "routes": [{ "pattern": "test.whenweall.com", "custom_domain": true }],
+      // Not inherited from the top level, like every other binding in this block.
+      "observability": {
+        "enabled": true,
+        "traces": { "enabled": true, "head_sampling_rate": 1 },
+      },
       "vars": {
         "APP_URL": "https://test.whenweall.com",
         "APP_ENV": "production",

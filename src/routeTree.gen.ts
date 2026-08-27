@@ -21,6 +21,7 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitation/$id'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -96,6 +97,11 @@ const VerifyEmailRoute = VerifyEmailRouteImport.update({
 const AcceptInvitationIdRoute = AcceptInvitationIdRouteImport.update({
   id: '/accept-invitation/$id',
   path: '/accept-invitation/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BookingsIndexRoute = BookingsIndexRouteImport.update({
@@ -192,6 +198,7 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
+  '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
   '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -222,6 +229,7 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
+  '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
   '/bookings': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -253,6 +261,7 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
+  '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
   '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -285,6 +294,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/accept-invitation/$id'
+    | '/api/health'
     | '/bookings/new'
     | '/bookings/'
     | '/api/auth/$'
@@ -315,6 +325,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/accept-invitation/$id'
+    | '/api/health'
     | '/bookings/new'
     | '/bookings'
     | '/api/auth/$'
@@ -345,6 +356,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/accept-invitation/$id'
+    | '/api/health'
     | '/bookings/new'
     | '/bookings/'
     | '/api/auth/$'
@@ -376,6 +388,7 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   AcceptInvitationIdRoute: typeof AcceptInvitationIdRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   BookingsNewRoute: typeof BookingsNewRoute
   BookingsIndexRoute: typeof BookingsIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -478,6 +491,13 @@ declare module '@tanstack/react-router' {
       path: '/accept-invitation/$id'
       fullPath: '/accept-invitation/$id'
       preLoaderRoute: typeof AcceptInvitationIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bookings/': {
@@ -608,6 +628,7 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   AcceptInvitationIdRoute: AcceptInvitationIdRoute,
+  ApiHealthRoute: ApiHealthRoute,
   BookingsNewRoute: BookingsNewRoute,
   BookingsIndexRoute: BookingsIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
@@ -628,13 +649,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
