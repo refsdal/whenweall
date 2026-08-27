@@ -9,6 +9,7 @@ vi.mock('#/server/polls/participants.functions', () => ({
 }))
 
 const { AddYourselfRow } = await import('#/components/poll/AddYourselfRow')
+const { useAnswerDraft } = await import('#/components/poll/use-answer-draft')
 
 afterEach(() => cleanup())
 
@@ -54,20 +55,25 @@ function makePoll(): PollView {
 
 const SESSION = { user: { id: 'usr_1', name: 'Iben', email: 'iben@example.com' } }
 
-function renderRow() {
-  const poll = makePoll()
-  const { container } = render(
+/** The row is presentational now — the draft it paints into lives a level up, in `PollPage`. */
+function Harness({ poll }: { poll: PollView }) {
+  const draft = useAnswerDraft({ poll, session: SESSION as never, onSaved: () => {} })
+  return (
     <table>
       <tbody>
         <AddYourselfRow
           poll={poll}
-          session={SESSION as never}
           optionLabels={{ [OPTION_A]: 'A', [OPTION_B]: 'B', [OPTION_C]: 'C' }}
-          onSaved={() => {}}
+          draft={draft}
         />
       </tbody>
-    </table>,
+    </table>
   )
+}
+
+function renderRow() {
+  const poll = makePoll()
+  const { container } = render(<Harness poll={poll} />)
 
   const cell = (optionId: string) => {
     const td = container.querySelector(`td[data-option-id="${optionId}"]`)

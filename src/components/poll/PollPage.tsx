@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
-import { Check, MapPin, Minus, Share2, X } from 'lucide-react'
+import { Check, MapPin, Minus, Pencil, Share2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { AddYourselfRow } from '#/components/poll/AddYourselfRow'
 import { AdminBar } from '#/components/poll/AdminBar'
+import { AnswerForm } from '#/components/poll/AnswerForm'
 import { Comments } from '#/components/poll/Comments'
 import { DeadlineCountdown } from '#/components/poll/DeadlineCountdown'
 import { FinalizedBanner } from '#/components/poll/FinalizedBanner'
@@ -11,10 +12,20 @@ import { optionPlainLabel } from '#/components/poll/OptionHeader'
 import { PresencePill } from '#/components/poll/PresencePill'
 import { ShareSheet } from '#/components/poll/ShareSheet'
 import { storeTimeZone, TimezoneSwitch, useViewerTimeZone } from '#/components/poll/TimezoneSwitch'
+import { useAnswerDraft } from '#/components/poll/use-answer-draft'
 import { VoteGrid } from '#/components/poll/VoteGrid'
+import { VoteList } from '#/components/poll/VoteList'
 import { canVote, type ViewerState } from '#/components/poll/viewer'
 import { SlotBoard } from '#/components/signup/SlotBoard'
 import { Button } from '#/components/ui/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from '#/components/ui/popover'
 import { celebrate } from '#/lib/confetti'
 import { clearEditToken, useEditToken } from '#/lib/edit-tokens'
 import { getLocale, m } from '#/lib/i18n'
@@ -120,6 +131,9 @@ export function PollPage({
   const timeZone = chosenZone ?? storedZone
   const [editingId, setEditingId] = useState<string | null>(null)
   const [shareOpen, setShareOpen] = useState(autoOpenShare)
+  // The phone layout has no per-row controls to hang a confirm off, so removing your own answer
+  // is confirmed from the one button under the list.
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
 
   // `?created` is a one-shot instruction: celebrate, open the share sheet, then take it out of
   // the URL so a reload or a shared link doesn't do either again.
@@ -180,6 +194,16 @@ export function PollPage({
     setEditingId(null)
     await onChanged()
   }, [onChanged])
+
+  // One draft for both layouts: the grid's add-yourself row and the phone list are two renderings
+  // of the same answer, and only one of them is on screen at a time.
+  const draft = useAnswerDraft({
+    poll,
+    session,
+    existingParticipant: editingParticipant,
+    editToken: storedToken?.token ?? null,
+    onSaved: handleSaved,
+  })
 
   const handleRemove = useCallback(
     async (participantId: string) => {
@@ -277,27 +301,97 @@ export function PollPage({
         />
       ) : (
         <section className="flex flex-col gap-3">
-          <VoteGrid
-            poll={poll}
-            viewer={viewer}
-            onEditParticipant={setEditingId}
-            onRemoveParticipant={(participantId) => void handleRemove(participantId)}
-            editingParticipantId={editingId}
-            addRow={
-              showAddRow ? (
-                <AddYourselfRow
-                  key={editingParticipant?.id ?? 'new'}
-                  poll={poll}
-                  session={session}
-                  optionLabels={optionLabels}
-                  existingParticipant={editingParticipant}
-                  editToken={storedToken?.token ?? null}
-                  onSaved={handleSaved}
-                  onCancel={editingParticipant ? () => setEditingId(null) : undefined}
-                />
-              ) : null
-            }
-          />
+          {/* Two renderings of one poll. The grid needs width the phone hasn't got — a frozen
+              name column leaves room for two dates on a 390px screen however many the poll has —
+              so below `sm` the same answers are drawn as a list of dates instead. */}
+          <div className="hidden sm:block">
+            <VoteGrid
+              poll={poll}
+              viewer={viewer}
+              onEditParticipant={setEditingId}
+              onRemoveParticipant={(participantId) => void handleRemove(participantId)}
+              editingParticipantId={editingId}
+              addRow={
+                showAddRow ? (
+                  <AddYourselfRow poll={poll} optionLabels={optionLabels} draft={draft} />
+                ) : null
+              }
+            />
+          </div>
+
+          <div className="flex flex-col gap-3 sm:hidden">
+            <VoteList
+              poll={poll}
+              viewer={viewer}
+              answers={draft.answers}
+              onAnswer={draft.setAnswer}
+              canAnswer={showAddRow}
+            />
+
+            {open && yourParticipant && editingParticipant === undefined && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditingId(yourParticipant.id)}
+                >
+                  <Pencil aria-hidden="true" />
+                  {m.poll_list_edit()}
+                </Button>
+                <Popover open={confirmingRemove} onOpenChange={setConfirmingRemove}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      aria-label={m.poll_remove_row({ name: yourParticipant.name })}
+                    >
+                      <Trash2 aria-hidden="true" />
+                      {m.poll_remove_confirm()}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-64">
+                    <PopoverHeader>
+                      <PopoverTitle>
+                        {m.poll_remove_confirm_title({ name: yourParticipant.name })}
+                      </PopoverTitle>
+                      <PopoverDescription>{m.poll_remove_confirm_body()}</PopoverDescription>
+                    </PopoverHeader>
+                    <div className="mt-3 flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setConfirmingRemove(false)}
+                      >
+                        {m.common_cancel()}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => {
+                          setConfirmingRemove(false)
+                          void handleRemove(yourParticipant.id)
+                        }}
+                      >
+                        {m.poll_remove_confirm()}
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+          </div>
+
+          {showAddRow && (
+            <AnswerForm
+              poll={poll}
+              draft={draft}
+              onCancel={editingParticipant ? () => setEditingId(null) : undefined}
+              // The organiser's `AdminBar` already owns the bottom of a phone viewport.
+              showSaveBar={!poll.isOwner}
+            />
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Legend />

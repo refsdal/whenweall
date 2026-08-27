@@ -5,7 +5,7 @@ import { spring, useReducedMotion } from '#/lib/motion'
 import { nextAnswer, type Answer } from '#/lib/scoring'
 import { cn } from '#/lib/utils'
 
-type Size = 'md' | 'sm'
+type Size = 'lg' | 'md' | 'sm'
 
 /**
  * Answer colours. Each state pairs a soft fill with its ink so the mark clears AA against the
@@ -15,7 +15,7 @@ type Size = 'md' | 'sm'
  * "Yes" additionally gets a full-strength ring so a column of yeses reads as solid from across
  * the room, which is what the grid is for.
  */
-const STYLES: Record<
+export const ANSWER_STYLES: Record<
   'yes' | 'ifneedbe' | 'no' | 'none',
   { className: string; Icon: typeof Check | null }
 > = {
@@ -41,11 +41,16 @@ const STYLES: Record<
 }
 
 const SIZES: Record<Size, string> = {
+  // `lg` is the phone layout's target: a thumb needs the full 44px minimum, and the date list
+  // has the width to spare that the grid never did.
+  lg: 'size-13 shrink-0 rounded-xl',
   md: 'h-10 w-full min-w-10 rounded-xl',
   sm: 'h-8 w-full min-w-8 rounded-lg',
 }
 
-function answerLabel(answer: Answer | null): string {
+const ICON_SIZES: Record<Size, string> = { lg: 'size-5', md: 'size-4', sm: 'size-3.5' }
+
+export function answerLabel(answer: Answer | null): string {
   if (answer === 'yes') return m.answer_yes()
   if (answer === 'ifneedbe') return m.answer_ifneedbe()
   if (answer === 'no') return m.answer_no()
@@ -58,9 +63,9 @@ function cellLabel(answer: Answer | null, optionLabel: string | undefined): stri
   return m.poll_vote_cell_label({ option: optionLabel, answer: answerText })
 }
 
-function Mark({ answer, size }: { answer: Answer | null; size: Size }) {
+export function Mark({ answer, size }: { answer: Answer | null; size: Size }) {
   const reduceMotion = useReducedMotion()
-  const { Icon } = STYLES[answer ?? 'none']
+  const { Icon } = ANSWER_STYLES[answer ?? 'none']
 
   return (
     <AnimatePresence initial={false} mode="wait">
@@ -74,7 +79,7 @@ function Mark({ answer, size }: { answer: Answer | null; size: Size }) {
         className="flex items-center justify-center"
       >
         {Icon ? (
-          <Icon className={size === 'sm' ? 'size-3.5' : 'size-4'} strokeWidth={2.75} />
+          <Icon className={ICON_SIZES[size]} strokeWidth={2.75} />
         ) : (
           <span
             className={cn(
@@ -115,7 +120,7 @@ export function VoteCell({
   const shared = cn(
     'flex items-center justify-center transition-[background-color,box-shadow,filter] duration-200',
     SIZES[size],
-    STYLES[state].className,
+    ANSWER_STYLES[state].className,
     className,
   )
 

@@ -163,7 +163,9 @@ export function AdminBar({
   return (
     <div
       data-testid="admin-bar"
-      className="sticky bottom-0 z-30 -mx-5 border-t border-border bg-card/95 px-5 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:static sm:mx-0 sm:rounded-xl sm:border sm:px-4 sm:shadow-sm sm:backdrop-blur-none"
+      // Pinned to the bottom of a phone viewport, which on a handset with a home indicator means
+      // the last 34px of it belong to the system gesture strip, not to us.
+      className="sticky bottom-0 z-30 -mx-5 border-t border-border bg-card/95 px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:static sm:mx-0 sm:rounded-xl sm:border sm:px-4 sm:py-3 sm:shadow-sm sm:backdrop-blur-none"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="hidden text-xs font-medium tracking-wide text-muted-foreground uppercase sm:mr-1 sm:inline">
