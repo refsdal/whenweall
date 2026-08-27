@@ -1,6 +1,8 @@
 import { useEffect, useSyncExternalStore } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { Moon, Sun, SunMoon } from 'lucide-react'
 import { m } from '#/lib/i18n'
+import { useReducedMotion } from '#/lib/motion'
 import {
   applyTheme,
   getServerThemeSnapshot,
@@ -27,6 +29,7 @@ const LABELS: Record<Theme, () => string> = {
  */
 export function ThemeToggle({ className }: { className?: string }) {
   const theme = useSyncExternalStore(subscribeTheme, readStoredTheme, getServerThemeSnapshot)
+  const reduceMotion = useReducedMotion()
 
   // Keeps <html> in sync with the stored preference (first paint, other tabs, OS changes).
   useEffect(() => {
@@ -50,7 +53,22 @@ export function ThemeToggle({ className }: { className?: string }) {
         className,
       )}
     >
-      <Icon key={theme} className="size-4 animate-pop-in" aria-hidden="true" />
+      {/* The incoming icon already popped in; the outgoing one used to just disappear under it.
+          `mode="wait"` lets it rotate away first, and it leaves in the opposite direction to the
+          one the next icon arrives from, so the three read as a wheel turning one way. */}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={theme}
+          aria-hidden="true"
+          initial={reduceMotion ? false : { opacity: 0, scale: 0.7, rotate: -25 }}
+          animate={{ opacity: 1, scale: 1, rotate: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.7, rotate: 25 }}
+          transition={{ duration: 0.14, ease: 'easeOut' }}
+          className="flex items-center justify-center"
+        >
+          <Icon className="size-4" aria-hidden="true" />
+        </motion.span>
+      </AnimatePresence>
     </button>
   )
 }
