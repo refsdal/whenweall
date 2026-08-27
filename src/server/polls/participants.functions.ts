@@ -10,12 +10,8 @@ import { getLocale } from '#/paraglide/runtime'
 import { sessionMiddleware } from '#/server/auth/middleware'
 import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { requireTurnstile } from '#/server/http/turnstile'
-import {
-  claimViaRoom,
-  notifyChanged,
-  queueDigest,
-  unclaimViaRoom,
-} from '#/server/notifications/do-client'
+import { claimViaRoom, notifyChanged, unclaimViaRoom } from '#/server/notifications/do-client'
+import { emitPollEvent } from '#/server/notifications/emit'
 import { sendClaimConfirmation } from '#/server/notifications/claim-emails'
 import { canManagePoll, requireParticipantAuth, requireSignupPoll } from './claim-auth'
 import { resolveVerifiedParticipantId } from './comment-auth'
@@ -110,7 +106,10 @@ export const addParticipant = createServerFn({ method: 'POST' })
       locale: getLocale(),
     })
 
-    await queueDigest(data.pollId, { kind: 'vote', name: data.name, at: new Date().toISOString() })
+    await emitPollEvent(data.pollId, 'response.created', {
+      actorName: data.name,
+      actorUserId: userId,
+    })
     await notifyChanged(data.pollId, 'participant')
 
     return result
@@ -126,6 +125,13 @@ export const updateParticipant = createServerFn({ method: 'POST' })
     const userId = context.session?.user.id ?? null
     const isOwner = await requireIsOwner(db, data.pollId, userId)
 
+    // Read the current name before the update: `data.name` is optional on an answers-only edit,
+    // and after the write the previous name is gone.
+    const existing = await db.query.participants.findFirst({
+      where: eq(participants.id, data.participantId),
+      columns: { name: true },
+    })
+
     await participantService.updateParticipant(
       db,
       data.pollId,
@@ -133,6 +139,10 @@ export const updateParticipant = createServerFn({ method: 'POST' })
       { userId, editToken: data.editToken ?? null, isOwner },
       { name: data.name, answers: data.answers },
     )
+    await emitPollEvent(data.pollId, 'response.updated', {
+      actorName: data.name ?? existing?.name ?? '',
+      actorUserId: userId,
+    })
     await notifyChanged(data.pollId, 'vote')
   })
 
@@ -146,10 +156,19 @@ export const removeParticipant = createServerFn({ method: 'POST' })
     const userId = context.session?.user.id ?? null
     const isOwner = await requireIsOwner(db, data.pollId, userId)
 
+    const existing = await db.query.participants.findFirst({
+      where: eq(participants.id, data.participantId),
+      columns: { name: true },
+    })
+
     await participantService.removeParticipant(db, data.pollId, data.participantId, {
       userId,
       editToken: data.editToken ?? null,
       isOwner,
+    })
+    await emitPollEvent(data.pollId, 'response.withdrawn', {
+      actorName: existing?.name ?? '',
+      actorUserId: userId,
     })
     await notifyChanged(data.pollId, 'participant')
   })
@@ -177,10 +196,9 @@ export const addComment = createServerFn({ method: 'POST' })
       participantId,
     })
 
-    await queueDigest(data.pollId, {
-      kind: 'comment',
-      name: authorName,
-      at: new Date().toISOString(),
+    await emitPollEvent(data.pollId, 'comment.created', {
+      actorName: authorName,
+      actorUserId: userId,
     })
     await notifyChanged(data.pollId, 'comment')
 
@@ -231,10 +249,9 @@ export const claimSlot = createServerFn({ method: 'POST' })
         where: eq(participants.id, result.participantId),
         columns: { name: true },
       })
-      await queueDigest(data.pollId, {
-        kind: 'vote',
-        name: claimant?.name ?? data.name ?? '',
-        at: new Date().toISOString(),
+      await emitPollEvent(data.pollId, 'response.created', {
+        actorName: claimant?.name ?? data.name ?? '',
+        actorUserId: userId,
       })
 
       // Best-effort: `sendClaimConfirmation` never throws (it catches and logs internally), so a
@@ -270,8 +287,18 @@ export const unclaimSlot = createServerFn({ method: 'POST' })
     // `PollRoom#unclaim` broadcasts `poll.changed`/'vote' itself; see the note in `claimSlot`. The
     // owner may free up a spot on a closed sheet; anyone acting on their own claim still needs it
     // open — `requireSignupPoll`/`removeClaim` enforce that via `allowClosed`.
+    const claimant = await db.query.participants.findFirst({
+      where: eq(participants.id, data.participantId),
+      columns: { name: true },
+    })
+
     const result = await unclaimViaRoom(data.pollId, data.optionId, data.participantId, {
       allowClosed: isOwner,
+    })
+
+    await emitPollEvent(data.pollId, 'response.withdrawn', {
+      actorName: claimant?.name ?? '',
+      actorUserId: userId,
     })
 
     // Best-effort, same as in `claimSlot`: resend the confirmation so the participant's email

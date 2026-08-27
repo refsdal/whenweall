@@ -29,6 +29,7 @@ describe('entitlements', () => {
       maxSeats: 1,
       googleSync: false,
       branding: false,
+      push: false,
     })
   })
 
@@ -44,6 +45,7 @@ describe('entitlements', () => {
       maxSeats: 10,
       googleSync: true,
       branding: true,
+      push: true,
     })
   })
 
@@ -59,6 +61,7 @@ describe('entitlements', () => {
       maxSeats: 10,
       googleSync: true,
       branding: true,
+      push: true,
     })
   })
 
@@ -74,6 +77,7 @@ describe('entitlements', () => {
       maxSeats: 1,
       googleSync: false,
       branding: false,
+      push: false,
     })
   })
 
@@ -89,6 +93,7 @@ describe('entitlements', () => {
       maxSeats: 1,
       googleSync: false,
       branding: false,
+      push: false,
     })
   })
 
@@ -104,6 +109,7 @@ describe('entitlements', () => {
       maxSeats: 1,
       googleSync: false,
       branding: false,
+      push: false,
     })
   })
 
@@ -121,6 +127,7 @@ describe('entitlements', () => {
       maxSeats: 10,
       googleSync: true,
       branding: true,
+      push: true,
     })
   })
 })

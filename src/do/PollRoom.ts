@@ -1,22 +1,48 @@
 import { DurableObject } from 'cloudflare:workers'
 import { eq } from 'drizzle-orm'
+import type { DigestEvent } from '#/lib/notifications'
 import { createDb } from '#/server/db/client'
-import { polls } from '#/server/db/schema'
+import { pollOptions, polls } from '#/server/db/schema'
 import { sendMail } from '#/server/mailer/mailer'
-import { renderClosed, renderDigest } from '#/server/mailer/templates'
-import { applyClaim, removeClaim, type ClaimIdentity } from '#/server/polls/claims'
+import { renderDigest, type DigestLine } from '#/server/mailer/templates'
+import { emitPollEvent } from '#/server/notifications/emit'
+import { resolveRecipients, type Recipient } from '#/server/notifications/recipients'
+import { applyClaim, countClaims, removeClaim, type ClaimIdentity } from '#/server/polls/claims'
 import { closeExpiredPoll } from '#/server/polls/service'
 import type { DigestItem, PollEvent } from './protocol'
 
 export const DIGEST_DELAY_MS = 10 * 60_000
 export const RETRY_DELAY_MS = 5 * 60_000
 export const MAX_RETRIES = 3
+/** How far ahead of a poll's deadline the "closes soon" reminder fires. */
+export const REMINDER_LEAD_MS = 24 * 60 * 60_000
 
 const POLL_ID_KEY = 'pollId'
 const DIGEST_ITEMS_KEY = 'digest:items'
 const DIGEST_AT_KEY = 'digest:at'
+const DIGEST_SENT_KEY = 'digest:sent'
 const DEADLINE_AT_KEY = 'deadline:at'
+const REMIND_AT_KEY = 'remind:at'
 const RETRY_COUNT_KEY = 'retry:count'
+const SIGNUP_FULL_KEY = 'signup:full'
+
+/** Collapses a recipient's queued items into one summarised row per event, preserving the order
+ * the events first appeared so the mail reads chronologically. Names are deduped — the same
+ * person editing twice inside one window is one name, not two. */
+function buildDigestLines(items: DigestItem[]): DigestLine[] {
+  const byEvent = new Map<DigestEvent, { names: Set<string>; count: number }>()
+  for (const item of items) {
+    const line = byEvent.get(item.event) ?? { names: new Set<string>(), count: 0 }
+    line.count += 1
+    if (item.name) line.names.add(item.name)
+    byEvent.set(item.event, line)
+  }
+  return [...byEvent.entries()].map(([event, line]) => ({
+    event,
+    names: [...line.names],
+    count: line.count,
+  }))
+}
 
 /**
  * One PollRoom durable object per poll (keyed by pollId). Fans out live changes to connected
@@ -94,6 +120,11 @@ export class PollRoom extends DurableObject<Env> {
     await this.#rearm()
   }
 
+  /** Test seam: lets a workers test assert what was enqueued without reaching into DO storage. */
+  async peekDigestItems(): Promise<DigestItem[]> {
+    return (await this.ctx.storage.get<DigestItem[]>(DIGEST_ITEMS_KEY)) ?? []
+  }
+
   /**
    * Runs the claims service against this poll's own D1 rows from inside the DO — one poll's
    * writes are handled by exactly one DO instance, so this call is serialised with every other
@@ -111,9 +142,42 @@ export class PollRoom extends DurableObject<Env> {
       const result = await applyClaim(db, pollId, optionId, identity)
       // A re-claim of a slot the participant already holds is a no-op (`changed: false`) — nothing
       // for anyone else to see, so skip the broadcast rather than fan out a phantom update.
-      if (result.changed) this.#send({ type: 'poll.changed', entity: 'vote' })
+      if (result.changed) {
+        this.#send({ type: 'poll.changed', entity: 'vote' })
+        // Inside `#serialize`, so the capacity read is atomic with the claim that may have just
+        // filled the sheet — outside it, two concurrent claims could both miss the transition or
+        // both announce it.
+        await this.#emitIfSheetFilled(db, pollId)
+      }
       return result
     })
+  }
+
+  /**
+   * Fires `signup.full` on the transition to "every slot taken". Options with no capacity are
+   * unlimited, so a sheet containing one can never be full.
+   */
+  async #emitIfSheetFilled(db: ReturnType<typeof createDb>, pollId: string): Promise<void> {
+    try {
+      const options = await db.query.pollOptions.findMany({
+        where: eq(pollOptions.pollId, pollId),
+      })
+      if (options.length === 0) return
+      if (options.some((option) => option.capacity === null)) return
+
+      const counts = await countClaims(db, pollId)
+      const full = options.every((option) => (counts[option.id] ?? 0) >= option.capacity!)
+      if (!full) return
+
+      // Storage-flagged so a later claim/unclaim cycle on an already-full sheet does not
+      // re-announce it every time someone re-takes the last slot.
+      if (await this.ctx.storage.get<boolean>(SIGNUP_FULL_KEY)) return
+      await this.ctx.storage.put(SIGNUP_FULL_KEY, true)
+
+      await emitPollEvent(pollId, 'signup.full', { actorUserId: null }, { mailer: this.mailer })
+    } catch (err) {
+      console.error('[PollRoom] signup.full check failed', err)
+    }
   }
 
   unclaim(
@@ -127,6 +191,8 @@ export class PollRoom extends DurableObject<Env> {
       const db = createDb(this.env.DB)
       const result = await removeClaim(db, pollId, optionId, participantId, opts)
       this.#send({ type: 'poll.changed', entity: 'vote' })
+      // Freeing a slot re-arms the announcement, so filling the sheet again is news again.
+      await this.ctx.storage.delete(SIGNUP_FULL_KEY)
       return result
     })
   }
@@ -136,8 +202,17 @@ export class PollRoom extends DurableObject<Env> {
 
     if (deadlineAt === null) {
       await this.ctx.storage.delete(DEADLINE_AT_KEY)
+      await this.ctx.storage.delete(REMIND_AT_KEY)
     } else {
-      await this.ctx.storage.put(DEADLINE_AT_KEY, new Date(deadlineAt).getTime())
+      const at = new Date(deadlineAt).getTime()
+      await this.ctx.storage.put(DEADLINE_AT_KEY, at)
+
+      // Only arm the reminder when it is still ahead of us. A poll created with a deadline
+      // already inside the next 24 hours would otherwise fire "closes soon" immediately, which
+      // reads as a bug rather than a reminder.
+      const remindAt = at - REMINDER_LEAD_MS
+      if (remindAt > Date.now()) await this.ctx.storage.put(REMIND_AT_KEY, remindAt)
+      else await this.ctx.storage.delete(REMIND_AT_KEY)
     }
 
     await this.#rearm()
@@ -164,6 +239,15 @@ export class PollRoom extends DurableObject<Env> {
         }
       } catch (err) {
         console.error('[PollRoom] deadline step failed', err)
+      }
+
+      try {
+        const remindAt = await this.ctx.storage.get<number>(REMIND_AT_KEY)
+        if (remindAt !== undefined && remindAt <= now) {
+          await this.#processReminder(pollId)
+        }
+      } catch (err) {
+        console.error('[PollRoom] reminder step failed', err)
       }
 
       try {
@@ -239,80 +323,106 @@ export class PollRoom extends DurableObject<Env> {
 
     if (changed) {
       // Broadcast first: connected clients should see the poll flip to closed even if the
-      // owner-notification mail below fails.
+      // notification below fails.
       this.#send({ type: 'poll.changed', entity: 'poll' })
 
-      // Best-effort notification: the poll is already closed, so a failure here must not stop us
-      // from deleting `deadline:at` below (there's nothing to retry — the close already happened).
-      try {
-        const poll = await db.query.polls.findFirst({
-          where: eq(polls.id, pollId),
-          with: { owner: true },
-        })
-        // `owner` (poll.createdBy) is nullable — set to null if the creator's account was
-        // deleted. There's no fallback recipient (e.g. mailing every org admin) in scope here;
-        // the notification is simply skipped, same as any other best-effort mail failure.
-        if (poll?.owner) {
-          const rendered = await renderClosed({
-            pollTitle: poll.title,
-            pollUrl: `${this.env.APP_URL}/p/${pollId}`,
-            locale: poll.owner.locale ?? 'en',
-          })
-          await this.mailer(this.env, { to: poll.owner.email, ...rendered })
-        }
-      } catch (err) {
-        console.error('[PollRoom] deadline notification failed', err)
-      }
+      // Best-effort: the poll is already closed, so a failure here must not stop us from deleting
+      // `deadline:at` below (there's nothing to retry — the close already happened). `emitPollEvent`
+      // catches internally, but the deadline is system-driven so there is no actor to suppress.
+      // `this.mailer` is threaded through so the DO's test seam still covers this send.
+      await emitPollEvent(pollId, 'poll.closed', { actorUserId: null }, { mailer: this.mailer })
     }
 
     await this.ctx.storage.delete(DEADLINE_AT_KEY)
   }
 
+  /** Fires once, 24 hours before the deadline, for everyone subscribed to `deadline.approaching`. */
+  async #processReminder(pollId: string): Promise<void> {
+    await emitPollEvent(
+      pollId,
+      'deadline.approaching',
+      { actorUserId: null },
+      {
+        mailer: this.mailer,
+      },
+    )
+    await this.ctx.storage.delete(REMIND_AT_KEY)
+  }
+
+  /**
+   * Sends one digest per subscribed recipient.
+   *
+   * Recipients and their preferences are resolved here rather than at enqueue time, so a toggle
+   * flipped during the ten-minute debounce window still takes effect. Each item is suppressed for
+   * the person who caused it.
+   */
   async #processDigest(
     db: ReturnType<typeof createDb>,
     pollId: string,
     now: number,
   ): Promise<void> {
     const items = (await this.ctx.storage.get<DigestItem[]>(DIGEST_ITEMS_KEY)) ?? []
-    const poll = await db.query.polls.findFirst({
-      where: eq(polls.id, pollId),
-      with: { owner: true },
-    })
+    const poll = await db.query.polls.findFirst({ where: eq(polls.id, pollId) })
 
-    const filtered = poll
-      ? items.filter((item) => (item.kind === 'vote' ? poll.notifyOnVote : poll.notifyOnComment))
-      : []
-
-    // `owner` (poll.createdBy) is nullable — same graceful skip as `#processDeadline` above when
-    // the creator's account is gone.
-    if (!poll || poll.deletedAt || filtered.length === 0 || !poll.owner) {
+    if (!poll || poll.deletedAt || items.length === 0) {
       await this.#clearDigest()
       return
     }
 
-    const newVoters = filtered.filter((item) => item.kind === 'vote').map((item) => item.name)
-    const newComments = filtered.filter((item) => item.kind === 'comment').length
-
-    const rendered = await renderDigest({
-      pollTitle: poll.title,
-      pollUrl: `${this.env.APP_URL}/p/${pollId}`,
-      newVoters,
-      newComments,
-      locale: poll.owner.locale ?? 'en',
-    })
-    let ok = false
-    try {
-      ok = await this.mailer(this.env, { to: poll.owner.email, ...rendered })
-    } catch (err) {
-      console.error('[PollRoom] digest mail threw', err)
+    const scope = {
+      type: 'poll' as const,
+      id: pollId,
+      organizationId: poll.organizationId,
     }
 
-    if (!ok) {
+    // One resolution per distinct event, not per item — a burst of twenty votes resolves once.
+    const perEvent = new Map<DigestEvent, Recipient[]>()
+    for (const event of new Set(items.map((i) => i.event))) {
+      perEvent.set(event, (await resolveRecipients(db, scope, event)).email)
+    }
+
+    // Invert into "what does each recipient get", dropping items they caused themselves.
+    const byRecipient = new Map<string, { recipient: Recipient; items: DigestItem[] }>()
+    for (const item of items) {
+      for (const recipient of perEvent.get(item.event) ?? []) {
+        if (recipient.userId === item.actorUserId) continue
+        const bucket = byRecipient.get(recipient.userId) ?? { recipient, items: [] }
+        bucket.items.push(item)
+        byRecipient.set(recipient.userId, bucket)
+      }
+    }
+
+    // Recipients already mailed on an earlier attempt are skipped, so a retry triggered by one
+    // failing address cannot deliver a second copy to everyone who already succeeded.
+    const delivered = new Set((await this.ctx.storage.get<string[]>(DIGEST_SENT_KEY)) ?? [])
+    let anyFailed = false
+
+    for (const { recipient, items: theirs } of byRecipient.values()) {
+      if (delivered.has(recipient.userId)) continue
+
+      try {
+        const rendered = await renderDigest({
+          pollTitle: poll.title,
+          pollUrl: `${this.env.APP_URL}/p/${pollId}`,
+          lines: buildDigestLines(theirs),
+          locale: recipient.locale,
+        })
+        const ok = await this.mailer(this.env, { to: recipient.email, ...rendered })
+        if (ok) delivered.add(recipient.userId)
+        else anyFailed = true
+      } catch (err) {
+        console.error('[PollRoom] digest mail threw', err)
+        anyFailed = true
+      }
+    }
+
+    if (anyFailed) {
       const currentRetries = (await this.ctx.storage.get<number>(RETRY_COUNT_KEY)) ?? 0
       const nextRetries = currentRetries + 1
       if (nextRetries < MAX_RETRIES) {
         await this.ctx.storage.put(RETRY_COUNT_KEY, nextRetries)
         await this.ctx.storage.put(DIGEST_AT_KEY, now + RETRY_DELAY_MS)
+        await this.ctx.storage.put(DIGEST_SENT_KEY, [...delivered])
         return
       }
       console.error(
@@ -327,12 +437,14 @@ export class PollRoom extends DurableObject<Env> {
     await this.ctx.storage.delete(DIGEST_ITEMS_KEY)
     await this.ctx.storage.delete(DIGEST_AT_KEY)
     await this.ctx.storage.delete(RETRY_COUNT_KEY)
+    await this.ctx.storage.delete(DIGEST_SENT_KEY)
   }
 
   async #rearm(): Promise<void> {
     const digestAt = await this.ctx.storage.get<number>(DIGEST_AT_KEY)
     const deadlineAt = await this.ctx.storage.get<number>(DEADLINE_AT_KEY)
-    const candidates = [digestAt, deadlineAt].filter((v): v is number => v !== undefined)
+    const remindAt = await this.ctx.storage.get<number>(REMIND_AT_KEY)
+    const candidates = [digestAt, deadlineAt, remindAt].filter((v): v is number => v !== undefined)
 
     if (candidates.length > 0) {
       await this.ctx.storage.setAlarm(Math.min(...candidates))

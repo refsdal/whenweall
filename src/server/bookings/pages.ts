@@ -2,6 +2,10 @@ import { and, eq, gte, isNull } from 'drizzle-orm'
 import type { Db } from '#/server/db/client'
 import { bookingPages, bookings, organization, type BookingPage } from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
+import {
+  deleteScopeSubscriptions,
+  ensureCreatorSubscription,
+} from '#/server/notifications/subscriptions'
 import { newId } from '#/lib/ids'
 import { canManageContent, type OrgRole } from '#/server/auth/org'
 import type { CreateBookingPageInput, UpdateBookingPageInput } from './schemas'
@@ -101,6 +105,12 @@ export async function createPage(
     throw err
   }
 
+  // Subscribes whoever's calendar this page books against — the same person who received the
+  // unconditional organiser notice before notifications had preferences. Deliberately no fallback
+  // to `createdBy`: `memberUserId` already defaults to the creator above, so a null here means the
+  // caller explicitly asked for a page with no organiser, which has never sent organiser mail.
+  await ensureCreatorSubscription(db, { type: 'booking_page', id }, memberUserId)
+
   return { id }
 }
 
@@ -170,6 +180,8 @@ export async function deletePage(
     .update(bookingPages)
     .set({ deletedAt: now, updatedAt: now })
     .where(eq(bookingPages.id, pageId))
+  // Manual cascade — a polymorphic `scopeId` cannot carry a foreign key.
+  await deleteScopeSubscriptions(db, { type: 'booking_page', id: pageId })
 }
 
 export async function listMyPages(db: Db, organizationId: string): Promise<PageSummary[]> {

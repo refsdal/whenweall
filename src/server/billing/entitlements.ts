@@ -9,6 +9,8 @@ export type Entitlements = Readonly<{
   maxSeats: 1 | typeof PREMIUM_MAX_SEATS
   googleSync: boolean
   branding: boolean
+  /** Web push as a notification channel. Email is available on every plan. */
+  push: boolean
 }>
 
 const ACTIVE_STATUSES = new Set(['active', 'trialing'])
@@ -21,6 +23,7 @@ export const FREE_ENTITLEMENTS: Entitlements = Object.freeze({
   maxSeats: 1,
   googleSync: false,
   branding: false,
+  push: false,
 })
 
 const PREMIUM_ENTITLEMENTS: Entitlements = Object.freeze({
@@ -28,6 +31,7 @@ const PREMIUM_ENTITLEMENTS: Entitlements = Object.freeze({
   maxSeats: PREMIUM_MAX_SEATS,
   googleSync: true,
   branding: true,
+  push: true,
 })
 
 /** A `subscription` row's shape as far as plan-activeness is concerned — the one place that

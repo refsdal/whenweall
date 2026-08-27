@@ -111,7 +111,8 @@ describe('createPoll', () => {
       allowIfNeedBe: true,
       signupMaxClaims: 1,
     })
-    expect(view?.notifications).toEqual({ notifyOnVote: true, notifyOnComment: true })
+    // `createPoll` subscribes the creator with no override — inheriting their account defaults.
+    expect(view?.notifications).toEqual({ channels: null, defaults: null, following: true })
     expect(view?.status).toBe('open')
   })
 
@@ -195,7 +196,7 @@ describe('getPollView', () => {
 
     const asOwner = await getPollView(db, pollId, { userId: ownerId })
     expect(asOwner?.isOwner).toBe(true)
-    expect(asOwner?.notifications).toEqual({ notifyOnVote: true, notifyOnComment: true })
+    expect(asOwner?.notifications).toEqual({ channels: null, defaults: null, following: true })
 
     const asOther = await getPollView(db, pollId, { userId: otherId })
     expect(asOther?.isOwner).toBe(false)
@@ -798,18 +799,61 @@ describe('requireManagedPoll', () => {
 })
 
 describe('updateNotificationPrefs', () => {
-  it('updates owner notification prefs', async () => {
+  it("stores the viewer's per-poll override", async () => {
     const db = createDb(env.DB)
     const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const org = { id: orgId, role: 'owner' as const }
     const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
 
     await updateNotificationPrefs(db, pollId, org, ownerId, {
-      notifyOnVote: false,
-      notifyOnComment: false,
+      'response.created': { email: false, push: false },
     })
 
     const view = await getPollView(db, pollId, { userId: ownerId })
-    expect(view?.notifications).toEqual({ notifyOnVote: false, notifyOnComment: false })
+    expect(view?.notifications?.channels).toEqual({
+      'response.created': { email: false, push: false },
+    })
+    expect(view?.notifications?.following).toBe(true)
+  })
+
+  it('clears the override back to the account defaults', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const org = { id: orgId, role: 'owner' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
+
+    await updateNotificationPrefs(db, pollId, org, ownerId, {
+      'response.created': { email: false, push: false },
+    })
+    await updateNotificationPrefs(db, pollId, org, ownerId, null)
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    expect(view?.notifications?.channels).toBeNull()
+  })
+
+  it('lets a teammate who does not manage the poll follow and tune it', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: mate } = await makeUser(db)
+    await addOrgMember(db, orgId, mate)
+    const org = { id: orgId, role: 'member' as const }
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
+
+    // Not following yet: the grid is null but the viewer is a member, so the block is present.
+    const before = await getPollView(db, pollId, { userId: mate })
+    expect(before?.notifications).toEqual({ channels: null, defaults: null, following: false })
+
+    await updateNotificationPrefs(db, pollId, org, mate, {
+      'comment.created': { email: true, push: false },
+    })
+
+    const after = await getPollView(db, pollId, { userId: mate })
+    expect(after?.notifications?.following).toBe(true)
+    expect(after?.notifications?.channels).toEqual({
+      'comment.created': { email: true, push: false },
+    })
+    // The owner's own settings are untouched by the teammate's.
+    const asOwner = await getPollView(db, pollId, { userId: ownerId })
+    expect(asOwner?.notifications?.channels).toBeNull()
   })
 })

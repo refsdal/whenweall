@@ -24,7 +24,12 @@ describe('do-client', () => {
 
   it('queueDigest resolves without throwing', async () => {
     const pollId = newPollId()
-    const item = { kind: 'vote' as const, name: 'Ada', at: new Date().toISOString() }
+    const item = {
+      event: 'response.created' as const,
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    }
 
     await expect(queueDigest(pollId, item)).resolves.toBeUndefined()
 

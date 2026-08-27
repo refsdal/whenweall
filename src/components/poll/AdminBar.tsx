@@ -39,11 +39,17 @@ import {
   PopoverTrigger,
 } from '#/components/ui/popover'
 import { Switch } from '#/components/ui/switch'
+import { NotificationGrid } from '#/components/notifications/NotificationGrid'
+import {
+  POLL_NOTIFICATION_EVENTS,
+  type NotificationGrid as NotificationGridValue,
+} from '#/lib/notifications'
 import type { AppLocale } from '#/app.config'
 import { m } from '#/lib/i18n'
 import {
   deletePoll,
   duplicatePoll,
+  setPollFollowing,
   setPollStatus,
   updateNotificationPrefs,
 } from '#/server/polls/polls.functions'
@@ -60,26 +66,31 @@ export function AdminBar({
   onShare,
   locale,
   timeZone,
+  pushAvailable = false,
 }: {
   poll: PollView
   onChanged: () => void | Promise<void>
   onShare: () => void
   locale: AppLocale
   timeZone: string
+  /** From the viewer's entitlements — the push column is Premium-only. */
+  pushAvailable?: boolean
 }) {
   const navigate = useNavigate()
   const statusFn = useServerFn(setPollStatus)
   const duplicateFn = useServerFn(duplicatePoll)
   const deleteFn = useServerFn(deletePoll)
   const prefsFn = useServerFn(updateNotificationPrefs)
+  const followFn = useServerFn(setPollFollowing)
+  const defaultChannels = poll.notifications?.defaults ?? null
 
   const [finalizeOpen, setFinalizeOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [prefs, setPrefs] = useState({
-    notifyOnVote: poll.notifications?.notifyOnVote ?? true,
-    notifyOnComment: poll.notifications?.notifyOnComment ?? true,
-  })
+  const [channels, setChannels] = useState<NotificationGridValue | null>(
+    poll.notifications?.channels ?? null,
+  )
+  const [following, setFollowing] = useState(poll.notifications?.following ?? false)
 
   const isClosed = poll.status !== 'open'
   // A sign-up sheet has no winning option to pick — the organiser closes it instead, and takes the
@@ -123,13 +134,28 @@ export function AdminBar({
     })
   }
 
-  async function savePrefs(next: { notifyOnVote: boolean; notifyOnComment: boolean }) {
-    setPrefs(next)
+  async function savePrefs(next: NotificationGridValue | null) {
+    const previous = channels
+    setChannels(next)
+    // Tuning a poll you were not following is an implicit follow, server-side — mirror that here
+    // so the toggle does not appear to disagree with the checkboxes.
+    setFollowing(true)
     try {
-      await prefsFn({ data: { pollId: poll.id, ...next } })
+      await prefsFn({ data: { pollId: poll.id, channels: next } })
       toast.success(m.poll_notify_saved())
     } catch {
-      setPrefs(prefs)
+      setChannels(previous)
+      toast.error(m.poll_error_generic())
+    }
+  }
+
+  async function toggleFollowing(next: boolean) {
+    const previous = following
+    setFollowing(next)
+    try {
+      await followFn({ data: { pollId: poll.id, following: next } })
+    } catch {
+      setFollowing(previous)
       toast.error(m.poll_error_generic())
     }
   }
@@ -195,27 +221,41 @@ export function AdminBar({
               <Bell aria-hidden="true" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="w-72">
+          <PopoverContent align="end" className="w-88">
             <PopoverHeader>
               <PopoverTitle>{m.poll_notifications()}</PopoverTitle>
             </PopoverHeader>
             <div className="mt-3 flex flex-col gap-3">
               <label className="flex cursor-pointer items-center justify-between gap-3 text-sm">
-                {m.poll_notify_votes()}
+                {m.notif_following()}
                 <Switch
-                  checked={prefs.notifyOnVote}
-                  onCheckedChange={(checked) => void savePrefs({ ...prefs, notifyOnVote: checked })}
+                  checked={following}
+                  onCheckedChange={(checked) => void toggleFollowing(checked)}
                 />
               </label>
-              <label className="flex cursor-pointer items-center justify-between gap-3 text-sm">
-                {m.poll_notify_comments()}
-                <Switch
-                  checked={prefs.notifyOnComment}
-                  onCheckedChange={(checked) =>
-                    void savePrefs({ ...prefs, notifyOnComment: checked })
-                  }
-                />
-              </label>
+
+              <NotificationGrid
+                events={POLL_NOTIFICATION_EVENTS}
+                value={channels}
+                defaults={defaultChannels}
+                pushAvailable={pushAvailable}
+                disabled={!following}
+                onChange={(next) => void savePrefs(next)}
+              />
+
+              {channels === null ? (
+                <p className="text-xs text-muted-foreground">{m.notif_using_defaults()}</p>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void savePrefs(null)}
+                  className="self-start"
+                >
+                  {m.notif_reset_to_defaults()}
+                </Button>
+              )}
             </div>
           </PopoverContent>
         </Popover>
