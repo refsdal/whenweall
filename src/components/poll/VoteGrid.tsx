@@ -4,6 +4,7 @@ import { OptionHeader, optionPlainLabel } from '#/components/poll/OptionHeader'
 import { ParticipantRow } from '#/components/poll/ParticipantRow'
 import { canEditParticipant, type ViewerState } from '#/components/poll/viewer'
 import { m } from '#/lib/i18n'
+import { useNewlyArrived } from '#/lib/use-newly-arrived'
 import { cn } from '#/lib/utils'
 import type { PollView } from '#/server/polls/viewmodel'
 
@@ -42,6 +43,9 @@ export function VoteGrid({
   const columnCount = poll.options.length + 1
   const showEmptyState = poll.participants.length === 0
 
+  // Your own row is never flashed: you know you just voted — you got confetti for it.
+  const arrived = useNewlyArrived(poll.participants.map((participant) => participant.id))
+
   return (
     <div className="surface overflow-hidden">
       <div className="overflow-x-auto overscroll-x-contain">
@@ -76,24 +80,28 @@ export function VoteGrid({
             <AnimatePresence initial={false}>
               {poll.participants
                 .filter((participant) => participant.id !== editingParticipantId)
-                .map((participant) => (
-                  <ParticipantRow
-                    key={participant.id}
-                    participant={participant}
-                    options={poll.options}
-                    optionLabels={optionLabels}
-                    isYou={
-                      participant.id === viewer.participantId ||
-                      (viewer.userId !== null && participant.userId === viewer.userId)
-                    }
-                    canEdit={canEditParticipant(poll, viewer, participant.id)}
-                    onEdit={onEditParticipant}
-                    onRemove={onRemoveParticipant}
-                    bestOptionId={poll.finalizedOptionId === null ? poll.bestOptionId : null}
-                    finalizedOptionId={poll.finalizedOptionId}
-                    allowIfNeedBe={poll.settings.allowIfNeedBe}
-                  />
-                ))}
+                .map((participant) => {
+                  const isYou =
+                    participant.id === viewer.participantId ||
+                    (viewer.userId !== null && participant.userId === viewer.userId)
+
+                  return (
+                    <ParticipantRow
+                      key={participant.id}
+                      participant={participant}
+                      options={poll.options}
+                      optionLabels={optionLabels}
+                      isYou={isYou}
+                      justArrived={!isYou && arrived.has(participant.id)}
+                      canEdit={canEditParticipant(poll, viewer, participant.id)}
+                      onEdit={onEditParticipant}
+                      onRemove={onRemoveParticipant}
+                      bestOptionId={poll.finalizedOptionId === null ? poll.bestOptionId : null}
+                      finalizedOptionId={poll.finalizedOptionId}
+                      allowIfNeedBe={poll.settings.allowIfNeedBe}
+                    />
+                  )
+                })}
             </AnimatePresence>
 
             {showEmptyState && (

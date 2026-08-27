@@ -26,6 +26,7 @@ export function ParticipantRow({
   options,
   optionLabels,
   isYou,
+  justArrived = false,
   canEdit,
   onEdit,
   onRemove,
@@ -37,6 +38,8 @@ export function ParticipantRow({
   options: PollOptionView[]
   optionLabels: Record<string, string>
   isYou: boolean
+  /** Someone else added this row while the visitor was watching; it flashes once. */
+  justArrived?: boolean
   canEdit: boolean
   onEdit: (participantId: string) => void
   onRemove: (participantId: string) => void
@@ -55,6 +58,7 @@ export function ParticipantRow({
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
       transition={spring}
       data-testid={`participant-row-${participant.id}`}
+      data-arrived={justArrived ? 'true' : undefined}
       className="group/row"
     >
       <th
