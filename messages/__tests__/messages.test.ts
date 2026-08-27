@@ -41,3 +41,38 @@ describe('messages', () => {
     }
   })
 })
+
+/*
+ * Marketing copy must not make promises the product might have to break. "Free forever" was the
+ * specific one that prompted this: it commits the pricing model in public, and walking it back
+ * later would make us look dishonest rather than merely changed. Stating what is true *now*
+ * ("free and easy to use") carries the same benefit with none of the liability.
+ *
+ * Scoped to user-facing copy only — code comments are free to say "forever" about loop conditions.
+ */
+describe('no forward-looking promises in copy', () => {
+  const FOREVER_CLAIMS = [
+    /\bforever\b/i,
+    /\balways free\b/i,
+    /\bfree for life\b/i,
+    /\bfor alltid\b/i,
+    /\balltid gratis\b/i,
+  ]
+
+  it('never promises something is permanent', () => {
+    for (const [locale, messages] of [
+      ['en', en],
+      ['nb', nb],
+    ] as const) {
+      for (const key of messageKeys(messages as Record<string, string>)) {
+        const value = (messages as Record<string, string>)[key] ?? ''
+        for (const claim of FOREVER_CLAIMS) {
+          expect(
+            claim.test(value),
+            `${locale}.json key "${key}" promises permanence: "${value}"`,
+          ).toBe(false)
+        }
+      }
+    }
+  })
+})
