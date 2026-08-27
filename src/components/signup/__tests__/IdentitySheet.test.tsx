@@ -101,6 +101,21 @@ describe('IdentitySheet', () => {
     })
   })
 
+  it('remounts the same error on a second attempt, so the shake replays', async () => {
+    const user = userEvent.setup()
+    renderSheet()
+
+    await user.click(screen.getByRole('button', { name: /sign me up/i }))
+    const first = await screen.findByRole('alert')
+
+    await user.click(screen.getByRole('button', { name: /sign me up/i }))
+    const second = await screen.findByRole('alert')
+
+    // Same sentence both times; a component React never re-rendered would animate nothing.
+    expect(second).toHaveTextContent(first.textContent ?? '')
+    expect(second).not.toBe(first)
+  })
+
   it('renders nothing while closed', () => {
     renderSheet({ open: false })
 

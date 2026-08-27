@@ -304,6 +304,33 @@
   box-shadow: 0 10px 30px -12px color-mix(in oklab, var(--primary) 65%, transparent);
 }
 
+/*
+ * A validation message arriving. Small and quick — this is a nudge towards the field that needs
+ * fixing, not a scolding. The global reduced-motion rule collapses it to nothing.
+ */
+@keyframes whenweall-shake {
+  0%,
+  100% {
+    translate: 0;
+  }
+  20% {
+    translate: -4px;
+  }
+  40% {
+    translate: 3px;
+  }
+  60% {
+    translate: -2px;
+  }
+  80% {
+    translate: 1px;
+  }
+}
+
+@utility shake-once {
+  animation: whenweall-shake 0.35s ease-in-out;
+}
+
 @keyframes whenweall-pop-in {
   from {
     opacity: 0;

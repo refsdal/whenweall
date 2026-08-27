@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
+import { FormError, nextFailure, type FormFailure } from '#/components/ui/form-error'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
@@ -50,25 +51,25 @@ export function IdentitySheet({
   const [name, setName] = useState(defaultName)
   const [email, setEmail] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<FormFailure | null>(null)
 
   function submit() {
     const trimmedName = name.trim()
     if (!trimmedName) {
-      setError(m.poll_error_name_required())
+      setError((current) => nextFailure(current, m.poll_error_name_required()))
       return
     }
     const trimmedEmail = email.trim()
     if (requireEmail && !trimmedEmail) {
-      setError(m.poll_error_email_required())
+      setError((current) => nextFailure(current, m.poll_error_email_required()))
       return
     }
     if (trimmedEmail && !z.email().safeParse(trimmedEmail).success) {
-      setError(m.poll_error_email_invalid())
+      setError((current) => nextFailure(current, m.poll_error_email_invalid()))
       return
     }
     if (needsCaptcha && !captchaToken) {
-      setError(m.poll_error_captcha())
+      setError((current) => nextFailure(current, m.poll_error_captcha()))
       return
     }
 
@@ -127,11 +128,7 @@ export function IdentitySheet({
 
           {needsCaptcha && <TurnstileField onToken={setCaptchaToken} />}
 
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
+          {error && <FormError key={error.attempt}>{error.message}</FormError>}
 
           <DialogFooter>
             <Button
