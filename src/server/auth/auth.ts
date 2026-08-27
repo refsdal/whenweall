@@ -15,6 +15,7 @@ import { sendMail } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
+import { createRateLimitStorage } from './rate-limit-storage'
 import { authorizeSubscriptionReference, createStripeClient } from '#/server/billing/stripe'
 import { getEntitlements, getSeatsUsed } from '#/server/billing/entitlements'
 import { PREMIUM_PLAN_NAME } from '#/lib/billing'
@@ -241,6 +242,17 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       // is skipped only in the isolated test environment and stays active in dev/production.
       ...(env.APP_ENV === 'test' ? [] : [tanstackStartCookies()]),
     ],
+    // Better-Auth defaults `enabled` to `isProduction`, which it derives from a *runtime*
+    // `process.env.NODE_ENV` lookup — a variable this worker never sets, so the default resolves
+    // to "development" and rate limiting silently switches itself off. Set explicitly rather than
+    // inferred. `window`/`max`/`customRules` are deliberately left alone: the defaults (and the
+    // stricter built-in rules for sign-in, sign-up and password reset) are what we want, and only
+    // the storage needed replacing — the default is a `Map` inside the isolate, which in Workers
+    // means a fresh, empty counter per isolate and per colo.
+    rateLimit: {
+      enabled: true,
+      customStorage: createRateLimitStorage(),
+    },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path === '/organization/invite-member') {
