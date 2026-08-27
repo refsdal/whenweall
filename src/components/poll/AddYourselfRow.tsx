@@ -171,6 +171,7 @@ export function AddYourselfRow({
         {poll.options.map((option) => (
           <td
             key={option.id}
+            data-option-id={option.id}
             data-best={option.id === poll.bestOptionId ? 'true' : undefined}
             className={cn(
               'border-t border-border px-1 py-1.5',

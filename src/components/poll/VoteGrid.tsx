@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { AnimatePresence } from 'motion/react'
 import { OptionHeader, optionPlainLabel } from '#/components/poll/OptionHeader'
 import { ParticipantRow } from '#/components/poll/ParticipantRow'
@@ -59,12 +59,24 @@ export function VoteGrid({
   // Your own row is never flashed: you know you just voted — you got confetti for it.
   const arrived = useNewlyArrived(poll.participants.map((participant) => participant.id))
 
+  // Eight options on a wide grid make "which column am I in" a real question a few rows down.
+  // One delegated handler on the table beats a pair on every cell, and `pointerover` bubbles
+  // where `pointerenter` does not. Mice only: on a touch screen this would latch on tap and
+  // stay lit with nothing to unlatch it.
+  const [hoveredOption, setHoveredOption] = useState<string | null>(null)
+
   return (
     <div className="surface overflow-hidden">
       <div className="overflow-x-auto overscroll-x-contain">
         <table
           data-testid="vote-grid"
           className="w-full border-separate border-spacing-0 text-left"
+          onPointerOver={(event) => {
+            if (event.pointerType !== 'mouse') return
+            const cell = (event.target as Element).closest('[data-option-id]')
+            setHoveredOption(cell?.getAttribute('data-option-id') ?? null)
+          }}
+          onPointerLeave={() => setHoveredOption(null)}
         >
           <caption className="sr-only">{poll.title}</caption>
 
@@ -84,6 +96,7 @@ export function VoteGrid({
                   timeZone={viewer.timeZone}
                   best={option.id === poll.bestOptionId && poll.finalizedOptionId === null}
                   finalized={option.id === poll.finalizedOptionId}
+                  hovered={option.id === hoveredOption}
                 />
               ))}
             </tr>
@@ -106,6 +119,7 @@ export function VoteGrid({
                       optionLabels={optionLabels}
                       isYou={isYou}
                       justArrived={!isYou && arrived.has(participant.id)}
+                      hoveredOptionId={hoveredOption}
                       canEdit={canEditParticipant(poll, viewer, participant.id)}
                       onEdit={onEditParticipant}
                       onRemove={onRemoveParticipant}
@@ -150,6 +164,7 @@ export function VoteGrid({
                   <td
                     key={option.id}
                     data-testid={`score-${option.id}`}
+                    data-option-id={option.id}
                     data-yes={String(score.yes)}
                     data-ifneedbe={String(score.ifneedbe)}
                     data-best={isBest ? 'true' : undefined}
@@ -158,6 +173,7 @@ export function VoteGrid({
                       'border-t border-border px-1 py-2 text-center transition-colors',
                       isBest && 'bg-accent-soft/35',
                       isFinalized && 'bg-yes-soft/35',
+                      option.id === hoveredOption && !isBest && !isFinalized && 'bg-secondary/60',
                     )}
                   >
                     <span className="sr-only">
