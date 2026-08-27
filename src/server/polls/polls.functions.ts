@@ -9,7 +9,7 @@ import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { notifyChanged, syncDeadline } from '#/server/notifications/do-client'
 import { emitPollEvent } from '#/server/notifications/emit'
 import { sendFinalizedEmails } from '#/server/notifications/finalize-emails'
-import { recordPollCreated } from '#/server/stats/stats-client'
+import { recordPollCreated, recordPollFinalized } from '#/server/stats/stats-client'
 import * as pollService from './service'
 import {
   createPollSchema,
@@ -116,6 +116,9 @@ export const finalizePoll = createServerFn({ method: 'POST' })
     await emitPollEvent(data.pollId, 'poll.finalized', {
       actorUserId: context.session.user.id,
     })
+    // `pollService.finalizePoll` throws CONFLICT on an already-finalized poll, so reaching here is
+    // always a genuine not-decided → decided transition.
+    await recordPollFinalized()
     await syncDeadline(data.pollId, null)
     return { sent }
   })

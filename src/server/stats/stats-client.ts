@@ -24,6 +24,15 @@ export async function recordPollCreated(): Promise<void> {
   }
 }
 
+/** The outcome counter — a poll whose organiser picked a winning time. */
+export async function recordPollFinalized(): Promise<void> {
+  try {
+    await statsRoom().recordPollFinalized()
+  } catch (err) {
+    console.error('[stats-client] recordPollFinalized failed', err)
+  }
+}
+
 export async function recordResponses(answers: Answer[]): Promise<void> {
   if (answers.length === 0) return
   try {

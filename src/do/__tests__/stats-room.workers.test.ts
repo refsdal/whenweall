@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { FLUSH_INTERVAL_MS, type StatsRoom } from '#/do/StatsRoom'
 import type { UsageStats } from '#/do/stats-protocol'
 import { createDb } from '#/server/db/client'
+import { finalizePoll } from '#/server/polls/service'
 import { makeParticipant, makePoll, makeUserWithOrg } from '../../../test/helpers'
 
 let roomSeq = 0
@@ -154,6 +155,44 @@ describe('StatsRoom websocket', () => {
     expect(parsed.type).toBe('stats')
     expect(parsed.stats.pollsCreated).toBeGreaterThanOrEqual(1)
     ws.close()
+  })
+})
+
+describe('StatsRoom finalized counter', () => {
+  it('counts a decided poll separately from a created one', async () => {
+    const stub = freshRoom()
+    const before = await stub.read()
+
+    await stub.recordPollCreated()
+    await stub.recordPollFinalized()
+
+    const after = await stub.read()
+    expect(after.pollsCreated).toBe(before.pollsCreated + 1)
+    expect(after.pollsFinalized).toBe(before.pollsFinalized + 1)
+  })
+
+  it('persists the finalized delta across a flush', async () => {
+    const stub = freshRoom()
+    await stub.recordPollFinalized()
+    await stub.recordPollFinalized()
+    await runDurableObjectAlarm(stub)
+
+    const stored = await storage<UsageStats>(stub, 'counters')
+    expect(stored?.pollsFinalized).toBe(2)
+    expect((await stub.read()).pollsFinalized).toBe(2)
+  })
+
+  it('seeds the finalized count from polls already decided', async () => {
+    const db = createDb(env.DB)
+    const { userId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await makePoll(db, { orgId, createdBy: userId })
+    const options = await db.query.pollOptions.findMany()
+    const optionId = options.find((o) => o.pollId === pollId)!.id
+    await finalizePoll(db, pollId, { id: orgId, role: 'owner' }, userId, optionId)
+
+    const stub = freshRoom()
+    // Shared D1 across the file, so assert a floor rather than an exact total.
+    expect((await stub.read()).pollsFinalized).toBeGreaterThanOrEqual(1)
   })
 })
 

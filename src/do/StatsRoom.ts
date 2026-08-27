@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import { count, isNull } from 'drizzle-orm'
+import { and, count, eq, isNull } from 'drizzle-orm'
 import type { Answer } from '#/lib/scoring'
 import { createDb } from '#/server/db/client'
 import { polls, votes } from '#/server/db/schema'
@@ -60,6 +60,7 @@ export class StatsRoom extends DurableObject<Env> {
   async read(): Promise<UsageStats> {
     const stored = await this.#seededCounters()
     return {
+      pollsFinalized: stored.pollsFinalized + this.#delta.pollsFinalized,
       pollsCreated: stored.pollsCreated + this.#delta.pollsCreated,
       responsesYes: stored.responsesYes + this.#delta.responsesYes,
       responsesIfNeedBe: stored.responsesIfNeedBe + this.#delta.responsesIfNeedBe,
@@ -69,6 +70,13 @@ export class StatsRoom extends DurableObject<Env> {
 
   async recordPollCreated(): Promise<void> {
     this.#delta.pollsCreated += 1
+    await this.#afterIncrement()
+  }
+
+  /** `finalizePoll` rejects an already-finalized poll with CONFLICT, so every call that reaches
+   * here is a genuine not-decided → decided transition and cannot double-count. */
+  async recordPollFinalized(): Promise<void> {
+    this.#delta.pollsFinalized += 1
     await this.#afterIncrement()
   }
 
@@ -121,6 +129,7 @@ export class StatsRoom extends DurableObject<Env> {
     this.#delta = { ...EMPTY_STATS }
 
     await this.ctx.storage.put(COUNTERS_KEY, {
+      pollsFinalized: stored.pollsFinalized + delta.pollsFinalized,
       pollsCreated: stored.pollsCreated + delta.pollsCreated,
       responsesYes: stored.responsesYes + delta.responsesYes,
       responsesIfNeedBe: stored.responsesIfNeedBe + delta.responsesIfNeedBe,
@@ -157,12 +166,17 @@ export class StatsRoom extends DurableObject<Env> {
     try {
       const db = createDb(this.env.DB)
 
-      const [pollRows, voteRows] = await Promise.all([
+      const [pollRows, finalizedRows, voteRows] = await Promise.all([
         db.select({ value: count() }).from(polls).where(isNull(polls.deletedAt)),
+        db
+          .select({ value: count() })
+          .from(polls)
+          .where(and(isNull(polls.deletedAt), eq(polls.status, 'finalized'))),
         db.select({ answer: votes.answer, value: count() }).from(votes).groupBy(votes.answer),
       ])
 
       counters.pollsCreated = pollRows[0]?.value ?? 0
+      counters.pollsFinalized = finalizedRows[0]?.value ?? 0
       for (const row of voteRows) {
         const field = ANSWER_FIELD[row.answer]
         if (field) counters[field] = row.value

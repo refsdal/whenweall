@@ -763,5 +763,7 @@
   "landing_stats_yes": "yes",
   "landing_stats_ifneedbe": "if need be",
   "landing_stats_no": "no",
-  "landing_stats_live": "Updating live"
+  "landing_stats_live": "Updating live",
+  "landing_stats_sentence": "whenweall has settled {count} dates for people so far.",
+  "landing_stats_supporting": "{polls} polls created · {responses} responses recorded"
 }

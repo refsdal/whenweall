@@ -763,5 +763,7 @@
   "landing_stats_yes": "ja",
   "landing_stats_ifneedbe": "om nødvendig",
   "landing_stats_no": "nei",
-  "landing_stats_live": "Oppdateres i sanntid"
+  "landing_stats_live": "Oppdateres i sanntid",
+  "landing_stats_sentence": "whenweall har avklart {count} tidspunkter for folk så langt.",
+  "landing_stats_supporting": "{polls} avstemninger laget · {responses} svar registrert"
 }

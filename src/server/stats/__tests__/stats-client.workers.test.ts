@@ -56,6 +56,7 @@ describe('stats-client', () => {
       await expect(recordResponses(['yes'])).resolves.toBeUndefined()
       // The read falls back to zeroes rather than throwing — the landing page must still render.
       await expect(readUsageStats()).resolves.toEqual({
+        pollsFinalized: 0,
         pollsCreated: 0,
         responsesYes: 0,
         responsesIfNeedBe: 0,

@@ -7,6 +7,9 @@
  * and the copy says "responses recorded" rather than "people said yes" for exactly this reason.
  */
 export type UsageStats = {
+  /** Polls whose organiser picked a winning time. The outcome number: it says the product worked,
+   * not merely that someone tried it. Sign-up sheets cannot be finalized and never count here. */
+  pollsFinalized: number
   pollsCreated: number
   responsesYes: number
   responsesIfNeedBe: number
@@ -14,6 +17,7 @@ export type UsageStats = {
 }
 
 export const EMPTY_STATS: UsageStats = {
+  pollsFinalized: 0,
   pollsCreated: 0,
   responsesYes: 0,
   responsesIfNeedBe: 0,

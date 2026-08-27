@@ -9,8 +9,9 @@ It says nothing about whether anyone actually uses the product. Live counters �
 responses broken down by answer — turn an empty claim into evidence, and a number that visibly
 moves while you are reading it does more than a static one.
 
-Decisions taken with Anders (2026-08-27): count **polls created** plus **responses split by yes /
-if-need-be / no**; updates should be **real time**; durable objects are the assumed mechanism.
+Decisions taken with Anders (2026-08-27): count **polls decided** (the headline), **polls
+created**, and **responses split by yes / if-need-be / no**; updates should be **real time**;
+durable objects are the assumed mechanism; low numbers are shown rather than hidden.
 
 This is deliberately scoped as its own project. It shares no code with the notification subsystem
 on `feat/notifications` (PR #26) — the increment points are in the poll and claim services, not the
@@ -34,10 +35,11 @@ notification emit boundary — so the two branches can land in either order.
 
 ## §1 What is counted
 
-Four monotonic lifetime totals, held together in one record:
+Five monotonic lifetime totals, held together in one record:
 
 | Counter             | Incremented when                                                               |
 | ------------------- | ------------------------------------------------------------------------------ |
+| `pollsFinalized`    | `finalizePoll` picks a winning time — **the headline number**                  |
 | `pollsCreated`      | `createPoll` inserts a poll (including duplicates — a duplicate is a new poll) |
 | `responsesYes`      | An answer of `yes` is submitted                                                |
 | `responsesIfNeedBe` | An answer of `ifneedbe` is submitted                                           |
@@ -54,11 +56,21 @@ yes".**
 
 `pollsCreated` is not decremented when a poll is deleted, for the same reason.
 
+**`pollsFinalized` is the number the section leads with** (added 2026-08-27). Polls created counts
+attempts; polls decided counts outcomes — it says the product did its job rather than that someone
+tried it. `finalizePoll` rejects an already-finalized poll with `CONFLICT`, so every increment is a
+genuine not-decided → decided transition and cannot double-count.
+
+It is also, structurally, the **smallest** of the counters: polls get abandoned, deadlines pass
+without a winner being picked, and sign-up sheets cannot be finalized at all. That shapes §5 —
+presenting it as a large figure beside a larger "polls created" would invite reading the pair as a
+conversion rate.
+
 ## §2 Storage and the durable object
 
 A single `StatsRoom` durable object, addressed by a constant name (`global`), holding:
 
-- `counters` — the four totals.
+- `counters` — the five totals.
 - `seeded` — a flag, see §4.
 - WebSocket connections from landing-page visitors, accepted through
   `ctx.acceptWebSocket()` so they hibernate exactly as `PollRoom`'s do.
@@ -93,12 +105,14 @@ triggered it:
 
 ```
 recordPollCreated(): Promise<void>
+recordPollFinalized(): Promise<void>
 recordResponses(answers: Answer[]): Promise<void>
 ```
 
 Called from the **server-function** layer, not the services:
 
 - `createPoll` and `duplicatePoll` (`src/server/polls/polls.functions.ts`).
+- `finalizePoll` (`src/server/polls/polls.functions.ts`) — the headline counter.
 - `addParticipant` and `updateParticipant` (`src/server/polls/participants.functions.ts`) — with
   the answers actually submitted.
 - `claimSlot` (`src/server/polls/participants.functions.ts`) — a sign-up claim is stored as a `yes`
@@ -124,10 +138,11 @@ notification emit boundary follows, and for the same reason.
 
 The counters must not start at zero on a database that already has polls in it. A migration cannot
 call a durable object, so seeding is lazy: on first read or first increment, if `seeded` is absent,
-the DO runs two aggregate queries against D1 —
+the DO runs three aggregate queries against D1 —
 
 ```sql
 SELECT COUNT(*) FROM polls WHERE deleted_at IS NULL;
+SELECT COUNT(*) FROM polls WHERE deleted_at IS NULL AND status = 'finalized';
 SELECT answer, COUNT(*) FROM votes GROUP BY answer;
 ```
 
@@ -155,9 +170,21 @@ If the socket fails or is closed, the server-rendered numbers simply stay put. T
 fallback and no retry storm — a stale marketing counter is not worth a reconnect loop on the
 busiest page in the product.
 
+**A sentence, not a dashboard** (decided 2026-08-27). The headline reads as prose — "whenweall has
+settled _340_ dates for people so far." — with the number highlighted in the brand ink, bold, and
+counting up live. Polls created and responses recorded sit below it as a quiet supporting line,
+followed by the yes / if-need-be / no breakdown. This sidesteps the size problem in §1 entirely:
+there is no second large figure to compare against.
+
+Paraglide messages return plain strings, so the number cannot be JSX inside the message. The
+sentence interpolates a `\u0000` sentinel and the component splits on it (`splitAroundSlot`),
+which keeps the sentence as **one** translatable unit and lets each locale place the number
+wherever its grammar wants — a prefix/suffix pair could not. A translation that loses the
+placeholder degrades to plain prose rather than throwing.
+
 **Animation.** The number animates from its previous value to the new one rather than snapping,
-and respects `prefers-reduced-motion` by swapping to an instant update. Uses the existing `motion`
-dependency.
+and respects `prefers-reduced-motion` by swapping to an instant update. It never animates on first
+render, so the server-rendered figure does not count up from zero on hydration.
 
 ## §6 Low numbers are shown, not hidden
 
