@@ -28,6 +28,11 @@ export function formatCountdown(ms: number, locale: AppLocale): string {
 /**
  * "Closes in 2d 4h" — ticking down once a minute.
  *
+ * Inside the last hour it warms from the accent to the "if need be" amber and picks up a slow
+ * ring, because at three days and at three minutes it was otherwise the same flat badge. The
+ * clock only ticks every 30s, so the change lands within half a minute of the hour mark — which
+ * is close enough for something measured in whole minutes.
+ *
  * `suppressHydrationWarning` covers the seconds of drift between the server's clock and the
  * browser's: both render the same coarse label in practice, and a mismatch here is cosmetic.
  */
@@ -42,15 +47,19 @@ export function DeadlineCountdown({
   const now = useNow(30_000)
   const remaining = new Date(deadlineAt).getTime() - now.getTime()
   const expired = remaining <= 0
+  const urgent = !expired && remaining <= HOUR
   const text = formatCountdown(remaining, locale)
 
   return (
     <span
       suppressHydrationWarning
       title={new Date(deadlineAt).toLocaleString()}
+      data-urgent={urgent ? 'true' : undefined}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
-        expired ? 'bg-secondary text-muted-foreground' : 'bg-accent-soft text-accent-foreground',
+        expired && 'bg-secondary text-muted-foreground',
+        !expired && !urgent && 'bg-accent-soft text-accent-foreground',
+        urgent && 'bg-ifneedbe-soft text-ifneedbe-ink',
         className,
       )}
     >
