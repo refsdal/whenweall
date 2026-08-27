@@ -73,8 +73,26 @@ export function BookingConfirmed({
       className="surface flex flex-col gap-4 border-[var(--yes)]/40 bg-yes-soft/40 p-5"
     >
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-yes-soft text-yes-ink">
-          <Check aria-hidden="true" className="size-4.5" strokeWidth={3} />
+        {/* The tick lands a beat after the card, with a ring going out from under it — the visual
+            half of the confirmation the confetti is celebrating. */}
+        <span className="relative mt-0.5 inline-flex size-9 shrink-0 items-center justify-center">
+          {!reduceMotion && (
+            <motion.span
+              aria-hidden="true"
+              className="absolute inset-0 rounded-full bg-yes-soft"
+              initial={{ scale: 1, opacity: 0.8 }}
+              animate={{ scale: 1.9, opacity: 0 }}
+              transition={{ duration: 0.7, ease: 'easeOut', delay: 0.1 }}
+            />
+          )}
+          <motion.span
+            className="relative inline-flex size-9 items-center justify-center rounded-full bg-yes-soft text-yes-ink"
+            initial={reduceMotion ? false : { scale: 0.4 }}
+            animate={{ scale: 1 }}
+            transition={{ ...spring, delay: 0.1 }}
+          >
+            <Check aria-hidden="true" className="size-4.5" strokeWidth={3} />
+          </motion.span>
         </span>
         <div className="min-w-0">
           <h2 className="display text-xl">{m.book_confirmed_title()}</h2>

@@ -46,6 +46,7 @@ describe('celebrate', () => {
     const { celebrate } = await import('#/lib/confetti')
 
     expect(() => celebrate('vote')).not.toThrow()
+    expect(() => celebrate('booking')).not.toThrow()
     expect(() => celebrate('finalize')).not.toThrow()
     expect(confettiMock).toHaveBeenCalled()
   })
@@ -62,11 +63,30 @@ describe('celebrate', () => {
     expect(confettiMock.mock.calls.length).toBeGreaterThan(voteBursts)
   })
 
+  it('throws more particles at a booking than at a vote', async () => {
+    mockReducedMotion(false)
+    const { celebrate } = await import('#/lib/confetti')
+
+    const particles = () =>
+      confettiMock.mock.calls.reduce(
+        (total, [options]) => total + ((options as { particleCount: number }).particleCount ?? 0),
+        0,
+      )
+
+    celebrate('vote')
+    const voteParticles = particles()
+    confettiMock.mockReset()
+
+    celebrate('booking')
+    expect(particles()).toBeGreaterThan(voteParticles)
+  })
+
   it('does nothing when the user prefers reduced motion', async () => {
     mockReducedMotion(true)
     const { celebrate } = await import('#/lib/confetti')
 
     celebrate('finalize')
+    celebrate('booking')
     celebrate('vote')
     expect(confettiMock).not.toHaveBeenCalled()
   })

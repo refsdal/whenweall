@@ -15,12 +15,34 @@ function prefersReducedMotion(): boolean {
  * Fires a celebratory confetti burst.
  *
  * - `finalize` — two bursts angled in from both edges, for "the time is set".
+ * - `booking` — a fountain up the middle, for "the time is yours".
  * - `vote` — one small burst from the bottom centre, for "your vote landed".
+ *
+ * The three are deliberately different sizes. A vote is one of many and gets a flick; a booking
+ * is the whole reason a visitor opened the page and gets a wider, slower shower; a finalize ends
+ * the poll for everyone and gets both edges.
  *
  * No-ops during SSR and whenever the visitor prefers reduced motion.
  */
-export function celebrate(kind: 'finalize' | 'vote'): void {
+export function celebrate(kind: 'finalize' | 'booking' | 'vote'): void {
   if (prefersReducedMotion()) return
+
+  if (kind === 'booking') {
+    const base = {
+      spread: 80,
+      startVelocity: 42,
+      ticks: 200,
+      origin: { x: 0.5, y: 0.85 },
+      colors: COLORS,
+      disableForReducedMotion: true,
+    }
+
+    // A dense core with a wider, slower veil behind it, so the shower has some depth rather than
+    // reading as one flat ring of dots.
+    void confetti({ ...base, particleCount: 70, scalar: 1 })
+    void confetti({ ...base, particleCount: 35, spread: 110, scalar: 0.75, startVelocity: 30 })
+    return
+  }
 
   if (kind === 'vote') {
     void confetti({

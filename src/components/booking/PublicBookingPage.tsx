@@ -102,7 +102,7 @@ export function PublicBookingPage({
           },
         })
         saveBookingToken(result.bookingId, result.manageToken)
-        celebrate('vote')
+        celebrate('booking')
         const endAt = new Date(
           new Date(values.startAt).getTime() + page.slotDurationMin * 60_000,
         ).toISOString()
