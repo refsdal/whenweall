@@ -1,4 +1,5 @@
 import type { OptionKind, PollStatus, PollType } from '#/server/db/schema'
+import type { NotificationGrid } from '#/lib/notifications'
 import type { Answer, OptionScore } from '#/lib/scoring'
 
 export type PollOptionView = {
@@ -46,7 +47,14 @@ export type PollView = {
     allowIfNeedBe: boolean
     signupMaxClaims: number
   }
-  notifications: { notifyOnVote: boolean; notifyOnComment: boolean } | null
+  /** The viewer's own notification settings for this poll: `channels: null` means "inherit my
+   * account defaults", which `defaults` carries so the UI can show what is actually resolved.
+   * Null for anyone who is not a member of the poll's org. */
+  notifications: {
+    channels: NotificationGrid | null
+    defaults: NotificationGrid | null
+    following: boolean
+  } | null
   // No `id` here — this view is public (any participant/viewer sees it), and nothing in the
   // client reads the org id; the booking public view deliberately omits it the same way.
   owner: { name: string }

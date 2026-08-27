@@ -4,6 +4,7 @@ import {
   renderClosed,
   renderDigest,
   renderFinalized,
+  renderNotification,
   renderResetPassword,
   renderVerifyEmail,
 } from '#/server/mailer/templates'
@@ -62,8 +63,7 @@ describe('renderDigest', () => {
     const { subject, html } = await renderDigest({
       pollTitle: 'Team sync',
       pollUrl: 'https://x/p/abc',
-      newVoters: ['Ada', 'Grace', 'Rosalind'],
-      newComments: 1,
+      lines: [{ event: 'response.created', names: ['Ada', 'Grace', 'Rosalind'], count: 3 }],
       locale: 'en',
     })
 
@@ -72,6 +72,73 @@ describe('renderDigest', () => {
     expect(html).toContain('Grace')
     expect(html).toContain('Rosalind')
     expect(html).toContain('https://x/p/abc')
+  })
+
+  it('renders one line per event kind so edits read differently from new responses', async () => {
+    const { html } = await renderDigest({
+      pollTitle: 'Team sync',
+      pollUrl: 'https://x/p/abc',
+      lines: [
+        { event: 'response.created', names: ['Ada'], count: 1 },
+        { event: 'response.updated', names: ['Cleo'], count: 1 },
+        { event: 'comment.created', names: [], count: 3 },
+      ],
+      locale: 'en',
+    })
+
+    expect(html).toMatch(/1 new responses/)
+    expect(html).toMatch(/1 changed responses/)
+    expect(html).toMatch(/3 new comments/)
+    expect(html).toContain('Cleo')
+  })
+
+  it('translates the lines', async () => {
+    const { html } = await renderDigest({
+      pollTitle: 'Team sync',
+      pollUrl: 'https://x/p/abc',
+      lines: [{ event: 'response.updated', names: ['Cleo'], count: 2 }],
+      locale: 'nb',
+    })
+
+    expect(html).toContain('endrede svar')
+  })
+})
+
+describe('renderNotification', () => {
+  it('renders a lifecycle event with its own subject', async () => {
+    const { subject, html } = await renderNotification({
+      event: 'deadline.approaching',
+      title: 'Team sync',
+      url: 'https://x/p/abc',
+      locale: 'en',
+    })
+
+    expect(subject).toContain('Team sync')
+    expect(html).toMatch(/deadline/i)
+    expect(html).toContain('https://x/p/abc')
+  })
+
+  it('delegates poll.closed to the dedicated Closed template', async () => {
+    const { subject } = await renderNotification({
+      event: 'poll.closed',
+      title: 'Team sync',
+      url: 'https://x/p/abc',
+      locale: 'en',
+    })
+
+    expect(subject).toContain('closed')
+  })
+
+  it('includes the booking detail', async () => {
+    const { html } = await renderNotification({
+      event: 'booking.created',
+      title: 'Intro call',
+      url: 'https://x/bookings/abc',
+      detail: '2026-09-01T10:00:00.000Z',
+      locale: 'en',
+    })
+
+    expect(html).toContain('2026-09-01T10:00:00.000Z')
   })
 })
 

@@ -1,5 +1,6 @@
 import { relations, sql } from 'drizzle-orm'
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import type { NotificationGrid } from '#/lib/notifications'
 import { organization, user } from './auth-schema'
 
 export * from './auth-schema'
@@ -35,8 +36,6 @@ export const polls = sqliteTable(
     requireParticipantEmail: bool('require_participant_email', false),
     allowComments: bool('allow_comments', true),
     allowIfNeedBe: bool('allow_if_need_be', true),
-    notifyOnVote: bool('notify_on_vote', true),
-    notifyOnComment: bool('notify_on_comment', true),
     signupMaxClaims: integer('signup_max_claims').notNull().default(1),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -242,5 +241,76 @@ export type BookingPage = typeof bookingPages.$inferSelect
 export type NewBookingPage = typeof bookingPages.$inferInsert
 export type Booking = typeof bookings.$inferSelect
 export type NewBooking = typeof bookings.$inferInsert
+
+export const SCOPE_TYPES = ['poll', 'booking_page'] as const
+export const SUBSCRIPTION_SOURCES = ['creator', 'follow'] as const
+export type ScopeType = (typeof SCOPE_TYPES)[number]
+export type SubscriptionSource = (typeof SUBSCRIPTION_SOURCES)[number]
+
+/** A user's default notification grid. An absent row means `SYSTEM_DEFAULTS` — the row is only
+ * written once someone actually changes something, so most users never have one. */
+export const notificationPrefs = sqliteTable('notification_prefs', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => user.id, { onDelete: 'cascade' }),
+  channels: text('channels', { mode: 'json' }).$type<NotificationGrid>(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+/**
+ * Who is notified about which poll or booking page.
+ *
+ * Polymorphic on purpose: polls and booking pages share one resolver and one emit path, which is
+ * what keeps the two halves of the app from drifting apart. SQLite cannot foreign-key a
+ * polymorphic column, so there is no cascade — the poll and booking-page delete paths remove
+ * these rows explicitly (`deleteScopeSubscriptions`), and the delivery path skips a scope it can
+ * no longer load, so a leaked row is inert rather than dangerous.
+ */
+export const notificationSubscriptions = sqliteTable(
+  'notification_subscriptions',
+  {
+    scopeType: text('scope_type', { enum: SCOPE_TYPES }).notNull(),
+    scopeId: text('scope_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: SUBSCRIPTION_SOURCES }).notNull(),
+    /** null = inherit this user's defaults; an object = a per-scope override. */
+    channels: text('channels', { mode: 'json' }).$type<NotificationGrid>(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.scopeType, t.scopeId, t.userId] }),
+    index('notification_subscriptions_scope_idx').on(t.scopeType, t.scopeId),
+  ],
+)
+
+/** One row per browser/device that has granted push permission. Pruned when the push service
+ * reports the endpoint gone (404/410) — see the Phase 2 delivery path. */
+export const pushSubscriptions = sqliteTable(
+  'push_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    endpoint: text('endpoint').notNull(),
+    p256dh: text('p256dh').notNull(),
+    auth: text('auth').notNull(),
+    userAgent: text('user_agent'),
+    createdAt: text('created_at').notNull(),
+    lastSeenAt: text('last_seen_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('push_subscriptions_endpoint_uidx').on(t.endpoint),
+    index('push_subscriptions_user_idx').on(t.userId),
+  ],
+)
+
+export type NotificationPrefs = typeof notificationPrefs.$inferSelect
+export type NotificationSubscription = typeof notificationSubscriptions.$inferSelect
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect
 
 export { sql }

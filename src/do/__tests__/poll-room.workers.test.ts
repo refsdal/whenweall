@@ -8,6 +8,7 @@ import { errorCode } from '#/lib/errors'
 import type { MailMessage } from '#/server/mailer/mailer'
 import { DIGEST_DELAY_MS, MAX_RETRIES, PollRoom, RETRY_DELAY_MS } from '#/do/PollRoom'
 import type { PollEvent } from '#/do/protocol'
+import { setScopeChannels } from '#/server/notifications/subscriptions'
 import { getPollView, setPollStatus } from '#/server/polls/service'
 import { makeOrg, makePoll, makeSignupPoll, makeUser, makeUserWithOrg } from '../../../test/helpers'
 
@@ -80,8 +81,18 @@ describe('enqueueDigest', () => {
     const stub = stubFor(pollId)
     const before = Date.now()
 
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
-    await stub.enqueueDigest(pollId, { kind: 'comment', name: 'Bob', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
+    await stub.enqueueDigest(pollId, {
+      event: 'comment.created',
+      name: 'Bob',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
 
     const alarmAt = await getAlarm(stub)
     expect(alarmAt).not.toBeNull()
@@ -101,8 +112,18 @@ describe('alarm — digest', () => {
     const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
-    await stub.enqueueDigest(pollId, { kind: 'comment', name: 'Bob', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
+    await stub.enqueueDigest(pollId, {
+      event: 'comment.created',
+      name: 'Bob',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
     await forceDue(stub, 'digest:at')
     await installMailer(stub, recordingMailer(true))
 
@@ -120,14 +141,22 @@ describe('alarm — digest', () => {
     expect(await getAlarm(stub)).toBeNull()
   })
 
-  it('sends no mail and clears storage when nothing matches the owner notification flags', async () => {
+  it('sends no mail and clears storage when the subscriber has that event switched off', async () => {
     const db = createDb(env.DB)
     const { userId: ownerId, orgId } = await makeUserWithOrg(db)
     const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
-    await db.update(polls).set({ notifyOnVote: false }).where(eq(polls.id, pollId))
+    // `createPoll` already made the creator a subscriber; override just this event to off.
+    await setScopeChannels(db, { type: 'poll', id: pollId }, ownerId, {
+      'response.created': { email: false, push: false },
+    })
     const stub = stubFor(pollId)
 
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
     await forceDue(stub, 'digest:at')
     await installMailer(stub, recordingMailer(true))
 
@@ -146,7 +175,12 @@ describe('alarm — digest', () => {
     const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId })
     const stub = stubFor(pollId)
 
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
     await forceDue(stub, 'digest:at')
     await installMailer(stub, recordingMailer(false))
 
@@ -235,7 +269,12 @@ describe('alarm — branch isolation', () => {
 
     // A pending digest, left due in the future — the deadline mailer throwing must not prevent
     // this from getting armed by the alarm's `finally`.
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
     const digestAt = await getStorage<number>(stub, 'digest:at')
 
     // Force due *after* both RPCs above have finished re-arming (each re-arm reads current
@@ -263,7 +302,12 @@ describe('alarm — branch isolation', () => {
 
     const future = new Date(Date.now() + 60_000).toISOString()
     await stub.syncDeadline(pollId, future)
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
 
     // Force both due only after both RPCs above have finished re-arming — see the comment in the
     // previous test for why ordering matters here.
@@ -290,7 +334,12 @@ describe('alarm — rearm ordering', () => {
     const { id: pollId } = await makePoll(db, { orgId, createdBy: ownerId }, { deadlineAt: soon })
     const stub = stubFor(pollId)
 
-    await stub.enqueueDigest(pollId, { kind: 'vote', name: 'Ada', at: new Date().toISOString() })
+    await stub.enqueueDigest(pollId, {
+      event: 'response.created',
+      name: 'Ada',
+      at: new Date().toISOString(),
+      actorUserId: null,
+    })
     await stub.syncDeadline(pollId, soon)
 
     const alarmAt = await getAlarm(stub)

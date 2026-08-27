@@ -1,17 +1,37 @@
 import { Button, Heading, Text } from '@react-email/components'
 import { asLocaleOptions } from '#/lib/i18n'
+import type { DigestEvent } from '#/lib/notifications'
 import * as m from '#/paraglide/messages'
 import { Layout } from './_Layout'
+
+/** One summarised row in the digest: "3 new responses — Ada, Bob, Cleo". `names` is empty for
+ * events where naming the actor adds nothing (a full sign-up sheet). */
+export type DigestLine = { event: DigestEvent; names: string[]; count: number }
 
 export type DigestProps = {
   pollTitle: string
   pollUrl: string
-  newVoters: string[]
-  newComments: number
+  lines: DigestLine[]
   locale: string
 }
 
-export function Digest({ pollTitle, pollUrl, newVoters, newComments, locale }: DigestProps) {
+function lineLabel(line: DigestLine, t: ReturnType<typeof asLocaleOptions>): string {
+  const { count } = line
+  switch (line.event) {
+    case 'response.created':
+      return m.email_digest_line_response_created({ count }, t)
+    case 'response.updated':
+      return m.email_digest_line_response_updated({ count }, t)
+    case 'response.withdrawn':
+      return m.email_digest_line_response_withdrawn({ count }, t)
+    case 'comment.created':
+      return m.email_digest_line_comment_created({ count }, t)
+    case 'signup.full':
+      return m.email_digest_line_signup_full({}, t)
+  }
+}
+
+export function Digest({ pollTitle, pollUrl, lines, locale }: DigestProps) {
   const t = asLocaleOptions(locale)
   return (
     <Layout preview={m.email_digest_subject({ title: pollTitle }, t)} locale={locale}>
@@ -19,13 +39,15 @@ export function Digest({ pollTitle, pollUrl, newVoters, newComments, locale }: D
         {m.email_digest_heading({}, t)}
       </Heading>
       <Text style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 8px' }}>{pollTitle}</Text>
-      <Text style={{ fontSize: '14px', lineHeight: '22px', color: '#3f3f46' }}>
-        {m.email_digest_voters({ count: newVoters.length }, t)}
-      </Text>
-      <Text style={{ fontSize: '14px', color: '#3f3f46' }}>{newVoters.join(', ')}</Text>
-      <Text style={{ fontSize: '14px', lineHeight: '22px', color: '#3f3f46' }}>
-        {m.email_digest_comments({ count: newComments }, t)}
-      </Text>
+      {lines.map((line) => (
+        <Text
+          key={line.event}
+          style={{ fontSize: '14px', lineHeight: '22px', color: '#3f3f46', margin: '0 0 4px' }}
+        >
+          {lineLabel(line, t)}
+          {line.names.length > 0 ? ` — ${line.names.join(', ')}` : ''}
+        </Text>
+      ))}
       <Button
         href={pollUrl}
         style={{
