@@ -12,6 +12,7 @@ import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { requireTurnstile } from '#/server/http/turnstile'
 import { claimViaRoom, notifyChanged, unclaimViaRoom } from '#/server/notifications/do-client'
 import { emitPollEvent } from '#/server/notifications/emit'
+import { recordResponses } from '#/server/stats/stats-client'
 import { sendClaimConfirmation } from '#/server/notifications/claim-emails'
 import { canManagePoll, requireParticipantAuth, requireSignupPoll } from './claim-auth'
 import { resolveVerifiedParticipantId } from './comment-auth'
@@ -110,6 +111,7 @@ export const addParticipant = createServerFn({ method: 'POST' })
       actorName: data.name,
       actorUserId: userId,
     })
+    await recordResponses(Object.values(data.answers))
     await notifyChanged(data.pollId, 'participant')
 
     return result
@@ -143,6 +145,8 @@ export const updateParticipant = createServerFn({ method: 'POST' })
       actorName: data.name ?? existing?.name ?? '',
       actorUserId: userId,
     })
+    // An edit is a fresh submission — see the spec's §1 on why the totals do not net out.
+    await recordResponses(Object.values(data.answers))
     await notifyChanged(data.pollId, 'vote')
   })
 
@@ -253,6 +257,8 @@ export const claimSlot = createServerFn({ method: 'POST' })
         actorName: claimant?.name ?? data.name ?? '',
         actorUserId: userId,
       })
+      // A sign-up claim is stored as a `yes` vote (see `applyClaim`), so it counts as one.
+      await recordResponses(['yes'])
 
       // Best-effort: `sendClaimConfirmation` never throws (it catches and logs internally), so a
       // stalled mailer must never fail a claim that already succeeded.

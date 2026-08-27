@@ -9,6 +9,7 @@ import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { notifyChanged, syncDeadline } from '#/server/notifications/do-client'
 import { emitPollEvent } from '#/server/notifications/emit'
 import { sendFinalizedEmails } from '#/server/notifications/finalize-emails'
+import { recordPollCreated, recordPollFinalized } from '#/server/stats/stats-client'
 import * as pollService from './service'
 import {
   createPollSchema,
@@ -63,6 +64,7 @@ export const createPoll = createServerFn({ method: 'POST' })
       data,
     )
     await syncDeadline(result.id, data.deadlineAt ?? null)
+    await recordPollCreated()
     return result
   })
 
@@ -114,6 +116,9 @@ export const finalizePoll = createServerFn({ method: 'POST' })
     await emitPollEvent(data.pollId, 'poll.finalized', {
       actorUserId: context.session.user.id,
     })
+    // `pollService.finalizePoll` throws CONFLICT on an already-finalized poll, so reaching here is
+    // always a genuine not-decided → decided transition.
+    await recordPollFinalized()
     await syncDeadline(data.pollId, null)
     return { sent }
   })
@@ -131,7 +136,15 @@ export const duplicatePoll = createServerFn({ method: 'POST' })
   .middleware(SERVER_FN_MIDDLEWARE.duplicatePoll)
   .validator(z.object({ pollId: pollIdSchema }))
   .handler(async ({ data, context }) => {
-    return pollService.duplicatePoll(getDb(), data.pollId, context.org, context.session.user.id)
+    const result = await pollService.duplicatePoll(
+      getDb(),
+      data.pollId,
+      context.org,
+      context.session.user.id,
+    )
+    // A duplicate is a new poll from the counter's point of view.
+    await recordPollCreated()
+    return result
   })
 
 export const listMyPolls = createServerFn({ method: 'GET' })
