@@ -90,12 +90,14 @@ export class PollRoom extends DurableObject<Env> {
       return new Response('Expected Upgrade: websocket', { status: 426 })
     }
 
-    const url = new URL(request.url)
-    const pollId = url.searchParams.get('pollId')
-    if (pollId) {
-      await this.#setPollId(pollId)
-    }
-
+    // Deliberately does NOT persist the `pollId` query param. `fetch` is the one entry point
+    // that takes the id on trust from an inbound request, so writing storage here is what let a
+    // connection to a non-existent poll leave a durable object behind forever. Every other entry
+    // point (`broadcast`, `enqueueDigest`, `syncDeadline`, `claim`, `unclaim`) calls
+    // `#setPollId`, and all of those are reached from paths that have already verified the poll
+    // exists — so a room that matters always learns its id, and one that doesn't stays empty.
+    // The route (`/api/polls/$id/ws`) checks existence before addressing this stub; this is the
+    // second layer, so a mistake there costs a connection rather than unbounded storage.
     const { 0: client, 1: server } = new WebSocketPair()
     this.ctx.acceptWebSocket(server)
     server.serializeAttachment({ connectedAt: Date.now() })

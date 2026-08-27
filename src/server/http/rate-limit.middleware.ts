@@ -1,5 +1,5 @@
 import { createMiddleware } from '@tanstack/react-start'
-import { enforceRateLimit, type RateLimitAction } from './rate-limit'
+import { enforceRateLimit } from './rate-limit'
 
 /*
  * The rate-limit middlewares live apart from the limiter itself, and each is a top-level
@@ -47,7 +47,16 @@ const MIDDLEWARE = {
   book: bookLimit,
 } as const
 
-/** The rate-limit middleware for one action, e.g. `rateLimitMiddleware('vote')`. */
-export function rateLimitMiddleware<A extends RateLimitAction>(action: A): (typeof MIDDLEWARE)[A] {
+/**
+ * The rate-limit middleware for one action, e.g. `rateLimitMiddleware('vote')`.
+ *
+ * Constrained to `keyof typeof MIDDLEWARE` rather than `RateLimitAction`, because not every
+ * action has a middleware form: `'connect'` limits a websocket upgrade, which is a route handler
+ * and calls `enforceRateLimit` directly (see `/api/polls/$id/ws`). Widening this to
+ * `RateLimitAction` would promise a middleware that does not exist.
+ */
+export function rateLimitMiddleware<A extends keyof typeof MIDDLEWARE>(
+  action: A,
+): (typeof MIDDLEWARE)[A] {
   return MIDDLEWARE[action]
 }

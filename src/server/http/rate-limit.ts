@@ -12,7 +12,7 @@ import { getRequestHeader } from '@tanstack/start-server-core/request-response'
 import { env } from 'cloudflare:workers'
 import { AppError } from '#/lib/errors'
 
-export type RateLimitAction = 'create' | 'vote' | 'comment' | 'auth' | 'book'
+export type RateLimitAction = 'create' | 'vote' | 'comment' | 'auth' | 'book' | 'connect'
 
 export function clientIp(): string {
   try {
