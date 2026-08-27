@@ -140,7 +140,17 @@ function BookRoute() {
   // One event covers every change to the page: somebody booked, cancelled or moved a slot.
   // Re-running the loader is the simplest correct response.
   const onEvent = useCallback(() => void router.invalidate(), [router])
-  useLivePage(page.id, onEvent)
+  const { connected } = useLivePage(page.id, onEvent)
+
+  // The room broadcasts to sockets that are already open and keeps no history, so anything that
+  // changed between the loader running on the server and this socket opening is missed — and,
+  // because the next event only reports the *next* change, missed for good. Re-fetching whenever
+  // the socket comes up closes that window, and covers reconnects too: a laptop that slept
+  // through three bookings comes back to the right list rather than a confidently stale one.
+  useEffect(() => {
+    if (!connected) return
+    void router.invalidate()
+  }, [connected, router])
 
   const onMonthChange = useCallback(
     (next: string) => void navigate({ search: (prev) => ({ ...prev, month: next }) }),

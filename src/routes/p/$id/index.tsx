@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import * as z from 'zod'
 import { appConfig } from '#/app.config'
@@ -47,7 +47,15 @@ function PollRoute() {
     },
     [router],
   )
-  const { presence } = useLivePoll(poll.id, onEvent)
+  const { presence, connected } = useLivePoll(poll.id, onEvent)
+
+  // Same catch-up as the public booking page: the room broadcasts only to sockets already open
+  // and keeps no history, so a vote cast between the loader running and this socket opening is
+  // missed for good — the next event reports the next change, not the one that was dropped.
+  useEffect(() => {
+    if (!connected) return
+    void router.invalidate()
+  }, [connected, router])
 
   const onChanged = useCallback(() => router.invalidate(), [router])
 
