@@ -23,11 +23,15 @@
     "STRIPE_PRICE_PREMIUM_MONTHLY": "price_1U8k2WDqZd85ftHmUfw4OH8O",
     "STRIPE_PRICE_PREMIUM_YEARLY": "price_1U8k2WDqZd85ftHmIqsuL2Uw",
   },
+  // Jurisdiction-restricted to the EU, which is what `privacy_processors_body` promises users.
+  // A D1 database's jurisdiction is fixed at creation, so this is a different database from the
+  // original unrestricted `whenweall` (01c56eb2-...), migrated across by dump and restore. The old
+  // one is deliberately left in place as the rollback; see docs/d1-eu-migration.md.
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "whenweall",
-      "database_id": "01c56eb2-4850-4abb-a7a6-42d231f3eaab",
+      "database_name": "whenweall-eu",
+      "database_id": "f3b57069-39e8-4ecd-9be6-f4db4bf00d1f",
       "migrations_dir": "drizzle",
     },
   ],
@@ -75,8 +79,8 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "whenweall-test",
-          "database_id": "18b66eb8-9018-4e2e-a65a-a35b9671af2c",
+          "database_name": "whenweall-test-eu",
+          "database_id": "ac702181-c6f3-425c-ac85-24c4d60fa60f",
           "migrations_dir": "drizzle",
         },
       ],

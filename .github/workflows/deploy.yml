@@ -37,6 +37,17 @@ jobs:
             echo "::error file=wrangler.jsonc::wrangler.jsonc still has development placeholders (APP_ENV=\"development\" and/or APP_URL=localhost:3000). Point APP_URL at your domain and set APP_ENV to \"production\" before deploying — see README.md#deploying." >&2
             exit 1
           fi
+      # The privacy policy tells users their data is stored under Cloudflare's EU jurisdiction.
+      # A D1 database's jurisdiction is fixed at creation and invisible in wrangler.jsonc, so
+      # nothing else would catch a database swapped for an unrestricted one. See #39.
+      - name: Guard against a non-EU production database
+        run: |
+          jurisdiction=$(bunx wrangler d1 info whenweall-eu --json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("jurisdiction") or "none")')
+          if [ "$jurisdiction" != "eu" ]; then
+            echo "::error::production D1 reports jurisdiction '$jurisdiction', expected 'eu'." >&2
+            exit 1
+          fi
+          echo "production D1 jurisdiction: $jurisdiction"
       - run: bun run db:migrate:remote
       - run: bun run deploy
 
