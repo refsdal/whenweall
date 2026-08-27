@@ -119,8 +119,22 @@ which inherits nothing) and the three `db:migrate:*` scripts in `package.json`, 
 database by name. Then merge — deploy applies migrations and switches the binding.
 
 Writes to the old database between the final export and the deploy are lost. Production was taking
-~37 writes/day when this was done, so the window was accepted rather than scheduled; at higher
-volume, re-export and re-load immediately before merging.
+~37 writes/day when this was done, so the window was accepted rather than scheduled — but it is
+real: a single sign-in touches `user.updated_at`, and drift was observed within an hour of the
+first copy.
+
+Re-run the copy immediately before merging. To make that repeatable, wipe the target's rows
+children-first and reload, rather than recreating the database (which would change the
+`database_id` already committed to `wrangler.jsonc`):
+
+```
+push_subscriptions, notification_subscriptions, notification_prefs, bookings, booking_pages,
+comments, votes, participants, poll_options, polls, subscription, invitation, member, passkey,
+session, account, verification, organization, user, d1_migrations
+```
+
+That is the load order from step 3 reversed. Then reload the reordered data file and re-run the
+verification in step 5. The whole cycle takes under a minute at this data size.
 
 ### 7. Afterwards
 
