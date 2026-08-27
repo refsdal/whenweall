@@ -1,14 +1,25 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { motion } from 'motion/react'
 import { ArrowRight, CalendarPlus, Check, Link2, Sparkles, Users } from 'lucide-react'
+import { createServerFn } from '@tanstack/react-start'
 import { appConfig } from '#/app.config'
+import type { UsageStats } from '#/do/stats-protocol'
+import { UsageStatsSection } from '#/components/landing/UsageStats'
 import { VoteGridMock } from '#/components/landing/VoteGridMock'
 import { buttonVariants } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
 import { staggerContainer, staggerItem } from '#/lib/motion'
 import { cn } from '#/lib/utils'
 
+/** Server-rendered so the landing page shows real numbers on first paint — no zero-flash, no
+ * layout shift, and correct with JavaScript disabled. */
+const getUsageStats = createServerFn({ method: 'GET' }).handler(async () => {
+  const { readUsageStats } = await import('#/server/stats/stats-client')
+  return readUsageStats()
+})
+
 export const Route = createFileRoute('/')({
+  loader: async (): Promise<{ stats: UsageStats }> => ({ stats: await getUsageStats() }),
   head: () => ({
     meta: [
       { title: `${appConfig.name} — ${appConfig.tagline}` },
@@ -21,10 +32,12 @@ export const Route = createFileRoute('/')({
 const CONTAINER = 'mx-auto w-full max-w-6xl px-5 sm:px-8'
 
 function LandingPage() {
+  const { stats } = Route.useLoaderData()
   return (
     <>
       <Hero />
       <HowItWorks />
+      <UsageStatsSection initial={stats} className={cn(CONTAINER, 'pb-16 sm:pb-24')} />
       <Outro />
     </>
   )

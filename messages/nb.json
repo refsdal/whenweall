@@ -756,5 +756,14 @@
   "terms_law_title": "Lovvalg",
   "terms_law_body": "Disse vilkårene er underlagt norsk rett.",
   "terms_changes_title": "Endringer i vilkårene",
-  "terms_changes_body": "Vi kan oppdatere disse vilkårene fra tid til annen. Ved vesentlige endringer oppdaterer vi datoen øverst på denne siden. Fortsetter du å bruke whenweall etter en endring, innebærer det at du godtar de oppdaterte vilkårene."
+  "terms_changes_body": "Vi kan oppdatere disse vilkårene fra tid til annen. Ved vesentlige endringer oppdaterer vi datoen øverst på denne siden. Fortsetter du å bruke whenweall etter en endring, innebærer det at du godtar de oppdaterte vilkårene.",
+  "landing_stats_eyebrow": "Brukt så langt",
+  "landing_stats_polls": "avstemninger laget",
+  "landing_stats_responses": "svar registrert",
+  "landing_stats_yes": "ja",
+  "landing_stats_ifneedbe": "om nødvendig",
+  "landing_stats_no": "nei",
+  "landing_stats_live": "Oppdateres i sanntid",
+  "landing_stats_sentence": "whenweall har avklart {count} tidspunkter for folk så langt.",
+  "landing_stats_supporting": "{polls} avstemninger laget · {responses} svar registrert"
 }

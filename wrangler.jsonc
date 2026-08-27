@@ -28,11 +28,13 @@
     "bindings": [
       { "name": "POLL_ROOM", "class_name": "PollRoom" },
       { "name": "BOOKING_ROOM", "class_name": "BookingRoom" },
+      { "name": "STATS_ROOM", "class_name": "StatsRoom" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PollRoom"] },
     { "tag": "v2", "new_sqlite_classes": ["BookingRoom"] },
+    { "tag": "v3", "new_sqlite_classes": ["StatsRoom"] },
   ],
   "send_email": [{ "name": "EMAIL" }],
   "ratelimits": [
@@ -68,6 +70,7 @@
         "bindings": [
           { "name": "POLL_ROOM", "class_name": "PollRoom" },
           { "name": "BOOKING_ROOM", "class_name": "BookingRoom" },
+          { "name": "STATS_ROOM", "class_name": "StatsRoom" },
         ],
       },
       "send_email": [{ "name": "EMAIL" }],
