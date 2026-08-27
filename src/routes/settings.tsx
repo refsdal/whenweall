@@ -62,15 +62,16 @@ function SettingsPage() {
 
           <Separator />
 
-          <section>
-            <BillingSection
-              orgId={session.org.id}
-              role={session.org.role}
-              entitlements={session.entitlements}
-              subscription={billing?.subscription ?? null}
-              seatsUsed={billing?.seatsUsed ?? 0}
-            />
-          </section>
+          {/* `BillingSection` (like `ProfileSection`/`DangerZone`) is its own `<section>`, so it
+              isn't wrapped in another one here — unlike `HandleSection`/`PasskeyManager`, which
+              render a plain `<div>` and rely on this wrapper for the landmark. */}
+          <BillingSection
+            orgId={session.org.id}
+            role={session.org.role}
+            entitlements={session.entitlements}
+            subscription={billing?.subscription ?? null}
+            seatsUsed={billing?.seatsUsed ?? 0}
+          />
 
           <Separator />
         </>

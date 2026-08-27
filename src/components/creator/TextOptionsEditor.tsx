@@ -127,7 +127,9 @@ export function TextOptionsEditor({
               <CapacityField
                 id={`text-option-capacity-${index}`}
                 size="sm"
-                value={row.capacity ?? 1}
+                // `capacity: undefined` (never set) means the default of 1; `null` is unlimited
+                // and must pass through unchanged — `?? 1` would wrongly coerce that back to 1.
+                value={row.capacity === undefined ? 1 : row.capacity}
                 onChange={(capacity) => setCapacityAt(index, capacity)}
               />
             )}

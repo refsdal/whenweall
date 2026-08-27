@@ -18,6 +18,7 @@ import type { CreatePollInput } from '#/server/polls/schemas'
 import { createPage } from '#/server/bookings/pages'
 import type { CreateBookingPageInput } from '#/server/bookings/schemas'
 import { generateToken, hashToken } from '#/lib/tokens'
+import { chunkedInsert } from '#/server/db/chunked-insert'
 
 let counter = 0
 function unique(): string {
@@ -158,8 +159,9 @@ export async function makeParticipant(
     optionId,
     answer,
   }))
-  if (rows.length > 0) {
-    await db.insert(votes).values(rows)
+  const inserts = chunkedInsert(db, votes, rows)
+  if (inserts.length > 0) {
+    await db.batch(inserts as [(typeof inserts)[number], ...(typeof inserts)[number][]])
   }
   return { id }
 }

@@ -69,4 +69,31 @@ describe('draftToInput against the real createPoll', () => {
     expect(view?.description).toBeNull()
     expect(view?.options.map((o) => o.label)).toEqual(['Pizza', 'Sushi'])
   })
+
+  it('persists capacity NULL end to end for a signup slot toggled to unlimited', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+
+    let draft: CreatorDraft = { ...initialDraft('Europe/Oslo'), type: 'signup', title: 'Potluck' }
+    draft = creatorReducer(draft, {
+      type: 'setTextOptions',
+      options: [{ label: 'Starter' }, { label: 'Dessert' }],
+    })
+    // Give both options an initial numeric capacity, then flip one to unlimited — mirrors
+    // toggling the "unlimited" switch in the UI after the fields already had values.
+    draft = creatorReducer(draft, { type: 'setTextOptionCapacity', index: 0, capacity: 2 })
+    draft = creatorReducer(draft, { type: 'setTextOptionCapacity', index: 1, capacity: 3 })
+    draft = creatorReducer(draft, { type: 'setTextOptionCapacity', index: 1, capacity: null })
+
+    const input = draftToInput(draft)
+    expect(createPollSchema.safeParse(input).success).toBe(true)
+
+    const { id } = await createPoll(db, { organizationId: orgId, createdBy: ownerId }, input)
+    const view = await getPollView(db, id, { userId: ownerId })
+
+    expect(view?.options.map((o) => ({ label: o.label, capacity: o.capacity }))).toEqual([
+      { label: 'Starter', capacity: 2 },
+      { label: 'Dessert', capacity: null },
+    ])
+  })
 })

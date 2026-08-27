@@ -5,6 +5,7 @@ import { comments, participants, pollOptions, polls, votes, type Answer } from '
 import { AppError } from '#/lib/errors'
 import { newId } from '#/lib/ids'
 import { generateToken, hashToken, verifyToken } from '#/lib/tokens'
+import { chunkedInsert } from '#/server/db/chunked-insert'
 import { LIMITS } from './schemas'
 
 type Query = BatchItem<'sqlite'>
@@ -93,9 +94,7 @@ export async function addParticipant(
       updatedAt: now,
     }),
   ]
-  if (rows.length > 0) {
-    queries.push(db.insert(votes).values(rows))
-  }
+  queries.push(...chunkedInsert(db, votes, rows))
 
   await db.batch(queries as [Query, ...Query[]])
 
@@ -145,9 +144,7 @@ export async function updateParticipant(
     db.update(participants).set(update).where(eq(participants.id, participantId)),
     db.delete(votes).where(eq(votes.participantId, participantId)),
   ]
-  if (insertRows.length > 0) {
-    queries.push(db.insert(votes).values(insertRows))
-  }
+  queries.push(...chunkedInsert(db, votes, insertRows))
 
   await db.batch(queries as [Query, ...Query[]])
 }

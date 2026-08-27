@@ -177,7 +177,9 @@ export function TimeSlotEditor({
               <CapacityField
                 id={`slot-capacity-${date}-${index}`}
                 size="sm"
-                value={slot.capacity ?? 1}
+                // `capacity: undefined` (never set) means the default of 1; `null` is unlimited
+                // and must pass through unchanged — `?? 1` would wrongly coerce that back to 1.
+                value={slot.capacity === undefined ? 1 : slot.capacity}
                 onChange={(next) => onSetCapacity?.(index, next)}
               />
               <button

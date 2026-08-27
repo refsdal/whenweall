@@ -4,7 +4,13 @@ import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { participants } from '#/server/db/schema'
 import { makePoll, makeUser, makeUserWithOrg } from '../../../../test/helpers'
-import { deletePoll, finalizePoll, getPollView, setPollStatus } from '#/server/polls/service'
+import {
+  createPoll,
+  deletePoll,
+  finalizePoll,
+  getPollView,
+  setPollStatus,
+} from '#/server/polls/service'
 import type { PollOptionView } from '#/server/polls/viewmodel'
 import {
   addComment,
@@ -60,6 +66,33 @@ describe('addParticipant', () => {
     const alice = view?.participants.find((p) => p.id === result.participantId)
     expect(alice?.votes).toEqual({ [opt1!.id]: 'yes' })
     expect(Object.keys(alice!.votes)).not.toContain(opt2!.id)
+  })
+
+  it('stores votes for all 100 options on a maximally-sized poll without exceeding D1 bound-parameter limits', async () => {
+    const db = createDb(env.DB)
+    const { userId: ownerId, orgId } = await makeUserWithOrg(db)
+    const { id: pollId } = await createPoll(
+      db,
+      { organizationId: orgId, createdBy: ownerId },
+      {
+        type: 'options',
+        title: 'Huge options poll',
+        timezone: 'Europe/Oslo',
+        options: Array.from({ length: 100 }, (_, i) => ({
+          kind: 'text' as const,
+          label: `Option ${i}`,
+        })),
+      },
+    )
+    const options = await pollOptions(db, pollId, ownerId)
+    expect(options).toHaveLength(100)
+    const answers = Object.fromEntries(options.map((o) => [o.id, 'yes' as const]))
+
+    const result = await addParticipant(db, pollId, { name: 'Alice', answers, userId: null })
+
+    const view = await getPollView(db, pollId, { userId: ownerId })
+    const alice = view?.participants.find((p) => p.id === result.participantId)
+    expect(Object.keys(alice!.votes)).toHaveLength(100)
   })
 
   it('stores the given locale', async () => {

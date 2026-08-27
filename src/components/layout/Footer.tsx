@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { appConfig } from '#/app.config'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
 import { LogoMark } from '#/components/layout/Logo'
@@ -14,7 +15,13 @@ export function Footer() {
           <span>{m.footer_rights({ year: String(year), name: appConfig.name })}</span>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <Link to="/privacy" className="hover:text-foreground">
+            {m.footer_privacy()}
+          </Link>
+          <Link to="/terms" className="hover:text-foreground">
+            {m.footer_terms()}
+          </Link>
           <LocaleSwitcher />
         </div>
       </div>

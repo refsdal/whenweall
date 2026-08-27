@@ -76,7 +76,9 @@ export function CreatorWizard() {
       } else if (code === 'UNAUTHORIZED') {
         await navigate({ to: '/login', search: { next: '/new' } })
       } else {
-        toast.error(m.creator_error_generic())
+        // A genuine server-side failure (validation errors are already caught above, before the
+        // request is even sent) — never echo the raw error back to the user.
+        toast.error(m.creator_submit_error())
       }
     } finally {
       setSubmitting(false)

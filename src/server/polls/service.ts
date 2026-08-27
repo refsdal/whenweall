@@ -20,6 +20,7 @@ import { newId, newPollId } from '#/lib/ids'
 import type { NotificationGrid } from '#/lib/notifications'
 import { bestOptionId, scoreOptions } from '#/lib/scoring'
 import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { chunkedInsert } from '#/server/db/chunked-insert'
 import {
   deleteScopeSubscriptions,
   ensureCreatorSubscription,
@@ -108,7 +109,7 @@ export async function createPoll(
       createdAt: now,
       updatedAt: now,
     }),
-    db.insert(pollOptions).values(optionRows),
+    ...chunkedInsert(db, pollOptions, optionRows),
   ] as [Query, ...Query[]])
 
   // Outside the batch on purpose: the creator's subscription is a notification convenience, not
@@ -492,7 +493,7 @@ export async function duplicatePoll(
       createdAt: now,
       updatedAt: now,
     }),
-    db.insert(pollOptions).values(optionRows),
+    ...chunkedInsert(db, pollOptions, optionRows),
   ] as [Query, ...Query[]])
 
   await ensureCreatorSubscription(db, { type: 'poll', id }, userId)

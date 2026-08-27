@@ -80,10 +80,13 @@ export function BillingSection({
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">{m.billing_title()}</h2>
+      <div>
+        <h2 className="text-sm font-semibold">{m.billing_title()}</h2>
+        <p className="text-sm text-muted-foreground">{m.billing_subtitle()}</p>
+      </div>
 
       {entitlements.plan === 'free' ? (
-        <div className="flex flex-col items-start gap-3 rounded-lg border border-border p-4">
+        <div className="flex flex-col items-start gap-3 rounded-lg border border-border bg-card p-4">
           <p className="text-sm font-medium">{m.billing_free_plan()}</p>
           <div className="inline-flex rounded-full border border-border p-0.5 text-xs">
             <button
@@ -114,7 +117,7 @@ export function BillingSection({
           </Button>
         </div>
       ) : (
-        <div className="flex flex-col items-start gap-2 rounded-lg border border-border p-4">
+        <div className="flex flex-col items-start gap-2 rounded-lg border border-border bg-card p-4">
           <p className="text-sm font-medium">{m.billing_premium_plan()}</p>
           <p className="text-sm text-muted-foreground">
             {m.billing_seats_used({ used: seatsUsed, max: entitlements.maxSeats })}
