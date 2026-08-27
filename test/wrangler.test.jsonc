@@ -27,12 +27,14 @@
       { "name": "POLL_ROOM", "class_name": "PollRoom" },
       { "name": "BOOKING_ROOM", "class_name": "BookingRoom" },
       { "name": "STATS_ROOM", "class_name": "StatsRoom" },
+      { "name": "RATE_LIMIT_ROOM", "class_name": "RateLimitRoom" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PollRoom"] },
     { "tag": "v2", "new_sqlite_classes": ["BookingRoom"] },
     { "tag": "v3", "new_sqlite_classes": ["StatsRoom"] },
+    { "tag": "v4", "new_sqlite_classes": ["RateLimitRoom"] },
   ],
   "ratelimits": [
     { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
