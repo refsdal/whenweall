@@ -1,7 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
-import { Check, Copy, Share2 } from 'lucide-react'
-import { toast } from 'sonner'
+import { useSyncExternalStore } from 'react'
+import { Share2 } from 'lucide-react'
 import { Button } from '#/components/ui/button'
+import { CopyIcon } from '#/components/ui/copy-icon'
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,7 @@ import {
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
+import { useCopy } from '#/lib/use-copy'
 
 const noopSubscribe = () => () => {}
 
@@ -29,26 +30,13 @@ export function ShareSheet({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const [copied, setCopied] = useState(false)
   // Feature detection has to wait for the browser: `navigator.share` doesn't exist on the server,
   // and rendering the button during SSR would break hydration.
   const canShare = useSyncExternalStore(noopSubscribe, hasNativeShare, () => false)
-
-  useEffect(() => {
-    if (!copied) return
-    const id = setTimeout(() => setCopied(false), 2000)
-    return () => clearTimeout(id)
-  }, [copied])
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-      toast.success(m.poll_share_copied())
-    } catch {
-      toast.error(m.poll_share_copy_failed())
-    }
-  }
+  const { copied, copy } = useCopy({
+    success: m.poll_share_copied(),
+    error: m.poll_share_copy_failed(),
+  })
 
   async function share() {
     try {
@@ -78,8 +66,8 @@ export function ShareSheet({
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button type="button" onClick={() => void copy()} className="flex-1">
-            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          <Button type="button" onClick={() => void copy(url)} className="flex-1">
+            <CopyIcon copied={copied} />
             {m.poll_share_copy()}
           </Button>
           {canShare && (

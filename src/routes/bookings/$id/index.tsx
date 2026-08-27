@@ -1,16 +1,17 @@
-import { useState } from 'react'
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { ArrowLeft, Check, Copy, MapPin, Pencil } from 'lucide-react'
+import { ArrowLeft, MapPin, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { appConfig } from '#/app.config'
 import { BookingsTable } from '#/components/booking/BookingsTable'
 import { bookingPrefix } from '#/components/booking/HandleField'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { CopyIcon } from '#/components/ui/copy-icon'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
+import { useCopy } from '#/lib/use-copy'
 import { cn } from '#/lib/utils'
 import { cancelBooking, listPageBookings } from '#/server/bookings/bookings.functions'
 import { getBookingPage } from '#/server/bookings/pages.functions'
@@ -46,18 +47,10 @@ export const Route = createFileRoute('/bookings/$id/')({
 })
 
 function PublicLink({ url, disabled }: { url: string; disabled: boolean }) {
-  const [copied, setCopied] = useState(false)
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-      toast.success(m.booking_page_link_copied())
-    } catch {
-      toast.error(m.booking_page_link_copy_failed())
-    }
-  }
+  const { copied, copy } = useCopy({
+    success: m.booking_page_link_copied(),
+    error: m.booking_page_link_copy_failed(),
+  })
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -75,9 +68,9 @@ function PublicLink({ url, disabled }: { url: string; disabled: boolean }) {
           variant="outline"
           disabled={disabled}
           className="shrink-0"
-          onClick={() => void copy()}
+          onClick={() => void copy(url)}
         >
-          {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          <CopyIcon copied={copied} />
           <span className="max-sm:sr-only">{m.booking_page_copy_link()}</span>
         </Button>
       </div>
