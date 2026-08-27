@@ -26,9 +26,41 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run format:check
-      - run: bun run test
       - run: bun run build
-  # Deliberately NOT `needs: checks`. e2e builds and exercises the app itself, so it does not
+
+  # Split out of `checks` so the ~1m of typecheck/lint/format/build runs *beside* the suite
+  # instead of ahead of it, and sharded because the workers project is pinned to `maxWorkers: 4`
+  # (see vitest.config.ts) — on a 4-core runner that is the ceiling, not spare headroom, so the
+  # only way to add parallelism is to add runners.
+  #
+  # Two shards, deliberately not more: e2e is ~2m40s and cannot be shortened by sharding this
+  # suite, so once a shard drops below that it stops moving the critical path and just costs
+  # another runner. Vitest shards by file count rather than duration, so the two are uneven
+  # (measured locally: 75s and 116s of a 168s whole) — the slower one is what to watch.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      # Report both shards' failures rather than cancelling the sibling on the first red one.
+      fail-fast: false
+      matrix: { shard: [1, 2] }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: .bun-version }
+      - uses: actions/cache@v4
+        with:
+          {
+            path: ~/.bun/install/cache,
+            key: "bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
+            restore-keys: 'bun-${{ runner.os }}-',
+          }
+      - run: bun install --frozen-lockfile
+      - run: cp .dev.vars.example .dev.vars
+      # `bun run` appends what follows `--` to the script, so this expands to
+      # `vitest run --shard=N/2` — the shard split stays in the workflow, not in package.json.
+      - run: bun run test -- --shard=${{ matrix.shard }}/2
+
+  # Deliberately NOT `needs:` anything. e2e builds and exercises the app itself, so it does not
   # depend on lint/typecheck/unit results — gating it behind them only added its ~2min to the
   # critical path of every green run. A broken PR now burns one extra runner instead.
   e2e:
