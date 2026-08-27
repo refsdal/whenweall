@@ -13,6 +13,7 @@ import { ErrorCard } from '#/components/layout/ErrorCard'
 import { Header } from '#/components/layout/Header'
 import { Footer } from '#/components/layout/Footer'
 import { NotFoundCard } from '#/components/layout/NotFoundCard'
+import { RouteProgress } from '#/components/layout/RouteProgress'
 import { Toaster } from '#/components/ui/sonner'
 import { getLocale, m } from '#/lib/i18n'
 import { themeInitScript } from '#/lib/theme'
@@ -81,6 +82,7 @@ function RootLayout() {
   return (
     <MotionConfig reducedMotion="user">
       <div className="flex min-h-dvh flex-col">
+        <RouteProgress />
         <Header />
         <main className="flex-1">
           <Outlet />
