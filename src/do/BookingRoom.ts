@@ -10,7 +10,6 @@ import {
   rescheduleBooking,
   type CreateBookingInput,
 } from '#/server/bookings/bookings'
-import { sendBookingEmails } from '#/server/bookings/emails'
 import type { Interval } from '#/lib/availability'
 import type { BookingRoomEvent } from './booking-protocol'
 
@@ -214,6 +213,9 @@ export class BookingRoom extends DurableObject<Env> {
     // remind anyone about once the page itself is gone.
     if (!page || !page.reminders || page.deletedAt) return
 
+    // Lazy for the same reason as PollRoom's digest templates: `bookings/emails` pulls React and
+    // every booking email component in, and the reminder path is this room's only caller.
+    const { sendBookingEmails } = await import('#/server/bookings/emails')
     await sendBookingEmails(this.env, 'reminder', bookingId, { db, mailer: this.mailer })
   }
 

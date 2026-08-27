@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { AddYourselfRow } from '#/components/poll/AddYourselfRow'
 import { AdminBar } from '#/components/poll/AdminBar'
 import { AnswerForm } from '#/components/poll/AnswerForm'
+import { AnswerIdentityFields } from '#/components/poll/AnswerIdentityFields'
 import { Comments } from '#/components/poll/Comments'
 import { DeadlineCountdown } from '#/components/poll/DeadlineCountdown'
 import { FinalizedBanner } from '#/components/poll/FinalizedBanner'
@@ -320,6 +321,8 @@ export function PollPage({
           </div>
 
           <div className="flex flex-col gap-3 sm:hidden">
+            {showAddRow && <AnswerIdentityFields draft={draft} />}
+
             <VoteList
               poll={poll}
               viewer={viewer}

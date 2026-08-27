@@ -11,6 +11,15 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with: { bun-version-file: .bun-version }
+      # `setup-bun` caches the bun binary, not the module cache bun installs from. Keying on
+      # bun.lock means a run only pays the network cost when a dependency actually changed.
+      - uses: actions/cache@v4
+        with:
+          {
+            path: ~/.bun/install/cache,
+            key: "bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
+            restore-keys: 'bun-${{ runner.os }}-',
+          }
       - run: bun install --frozen-lockfile
       - run: cp .dev.vars.example .dev.vars
       - run: bun run cf-typegen
@@ -19,16 +28,41 @@ jobs:
       - run: bun run format:check
       - run: bun run test
       - run: bun run build
+  # Deliberately NOT `needs: checks`. e2e builds and exercises the app itself, so it does not
+  # depend on lint/typecheck/unit results — gating it behind them only added its ~2min to the
+  # critical path of every green run. A broken PR now burns one extra runner instead.
   e2e:
     runs-on: ubuntu-latest
-    needs: checks
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with: { bun-version-file: .bun-version }
+      - uses: actions/cache@v4
+        with:
+          {
+            path: ~/.bun/install/cache,
+            key: "bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
+            restore-keys: 'bun-${{ runner.os }}-',
+          }
       - run: bun install --frozen-lockfile
       - run: cp .dev.vars.example .dev.vars
-      - run: bunx playwright install --with-deps chromium
+      # Keyed on the resolved @playwright/test version so a browser bump misses the cache and
+      # re-downloads, rather than silently testing against a stale Chromium.
+      - id: pw
+        run: echo "version=$(bun pm ls | grep -o '@playwright/test@[^ ]*' | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          {
+            path: ~/.cache/ms-playwright,
+            key: 'playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}',
+          }
+      # The browser binary comes from the cache when it hits; the OS-level shared libraries that
+      # `--with-deps` installs live outside ~/.cache and are always needed.
+      - if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
       - run: bun run db:migrate:local
       - run: bun run test:e2e
       - uses: actions/upload-artifact@v7

@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import { createDb } from '#/server/db/client'
 import { AppError } from '#/lib/errors'
-import { canManageContent, requireOwnerRole } from '#/server/auth/org'
+import { canManageContent, requireOwnerRole } from '#/server/auth/org-roles'
 import { makeOrg, makeUser } from '../../../../test/helpers'
 
 describe('canManageContent', () => {

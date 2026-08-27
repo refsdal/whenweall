@@ -15,8 +15,10 @@ import type { PollView } from '#/server/polls/viewmodel'
  * would solve into the same draft and overwrite a good token with its own — or with `null` when
  * the hidden copy fails, which it does, being hidden.
  *
- * The name field is the one thing that moves: on a wide screen it belongs in the grid row, where
- * it lines up under the "Who" column, so this form only shows it on a phone.
+ * Identity is the part that moves. On a wide screen the name lines up under the grid's "Who"
+ * column (`AddYourselfRow`) and the email sits here, below the grid. On a phone both are lifted
+ * above the list of dates instead (`AnswerIdentityFields`), which is why the email below is
+ * `max-sm:hidden` and the name is not here at all.
  */
 export function AnswerForm({
   poll,
@@ -42,24 +44,17 @@ export function AnswerForm({
 
   return (
     <>
-      <div className="flex flex-col gap-3 rounded-xl border border-border bg-accent-soft/30 p-4">
-        <div className="flex flex-col gap-1.5 sm:hidden">
-          <label htmlFor="poll-your-name" className="text-sm font-medium">
-            {m.poll_your_name_label()}
-          </label>
-          <Input
-            id="poll-your-name"
-            value={draft.name}
-            onChange={(event) => draft.setName(event.target.value)}
-            maxLength={80}
-            autoComplete="name"
-            placeholder={m.poll_your_name_placeholder()}
-            className="h-11"
-          />
-        </div>
-
+      <div
+        className={cn(
+          'flex flex-col gap-3 rounded-xl border border-border bg-accent-soft/30 p-4',
+          // With identity lifted out on a phone, this card can have nothing left to show there:
+          // no captcha, nothing to cancel, and a save button that lives in the sticky bar. An
+          // empty bordered box under the date list is worse than no box.
+          !draft.needsCaptcha && !onCancel && showSaveBar && 'max-sm:hidden',
+        )}
+      >
         {!draft.isEditing && (
-          <div className="flex flex-col gap-1 sm:max-w-sm">
+          <div className="flex flex-col gap-1 max-sm:hidden sm:max-w-sm">
             <Input
               type="email"
               value={draft.email}
@@ -68,7 +63,7 @@ export function AnswerForm({
               aria-label={m.poll_email_label()}
               placeholder={m.poll_email_label()}
               required={draft.requireEmail}
-              className="h-11 sm:h-9"
+              className="sm:h-9"
             />
             <p className="text-xs text-muted-foreground">
               {draft.requireEmail ? m.poll_email_hint_required() : m.poll_email_hint_optional()}

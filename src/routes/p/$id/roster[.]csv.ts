@@ -4,7 +4,7 @@ import { getAuth } from '#/server/auth/auth'
 import { getDb } from '#/server/db/client'
 import { member, polls } from '#/server/db/schema'
 import { getLocale } from '#/paraglide/runtime'
-import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { canManageContent, type OrgRole } from '#/server/auth/org-roles'
 import { buildRosterCsv } from '#/server/polls/roster'
 import { pollIdSchema } from '#/server/polls/schemas'
 

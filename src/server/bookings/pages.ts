@@ -7,7 +7,7 @@ import {
   ensureCreatorSubscription,
 } from '#/server/notifications/subscriptions'
 import { newId } from '#/lib/ids'
-import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { canManageContent, type OrgRole } from '#/server/auth/org-roles'
 import type { CreateBookingPageInput, UpdateBookingPageInput } from './schemas'
 import type { PageSummary, PageView, PublicPageView } from './viewmodel'
 
