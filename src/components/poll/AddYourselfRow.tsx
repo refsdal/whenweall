@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import * as z from 'zod'
@@ -11,7 +11,7 @@ import { saveEditToken } from '#/lib/edit-tokens'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import type { Answer } from '#/lib/scoring'
+import { nextAnswer, type Answer } from '#/lib/scoring'
 import type { ClientSession } from '#/server/auth/session.functions'
 import { addParticipant, updateParticipant } from '#/server/polls/participants.functions'
 import type { ParticipantView, PollView } from '#/server/polls/viewmodel'
@@ -72,6 +72,20 @@ export function AddYourselfRow({
   )
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // `null` means "not painting" — the answer being painted may itself legitimately be null.
+  const [painting, setPainting] = useState<{ answer: Answer | null } | null>(null)
+
+  // The drag ends wherever the pointer happens to be, which is often outside the grid entirely.
+  useEffect(() => {
+    if (painting === null) return
+    const stop = () => setPainting(null)
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+    return () => {
+      window.removeEventListener('pointerup', stop)
+      window.removeEventListener('pointercancel', stop)
+    }
+  }, [painting])
 
   const isEditing = existingParticipant !== undefined
   const isGuest = session === null
@@ -86,6 +100,28 @@ export function AddYourselfRow({
       else next[optionId] = answer
       return next
     })
+  }
+
+  /**
+   * Press a cell and drag along the row to give every cell you cross the same answer — eight
+   * options otherwise means eight taps to say "no to all of these".
+   *
+   * The answer being painted is whatever the cell you started on is about to become, so a press
+   * that turns into a drag continues the answer the press already chose; the origin cell is left
+   * to its own click handler.
+   *
+   * Mouse and pen only. Painting on touch needs `touch-action: none` on every cell to stop the
+   * browser claiming the gesture, which would cost a visitor the ability to scroll the page from
+   * the one part of it they spend the most time on. Tapping still cycles a cell as before.
+   */
+  function startPaint(event: ReactPointerEvent, optionId: string) {
+    if (event.pointerType === 'touch' || event.button !== 0) return
+    setPainting({ answer: nextAnswer(answers[optionId] ?? null, poll.settings.allowIfNeedBe) })
+  }
+
+  function paintOver(optionId: string) {
+    if (painting === null) return
+    setAnswer(optionId, painting.answer)
   }
 
   async function submit() {
@@ -171,9 +207,12 @@ export function AddYourselfRow({
         {poll.options.map((option) => (
           <td
             key={option.id}
+            data-option-id={option.id}
             data-best={option.id === poll.bestOptionId ? 'true' : undefined}
+            onPointerDown={(event) => startPaint(event, option.id)}
+            onPointerEnter={() => paintOver(option.id)}
             className={cn(
-              'border-t border-border px-1 py-1.5',
+              'border-t border-border px-1 py-1.5 select-none',
               option.id === poll.bestOptionId && 'bg-accent-soft/35',
             )}
           >

@@ -172,6 +172,7 @@
   "auth_passkey_delete_error": "Couldn't delete that passkey.",
   "common_cancel": "Cancel",
   "common_close": "Close",
+  "common_loading": "Loading",
   "settings_title": "Settings",
   "settings_profile_title": "Profile",
   "settings_name_label": "Name",

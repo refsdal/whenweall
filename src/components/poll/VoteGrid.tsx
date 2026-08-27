@@ -1,11 +1,25 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { AnimatePresence } from 'motion/react'
 import { OptionHeader, optionPlainLabel } from '#/components/poll/OptionHeader'
 import { ParticipantRow } from '#/components/poll/ParticipantRow'
 import { canEditParticipant, type ViewerState } from '#/components/poll/viewer'
 import { m } from '#/lib/i18n'
+import { useReducedMotion } from '#/lib/motion'
+import { useCountUp } from '#/lib/use-count-up'
+import { useNewlyArrived } from '#/lib/use-newly-arrived'
 import { cn } from '#/lib/utils'
 import type { PollView } from '#/server/polls/viewmodel'
+
+/**
+ * A tally in the footer. Its own component because the count-up is a hook and the footer renders
+ * one of these per option — and because the numbers move on their own here: a score that ticks up
+ * as other people vote is the clearest sign the page is live.
+ */
+function ScoreCount({ value, className }: { value: number; className?: string }) {
+  const reduceMotion = useReducedMotion()
+  const display = useCountUp(value, !reduceMotion)
+  return <span className={className}>{display}</span>
+}
 
 /**
  * The heart of the page: everyone's answers as one scannable table.
@@ -42,12 +56,27 @@ export function VoteGrid({
   const columnCount = poll.options.length + 1
   const showEmptyState = poll.participants.length === 0
 
+  // Your own row is never flashed: you know you just voted — you got confetti for it.
+  const arrived = useNewlyArrived(poll.participants.map((participant) => participant.id))
+
+  // Eight options on a wide grid make "which column am I in" a real question a few rows down.
+  // One delegated handler on the table beats a pair on every cell, and `pointerover` bubbles
+  // where `pointerenter` does not. Mice only: on a touch screen this would latch on tap and
+  // stay lit with nothing to unlatch it.
+  const [hoveredOption, setHoveredOption] = useState<string | null>(null)
+
   return (
     <div className="surface overflow-hidden">
       <div className="overflow-x-auto overscroll-x-contain">
         <table
           data-testid="vote-grid"
           className="w-full border-separate border-spacing-0 text-left"
+          onPointerOver={(event) => {
+            if (event.pointerType !== 'mouse') return
+            const cell = (event.target as Element).closest('[data-option-id]')
+            setHoveredOption(cell?.getAttribute('data-option-id') ?? null)
+          }}
+          onPointerLeave={() => setHoveredOption(null)}
         >
           <caption className="sr-only">{poll.title}</caption>
 
@@ -67,6 +96,7 @@ export function VoteGrid({
                   timeZone={viewer.timeZone}
                   best={option.id === poll.bestOptionId && poll.finalizedOptionId === null}
                   finalized={option.id === poll.finalizedOptionId}
+                  hovered={option.id === hoveredOption}
                 />
               ))}
             </tr>
@@ -76,24 +106,29 @@ export function VoteGrid({
             <AnimatePresence initial={false}>
               {poll.participants
                 .filter((participant) => participant.id !== editingParticipantId)
-                .map((participant) => (
-                  <ParticipantRow
-                    key={participant.id}
-                    participant={participant}
-                    options={poll.options}
-                    optionLabels={optionLabels}
-                    isYou={
-                      participant.id === viewer.participantId ||
-                      (viewer.userId !== null && participant.userId === viewer.userId)
-                    }
-                    canEdit={canEditParticipant(poll, viewer, participant.id)}
-                    onEdit={onEditParticipant}
-                    onRemove={onRemoveParticipant}
-                    bestOptionId={poll.finalizedOptionId === null ? poll.bestOptionId : null}
-                    finalizedOptionId={poll.finalizedOptionId}
-                    allowIfNeedBe={poll.settings.allowIfNeedBe}
-                  />
-                ))}
+                .map((participant) => {
+                  const isYou =
+                    participant.id === viewer.participantId ||
+                    (viewer.userId !== null && participant.userId === viewer.userId)
+
+                  return (
+                    <ParticipantRow
+                      key={participant.id}
+                      participant={participant}
+                      options={poll.options}
+                      optionLabels={optionLabels}
+                      isYou={isYou}
+                      justArrived={!isYou && arrived.has(participant.id)}
+                      hoveredOptionId={hoveredOption}
+                      canEdit={canEditParticipant(poll, viewer, participant.id)}
+                      onEdit={onEditParticipant}
+                      onRemove={onRemoveParticipant}
+                      bestOptionId={poll.finalizedOptionId === null ? poll.bestOptionId : null}
+                      finalizedOptionId={poll.finalizedOptionId}
+                      allowIfNeedBe={poll.settings.allowIfNeedBe}
+                    />
+                  )
+                })}
             </AnimatePresence>
 
             {showEmptyState && (
@@ -129,6 +164,7 @@ export function VoteGrid({
                   <td
                     key={option.id}
                     data-testid={`score-${option.id}`}
+                    data-option-id={option.id}
                     data-yes={String(score.yes)}
                     data-ifneedbe={String(score.ifneedbe)}
                     data-best={isBest ? 'true' : undefined}
@@ -137,6 +173,7 @@ export function VoteGrid({
                       'border-t border-border px-1 py-2 text-center transition-colors',
                       isBest && 'bg-accent-soft/35',
                       isFinalized && 'bg-yes-soft/35',
+                      option.id === hoveredOption && !isBest && !isFinalized && 'bg-secondary/60',
                     )}
                   >
                     <span className="sr-only">
@@ -146,17 +183,17 @@ export function VoteGrid({
                         : ''}
                     </span>
                     <span aria-hidden="true" className="flex items-baseline justify-center gap-1">
-                      <span
+                      <ScoreCount
+                        value={score.yes}
                         className={cn(
                           'text-sm font-semibold tabular-nums',
                           score.yes > 0 ? 'text-yes-ink' : 'text-muted-foreground',
                         )}
-                      >
-                        {score.yes}
-                      </span>
+                      />
                       {score.ifneedbe > 0 && (
                         <span className="text-[0.6875rem] font-medium tabular-nums text-ifneedbe-ink">
-                          +{score.ifneedbe}
+                          +
+                          <ScoreCount value={score.ifneedbe} />
                         </span>
                       )}
                     </span>

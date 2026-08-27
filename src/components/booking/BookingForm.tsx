@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
+import { FormError, nextFailure, type FormFailure } from '#/components/ui/form-error'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
@@ -75,7 +76,7 @@ export function BookingForm({
   const [email, setEmail] = useState('')
   const [note, setNote] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<FormFailure | null>(null)
   // A Turnstile token is good for exactly one submit, so the widget is remounted (via its key)
   // after every attempt — otherwise a retry after a taken slot would fail the captcha instead.
   const [attempt, setAttempt] = useState(0)
@@ -88,20 +89,20 @@ export function BookingForm({
   function submit() {
     const trimmedName = name.trim()
     if (!trimmedName) {
-      setError(m.poll_error_name_required())
+      setError((current) => nextFailure(current, m.poll_error_name_required()))
       return
     }
     const trimmedEmail = email.trim()
     if (!trimmedEmail) {
-      setError(m.book_form_error_email_required())
+      setError((current) => nextFailure(current, m.book_form_error_email_required()))
       return
     }
     if (!z.email().safeParse(trimmedEmail).success) {
-      setError(m.poll_error_email_invalid())
+      setError((current) => nextFailure(current, m.poll_error_email_invalid()))
       return
     }
     if (!captchaToken) {
-      setError(m.poll_error_captcha())
+      setError((current) => nextFailure(current, m.poll_error_captcha()))
       return
     }
 
@@ -189,11 +190,7 @@ export function BookingForm({
 
           <TurnstileField key={attempt} onToken={setCaptchaToken} />
 
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
+          {error && <FormError key={error.attempt}>{error.message}</FormError>}
 
           <DialogFooter>
             <Button

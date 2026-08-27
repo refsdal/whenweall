@@ -1,11 +1,11 @@
-import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { CalendarClock, Copy, Pencil } from 'lucide-react'
-import { toast } from 'sonner'
+import { CalendarClock, Pencil } from 'lucide-react'
 import { bookingPrefix } from '#/components/booking/HandleField'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { CopyIcon } from '#/components/ui/copy-icon'
 import { m } from '#/lib/i18n'
+import { useCopy } from '#/lib/use-copy'
 import { cn } from '#/lib/utils'
 import type { PageSummary } from '#/server/bookings/viewmodel'
 
@@ -24,20 +24,12 @@ export function PageCard({
   handle: string | null
   appUrl: string
 }) {
-  const [copied, setCopied] = useState(false)
   const path = `/book/${handle ?? ''}/${page.slug}`
   const display = `${bookingPrefix(appUrl)}${handle ?? ''}/${page.slug}`
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(`${appUrl}${path}`)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-      toast.success(m.booking_page_link_copied())
-    } catch {
-      toast.error(m.booking_page_link_copy_failed())
-    }
-  }
+  const { copied, copy } = useCopy({
+    success: m.booking_page_link_copied(),
+    error: m.booking_page_link_copy_failed(),
+  })
 
   return (
     <div data-testid="booking-page-card" className="surface flex h-full flex-col gap-3 p-4">
@@ -94,9 +86,9 @@ export function PageCard({
           variant="ghost"
           className="ml-auto"
           disabled={handle === null}
-          onClick={() => void copy()}
+          onClick={() => void copy(`${appUrl}${path}`)}
         >
-          <Copy aria-hidden="true" />
+          <CopyIcon copied={copied} />
           <span className="sr-only sm:not-sr-only">
             {copied ? m.booking_page_link_copied() : m.booking_page_copy_link()}
           </span>

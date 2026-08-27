@@ -24,12 +24,15 @@ export function OptionHeader({
   timeZone,
   best,
   finalized,
+  hovered = false,
 }: {
   option: PollOptionView
   locale: AppLocale
   timeZone: string
   best: boolean
   finalized: boolean
+  /** The pointer is somewhere in this column. */
+  hovered?: boolean
 }) {
   const label = formatOptionLabel(option, { locale, timeZone })
   const crowned = finalized || best
@@ -38,6 +41,7 @@ export function OptionHeader({
     <th
       scope="col"
       data-testid={`option-header-${option.id}`}
+      data-option-id={option.id}
       data-best={best ? 'true' : undefined}
       data-finalized={finalized ? 'true' : undefined}
       title={optionPlainLabel(option, locale, timeZone)}
@@ -50,9 +54,10 @@ export function OptionHeader({
 
       <div
         className={cn(
-          'mt-1 flex min-w-[4.25rem] flex-col items-center gap-0.5 rounded-xl px-2 py-2 transition-shadow duration-300',
+          'mt-1 flex min-w-[4.25rem] flex-col items-center gap-0.5 rounded-xl px-2 py-2 transition-[box-shadow,background-color] duration-300',
           best && !finalized && 'bg-accent-soft shadow-[0_0_0_2px_var(--best)]',
           finalized && 'bg-yes-soft shadow-[0_0_0_2px_var(--yes)]',
+          hovered && !best && !finalized && 'bg-secondary',
         )}
       >
         {label.secondary ? (

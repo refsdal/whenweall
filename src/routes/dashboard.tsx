@@ -1,6 +1,6 @@
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-import { motion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, CalendarClock } from 'lucide-react'
 import { toast } from 'sonner'
 import { appConfig } from '#/app.config'
@@ -8,7 +8,7 @@ import { EmptyState } from '#/components/dashboard/EmptyState'
 import { PollCard } from '#/components/dashboard/PollCard'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { staggerContainer, staggerItem } from '#/lib/motion'
+import { staggerContainer, staggerItem, useReducedMotion } from '#/lib/motion'
 import { buttonVariants } from '#/components/ui/button'
 import { deletePoll, duplicatePoll, listMyPolls } from '#/server/polls/polls.functions'
 
@@ -27,6 +27,7 @@ export const Route = createFileRoute('/dashboard')({
 
 function DashboardPage() {
   const polls = Route.useLoaderData()
+  const reduceMotion = useReducedMotion()
   const router = useRouter()
   const navigate = Route.useNavigate()
   const duplicateFn = useServerFn(duplicatePoll)
@@ -71,15 +72,28 @@ function DashboardPage() {
           variants={staggerContainer}
           className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
         >
-          {polls.map((poll) => (
-            <motion.li key={poll.id} variants={staggerItem}>
-              <PollCard
-                poll={poll}
-                onDuplicate={() => handleDuplicate(poll.id)}
-                onDelete={() => handleDelete(poll.id)}
-              />
-            </motion.li>
-          ))}
+          {/* `popLayout` takes a deleted card out of the flow before it has finished shrinking, so
+              the cards after it start closing the gap straight away rather than waiting. */}
+          <AnimatePresence initial={false} mode="popLayout">
+            {polls.map((poll) => (
+              <motion.li
+                key={poll.id}
+                variants={staggerItem}
+                layout={!reduceMotion}
+                exit={
+                  reduceMotion
+                    ? { opacity: 0 }
+                    : { opacity: 0, scale: 0.94, transition: { duration: 0.18, ease: 'easeOut' } }
+                }
+              >
+                <PollCard
+                  poll={poll}
+                  onDuplicate={() => handleDuplicate(poll.id)}
+                  onDelete={() => handleDelete(poll.id)}
+                />
+              </motion.li>
+            ))}
+          </AnimatePresence>
         </motion.ul>
       )}
 

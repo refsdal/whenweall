@@ -26,22 +26,28 @@ export function ParticipantRow({
   options,
   optionLabels,
   isYou,
+  justArrived = false,
   canEdit,
   onEdit,
   onRemove,
   bestOptionId,
   finalizedOptionId,
+  hoveredOptionId = null,
   allowIfNeedBe,
 }: {
   participant: ParticipantView
   options: PollOptionView[]
   optionLabels: Record<string, string>
   isYou: boolean
+  /** Someone else added this row while the visitor was watching; it flashes once. */
+  justArrived?: boolean
   canEdit: boolean
   onEdit: (participantId: string) => void
   onRemove: (participantId: string) => void
   bestOptionId: string | null
   finalizedOptionId: string | null
+  /** The column the pointer is in, so the whole of it lights up rather than the one cell. */
+  hoveredOptionId?: string | null
   allowIfNeedBe: boolean
 }) {
   const reduceMotion = useReducedMotion()
@@ -55,6 +61,7 @@ export function ParticipantRow({
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
       transition={spring}
       data-testid={`participant-row-${participant.id}`}
+      data-arrived={justArrived ? 'true' : undefined}
       className="group/row"
     >
       <th
@@ -147,12 +154,17 @@ export function ParticipantRow({
       {options.map((option) => (
         <td
           key={option.id}
+          data-option-id={option.id}
           data-best={option.id === bestOptionId ? 'true' : undefined}
           data-finalized={option.id === finalizedOptionId ? 'true' : undefined}
           className={cn(
             'border-t border-border px-1 py-1.5 transition-colors',
             option.id === bestOptionId && 'bg-accent-soft/35',
             option.id === finalizedOptionId && 'bg-yes-soft/35',
+            option.id === hoveredOptionId &&
+              option.id !== bestOptionId &&
+              option.id !== finalizedOptionId &&
+              'bg-secondary/60',
           )}
         >
           <VoteCell

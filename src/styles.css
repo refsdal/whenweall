@@ -304,6 +304,33 @@
   box-shadow: 0 10px 30px -12px color-mix(in oklab, var(--primary) 65%, transparent);
 }
 
+/*
+ * A validation message arriving. Small and quick — this is a nudge towards the field that needs
+ * fixing, not a scolding. The global reduced-motion rule collapses it to nothing.
+ */
+@keyframes whenweall-shake {
+  0%,
+  100% {
+    translate: 0;
+  }
+  20% {
+    translate: -4px;
+  }
+  40% {
+    translate: 3px;
+  }
+  60% {
+    translate: -2px;
+  }
+  80% {
+    translate: 1px;
+  }
+}
+
+@utility shake-once {
+  animation: whenweall-shake 0.35s ease-in-out;
+}
+
 @keyframes whenweall-pop-in {
   from {
     opacity: 0;
@@ -455,6 +482,66 @@
     opacity: 0;
     transform: translateY(4px);
   }
+}
+
+/*
+ * A row that just arrived over the websocket, so a poll filling up in front of you reads as
+ * something happening rather than a re-render.
+ *
+ * The flash is an inset shadow rather than a background because the cells it covers do not agree
+ * on one: the name column is opaque (it slides over the answers when the grid scrolls sideways)
+ * and the answer cells are transparent, with the leading option already tinted. A shadow layers
+ * over all three without touching them. The global reduced-motion rule below collapses the
+ * duration, which lands on the transparent end state — no flash at all.
+ */
+@keyframes whenweall-row-flash {
+  from {
+    box-shadow: inset 0 0 0 100vmax var(--accent-soft);
+  }
+  to {
+    box-shadow: inset 0 0 0 100vmax transparent;
+  }
+}
+
+[data-arrived='true'] > th,
+[data-arrived='true'] > td {
+  animation: whenweall-row-flash 1.4s ease-out;
+}
+
+/*
+ * The moment a sign-up slot fills. The bar reaching its end is a smooth, unremarkable thing to
+ * watch; the ring going out from it is what says "that's the last spot gone".
+ */
+@keyframes whenweall-capacity-full {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--yes) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+[data-just-filled='true'] {
+  animation: whenweall-capacity-full 0.9s ease-out;
+}
+
+/*
+ * A deadline inside its last hour. Slow and low-contrast on purpose: this sits on a page people
+ * are trying to read, and it only has to be noticeable enough that "closes in 20m" is not the
+ * same object it was yesterday.
+ */
+@keyframes whenweall-deadline-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--ifneedbe) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+[data-urgent='true'] {
+  animation: whenweall-deadline-pulse 2.4s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

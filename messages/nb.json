@@ -172,6 +172,7 @@
   "auth_passkey_delete_error": "Kunne ikke slette tilgangsnøkkelen.",
   "common_cancel": "Avbryt",
   "common_close": "Lukk",
+  "common_loading": "Laster",
   "settings_title": "Innstillinger",
   "settings_profile_title": "Profil",
   "settings_name_label": "Navn",
