@@ -3,6 +3,9 @@ import { motion } from 'motion/react'
 import { ArrowRight, CalendarPlus, Check, Link2, Sparkles, Users } from 'lucide-react'
 import { appConfig } from '#/app.config'
 import { VoteGridMock } from '#/components/landing/VoteGridMock'
+import { DecideTogether } from '#/components/landing/steps/DecideTogether'
+import { ProposeTimes } from '#/components/landing/steps/ProposeTimes'
+import { ShareLink } from '#/components/landing/steps/ShareLink'
 import { buttonVariants } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
 import { staggerContainer, staggerItem } from '#/lib/motion'
@@ -90,9 +93,19 @@ function Hero() {
 }
 
 const STEPS = [
-  { Icon: CalendarPlus, title: m.landing_step_1_title, body: m.landing_step_1_body },
-  { Icon: Link2, title: m.landing_step_2_title, body: m.landing_step_2_body },
-  { Icon: Users, title: m.landing_step_3_title, body: m.landing_step_3_body },
+  {
+    Icon: CalendarPlus,
+    Visual: ProposeTimes,
+    title: m.landing_step_1_title,
+    body: m.landing_step_1_body,
+  },
+  { Icon: Link2, Visual: ShareLink, title: m.landing_step_2_title, body: m.landing_step_2_body },
+  {
+    Icon: Users,
+    Visual: DecideTogether,
+    title: m.landing_step_3_title,
+    body: m.landing_step_3_body,
+  },
 ]
 
 function HowItWorks() {
@@ -118,6 +131,7 @@ function HowItWorks() {
             variants={staggerItem}
             className="surface group relative flex flex-col gap-3 p-6 transition-shadow duration-300 hover:shadow-[0_1px_2px_-1px_hsl(var(--shadow-color)/0.1),0_18px_40px_-24px_hsl(var(--shadow-color)/0.35)]"
           >
+            <step.Visual />
             <span className="inline-flex size-10 items-center justify-center rounded-full bg-accent-soft text-accent-foreground transition-transform duration-300 group-hover:-rotate-6">
               <step.Icon className="size-5" aria-hidden="true" />
             </span>

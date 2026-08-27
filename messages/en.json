@@ -756,5 +756,8 @@
   "terms_law_title": "Governing law",
   "terms_law_body": "These terms are governed by Norwegian law.",
   "terms_changes_title": "Changes to these terms",
-  "terms_changes_body": "We may update these terms from time to time. If we make a material change, we'll update the date at the top of this page. Continuing to use whenweall after a change means you accept the updated terms."
+  "terms_changes_body": "We may update these terms from time to time. If we make a material change, we'll update the date at the top of this page. Continuing to use whenweall after a change means you accept the updated terms.",
+  "landing_step_1_visual_alt": "Three proposed dates appearing in a list, one after another.",
+  "landing_step_2_visual_alt": "A poll link being copied, then four people arriving through it.",
+  "landing_step_3_visual_alt": "Votes filling a small grid, then the winning column highlighted."
 }
