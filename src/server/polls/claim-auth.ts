@@ -3,7 +3,7 @@ import type { Db } from '#/server/db/client'
 import { member, participants, polls } from '#/server/db/schema'
 import { AppError } from '#/lib/errors'
 import { verifyToken } from '#/lib/tokens'
-import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { canManageContent, type OrgRole } from '#/server/auth/org-roles'
 
 /**
  * Extracted from `participants.functions.ts` into its own server-only module so it can be

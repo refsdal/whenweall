@@ -1,7 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 import { getDb } from '#/server/db/client'
 import { account } from '#/server/db/schema'
-import { getAuth } from '#/server/auth/auth'
 import type { Interval } from '#/lib/availability'
 
 export class GoogleApiError extends Error {
@@ -127,6 +126,10 @@ export async function getGoogleAccessToken(userId: string): Promise<string | nul
   if (hasRequiredCalendarScopes(row.scope) === false) return null
 
   try {
+    // Lazy: `server/auth/auth` builds the whole Better-Auth instance (Stripe plugin, passkeys,
+    // email templates). Refreshing a Google token is all this module wants from it, and a static
+    // import put that graph into the BookingRoom bundle via `createCalendarClient`.
+    const { getAuth } = await import('#/server/auth/auth')
     const tokens = await getAuth().api.getAccessToken({
       body: { accountId: row.id, userId },
     })

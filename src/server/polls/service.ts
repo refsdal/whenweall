@@ -19,7 +19,7 @@ import { AppError } from '#/lib/errors'
 import { newId, newPollId } from '#/lib/ids'
 import type { NotificationGrid } from '#/lib/notifications'
 import { bestOptionId, scoreOptions } from '#/lib/scoring'
-import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { canManageContent, type OrgRole } from '#/server/auth/org-roles'
 import { chunkedInsert } from '#/server/db/chunked-insert'
 import {
   deleteScopeSubscriptions,

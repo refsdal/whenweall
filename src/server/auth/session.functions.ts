@@ -3,7 +3,8 @@ import type { Db } from '#/server/db/client'
 import { getDb } from '#/server/db/client'
 import { sessionMiddleware } from './middleware'
 import type { Session } from './auth'
-import { resolveActiveOrg, type OrgRole } from './org'
+import { resolveActiveOrg } from './org'
+import type { OrgRole } from './org-roles'
 import {
   FREE_ENTITLEMENTS,
   getEntitlements,

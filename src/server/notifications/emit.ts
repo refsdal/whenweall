@@ -9,7 +9,6 @@ import {
 import { getDb } from '#/server/db/client'
 import { bookingPages, bookings, polls } from '#/server/db/schema'
 import { sendMail } from '#/server/mailer/mailer'
-import { renderNotification } from '#/server/mailer/templates'
 import { queueDigest } from '#/server/notifications/do-client'
 import { resolveRecipients, type Recipient } from '#/server/notifications/recipients'
 
@@ -124,6 +123,11 @@ async function sendImmediate(
 ): Promise<void> {
   if (recipients.length === 0) return
   const mailer = deps.mailer ?? sendMail
+
+  // Lazy: the templates module pulls React, @react-email/render and every email component into
+  // whatever imports it — and `emit` is reached from PollRoom, so a static import put all of
+  // that in the DO bundle. Hoisted out of the map so concurrent recipients share one resolution.
+  const { renderNotification } = await import('#/server/mailer/templates')
 
   await Promise.allSettled(
     recipients.map(async (recipient) => {

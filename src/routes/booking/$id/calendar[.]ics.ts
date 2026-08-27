@@ -7,7 +7,7 @@ import { member } from '#/server/db/schema'
 import { errorCode } from '#/lib/errors'
 import { buildIcs } from '#/lib/ics'
 import { getBookingForManage, type ActingOrg } from '#/server/bookings/bookings'
-import { type OrgRole } from '#/server/auth/org'
+import { type OrgRole } from '#/server/auth/org-roles'
 
 /**
  * Extracted from the route's GET handler so it can be exercised directly in a workers test (401 /

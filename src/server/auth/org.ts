@@ -5,27 +5,8 @@ import { getDb } from '#/server/db/client'
 import { member } from '#/server/db/schema'
 import { requireSessionMiddleware } from './middleware'
 import { AppError } from '#/lib/errors'
+import type { OrgRole } from './org-roles'
 import { createPersonalOrganization } from './personal-org'
-
-export type OrgRole = 'owner' | 'admin' | 'member'
-
-/** Creator manages their own content; admin/owner manage everything in the org (spec §1). */
-export function canManageContent(
-  org: { role: OrgRole },
-  userId: string,
-  createdBy: string | null,
-): boolean {
-  return (
-    org.role === 'owner' || org.role === 'admin' || (createdBy !== null && createdBy === userId)
-  )
-}
-
-/** Only the org's owner may change identity-affecting org settings, like its public slug (spec
- * §1: unlike ordinary content, the org's own slug isn't "manage everything" territory for
- * admins). */
-export function requireOwnerRole(role: OrgRole): void {
-  if (role !== 'owner') throw new AppError('FORBIDDEN')
-}
 
 /** The bare minimum `resolveActiveOrg` needs from a session: enough to look up memberships
  * (`user.id`) and enough to lazily create a personal org if it comes to that

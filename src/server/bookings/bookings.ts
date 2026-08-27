@@ -12,7 +12,7 @@ import { AppError } from '#/lib/errors'
 import { isSlotAvailable, type Interval, type PageRules } from '#/lib/availability'
 import { newId } from '#/lib/ids'
 import { generateToken, hashToken, verifyToken } from '#/lib/tokens'
-import { canManageContent, type OrgRole } from '#/server/auth/org'
+import { canManageContent, type OrgRole } from '#/server/auth/org-roles'
 import type { BookingForManage, BookingView } from './viewmodel'
 
 /** The acting org + role, as `requireOrgMiddleware` produces it. */

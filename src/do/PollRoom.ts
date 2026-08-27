@@ -4,7 +4,11 @@ import type { DigestEvent } from '#/lib/notifications'
 import { createDb } from '#/server/db/client'
 import { pollOptions, polls } from '#/server/db/schema'
 import { sendMail } from '#/server/mailer/mailer'
-import { renderDigest, type DigestLine } from '#/server/mailer/templates'
+// Imported lazily at the send site below: the templates module pulls in React,
+// @react-email/render and every email component. In workerd that is a lazy instantiation of an
+// already-bundled module; what it buys is keeping that graph out of the DO bundle (and out of
+// every `*.workers.test.ts` isolate, which all load this worker entry).
+import type { DigestLine } from '#/server/mailer/templates'
 import { emitPollEvent } from '#/server/notifications/emit'
 import { resolveRecipients, type Recipient } from '#/server/notifications/recipients'
 import { applyClaim, countClaims, removeClaim, type ClaimIdentity } from '#/server/polls/claims'
@@ -401,6 +405,7 @@ export class PollRoom extends DurableObject<Env> {
       if (delivered.has(recipient.userId)) continue
 
       try {
+        const { renderDigest } = await import('#/server/mailer/templates')
         const rendered = await renderDigest({
           pollTitle: poll.title,
           pollUrl: `${this.env.APP_URL}/p/${pollId}`,

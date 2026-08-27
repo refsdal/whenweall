@@ -4,7 +4,7 @@ import { Button } from '#/components/ui/button'
 import { getLocale, intlLocale, m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 import { authClient } from '#/server/auth/client'
-import type { OrgRole } from '#/server/auth/org'
+import type { OrgRole } from '#/server/auth/org-roles'
 import type { Entitlements } from '#/server/billing/entitlements'
 import { PREMIUM_PLAN_NAME } from '#/lib/billing'
 

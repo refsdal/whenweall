@@ -2,7 +2,8 @@ import { createServerFn } from '@tanstack/react-start'
 import { eq } from 'drizzle-orm'
 import { getDb } from '#/server/db/client'
 import { subscription } from '#/server/db/schema'
-import { requireOrgMiddleware, requireOwnerRole } from '#/server/auth/org'
+import { requireOrgMiddleware } from '#/server/auth/org'
+import { requireOwnerRole } from '#/server/auth/org-roles'
 import { getSeatsUsed, isActivePremium } from '#/server/billing/entitlements'
 
 /*
