@@ -4,9 +4,22 @@ import { OptionHeader, optionPlainLabel } from '#/components/poll/OptionHeader'
 import { ParticipantRow } from '#/components/poll/ParticipantRow'
 import { canEditParticipant, type ViewerState } from '#/components/poll/viewer'
 import { m } from '#/lib/i18n'
+import { useReducedMotion } from '#/lib/motion'
+import { useCountUp } from '#/lib/use-count-up'
 import { useNewlyArrived } from '#/lib/use-newly-arrived'
 import { cn } from '#/lib/utils'
 import type { PollView } from '#/server/polls/viewmodel'
+
+/**
+ * A tally in the footer. Its own component because the count-up is a hook and the footer renders
+ * one of these per option — and because the numbers move on their own here: a score that ticks up
+ * as other people vote is the clearest sign the page is live.
+ */
+function ScoreCount({ value, className }: { value: number; className?: string }) {
+  const reduceMotion = useReducedMotion()
+  const display = useCountUp(value, !reduceMotion)
+  return <span className={className}>{display}</span>
+}
 
 /**
  * The heart of the page: everyone's answers as one scannable table.
@@ -154,17 +167,17 @@ export function VoteGrid({
                         : ''}
                     </span>
                     <span aria-hidden="true" className="flex items-baseline justify-center gap-1">
-                      <span
+                      <ScoreCount
+                        value={score.yes}
                         className={cn(
                           'text-sm font-semibold tabular-nums',
                           score.yes > 0 ? 'text-yes-ink' : 'text-muted-foreground',
                         )}
-                      >
-                        {score.yes}
-                      </span>
+                      />
                       {score.ifneedbe > 0 && (
                         <span className="text-[0.6875rem] font-medium tabular-nums text-ifneedbe-ink">
-                          +{score.ifneedbe}
+                          +
+                          <ScoreCount value={score.ifneedbe} />
                         </span>
                       )}
                     </span>

@@ -3,9 +3,8 @@ import { useReducedMotion } from 'motion/react'
 import { totalResponses, type UsageStats as Stats } from '#/do/stats-protocol'
 import { useLiveStats } from '#/lib/use-live-stats'
 import { m } from '#/lib/i18n'
+import { useCountUp } from '#/lib/use-count-up'
 import { cn } from '#/lib/utils'
-
-const COUNT_UP_MS = 600
 
 /**
  * A character that cannot occur in translated copy, used to mark where the highlighted number
@@ -23,46 +22,6 @@ const SLOT = '\u0000'
  */
 export function splitAroundSlot(sentence: string): string[] {
   return sentence.split(SLOT)
-}
-
-/**
- * Counts from the previous value to the next one so a number that changes while someone is reading
- * draws the eye. Snaps instantly when the viewer prefers reduced motion, and on the very first
- * render — the server-rendered number must not animate up from zero on hydration.
- */
-function useCountUp(value: number, animate: boolean): number {
-  const [display, setDisplay] = useState(value)
-  const previous = useRef(value)
-  const firstRender = useRef(true)
-
-  useEffect(() => {
-    const from = previous.current
-    previous.current = value
-
-    if (firstRender.current) {
-      firstRender.current = false
-      setDisplay(value)
-      return
-    }
-    if (!animate || from === value) {
-      setDisplay(value)
-      return
-    }
-
-    let raf = 0
-    const started = performance.now()
-    const tick = (now: number) => {
-      const progress = Math.min(1, (now - started) / COUNT_UP_MS)
-      // easeOutQuad: fast to start, settles gently on the final number.
-      const eased = 1 - (1 - progress) * (1 - progress)
-      setDisplay(Math.round(from + (value - from) * eased))
-      if (progress < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [value, animate])
-
-  return display
 }
 
 /** The highlighted, live-updating number inside the sentence. */
