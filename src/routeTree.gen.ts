@@ -24,6 +24,7 @@ import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitati
 import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiStatsWsRouteImport } from './routes/api/stats/ws'
 import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
 import { Route as BookHandleSlugRouteImport } from './routes/book/$handle/$slug'
 import { Route as BookingIdIndexRouteImport } from './routes/booking/$id/index'
@@ -112,6 +113,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiStatsWsRoute = ApiStatsWsRouteImport.update({
+  id: '/api/stats/ws',
+  path: '/api/stats/ws',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTestSeedRoute = ApiTestSeedRouteImport.update({
   id: '/api/test/seed',
   path: '/api/test/seed',
@@ -189,6 +195,7 @@ export interface FileRoutesByFullPath {
   '/bookings/new': typeof BookingsNewRoute
   '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/stats/ws': typeof ApiStatsWsRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
@@ -218,6 +225,7 @@ export interface FileRoutesByTo {
   '/bookings/new': typeof BookingsNewRoute
   '/bookings': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/stats/ws': typeof ApiStatsWsRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
@@ -248,6 +256,7 @@ export interface FileRoutesById {
   '/bookings/new': typeof BookingsNewRoute
   '/bookings/': typeof BookingsIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/stats/ws': typeof ApiStatsWsRoute
   '/api/test/seed': typeof ApiTestSeedRoute
   '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
@@ -279,6 +288,7 @@ export interface FileRouteTypes {
     | '/bookings/new'
     | '/bookings/'
     | '/api/auth/$'
+    | '/api/stats/ws'
     | '/api/test/seed'
     | '/book/$handle/$slug'
     | '/booking/$id/calendar.ics'
@@ -308,6 +318,7 @@ export interface FileRouteTypes {
     | '/bookings/new'
     | '/bookings'
     | '/api/auth/$'
+    | '/api/stats/ws'
     | '/api/test/seed'
     | '/book/$handle/$slug'
     | '/booking/$id/calendar.ics'
@@ -337,6 +348,7 @@ export interface FileRouteTypes {
     | '/bookings/new'
     | '/bookings/'
     | '/api/auth/$'
+    | '/api/stats/ws'
     | '/api/test/seed'
     | '/book/$handle/$slug'
     | '/booking/$id/calendar.ics'
@@ -367,6 +379,7 @@ export interface RootRouteChildren {
   BookingsNewRoute: typeof BookingsNewRoute
   BookingsIndexRoute: typeof BookingsIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiStatsWsRoute: typeof ApiStatsWsRoute
   ApiTestSeedRoute: typeof ApiTestSeedRoute
   BookHandleSlugRoute: typeof BookHandleSlugRoute
   BookingIdCalendarDoticsRoute: typeof BookingIdCalendarDoticsRoute
@@ -488,6 +501,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/stats/ws': {
+      id: '/api/stats/ws'
+      path: '/api/stats/ws'
+      fullPath: '/api/stats/ws'
+      preLoaderRoute: typeof ApiStatsWsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/test/seed': {
       id: '/api/test/seed'
       path: '/api/test/seed'
@@ -591,6 +611,7 @@ const rootRouteChildren: RootRouteChildren = {
   BookingsNewRoute: BookingsNewRoute,
   BookingsIndexRoute: BookingsIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiStatsWsRoute: ApiStatsWsRoute,
   ApiTestSeedRoute: ApiTestSeedRoute,
   BookHandleSlugRoute: BookHandleSlugRoute,
   BookingIdCalendarDoticsRoute: BookingIdCalendarDoticsRoute,

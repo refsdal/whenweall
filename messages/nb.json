@@ -759,5 +759,14 @@
   "terms_changes_body": "Vi kan oppdatere disse vilkårene fra tid til annen. Ved vesentlige endringer oppdaterer vi datoen øverst på denne siden. Fortsetter du å bruke whenweall etter en endring, innebærer det at du godtar de oppdaterte vilkårene.",
   "landing_step_1_visual_alt": "Tre foreslåtte datoer som dukker opp i en liste, én etter én.",
   "landing_step_2_visual_alt": "En avstemningslenke som kopieres, så fire personer som kommer inn.",
-  "landing_step_3_visual_alt": "Stemmer som fyller et lite rutenett, så vinnerkolonnen uthevet."
+  "landing_step_3_visual_alt": "Stemmer som fyller et lite rutenett, så vinnerkolonnen uthevet.",
+  "landing_stats_eyebrow": "Brukt så langt",
+  "landing_stats_polls": "avstemninger laget",
+  "landing_stats_responses": "svar registrert",
+  "landing_stats_yes": "ja",
+  "landing_stats_ifneedbe": "om nødvendig",
+  "landing_stats_no": "nei",
+  "landing_stats_live": "Oppdateres i sanntid",
+  "landing_stats_sentence": "whenweall har avklart {count} tidspunkter for folk så langt.",
+  "landing_stats_supporting": "{polls} avstemninger laget · {responses} svar registrert"
 }

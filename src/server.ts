@@ -3,6 +3,7 @@ import { paraglideMiddleware } from './paraglide/server'
 
 export { PollRoom } from './do/PollRoom'
 export { BookingRoom } from './do/BookingRoom'
+export { StatsRoom } from './do/StatsRoom'
 
 export default {
   fetch(request: Request): Promise<Response> {

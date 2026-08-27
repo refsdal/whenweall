@@ -759,5 +759,14 @@
   "terms_changes_body": "We may update these terms from time to time. If we make a material change, we'll update the date at the top of this page. Continuing to use whenweall after a change means you accept the updated terms.",
   "landing_step_1_visual_alt": "Three proposed dates appearing in a list, one after another.",
   "landing_step_2_visual_alt": "A poll link being copied, then four people arriving through it.",
-  "landing_step_3_visual_alt": "Votes filling a small grid, then the winning column highlighted."
+  "landing_step_3_visual_alt": "Votes filling a small grid, then the winning column highlighted.",
+  "landing_stats_eyebrow": "Used so far",
+  "landing_stats_polls": "polls created",
+  "landing_stats_responses": "responses recorded",
+  "landing_stats_yes": "yes",
+  "landing_stats_ifneedbe": "if need be",
+  "landing_stats_no": "no",
+  "landing_stats_live": "Updating live",
+  "landing_stats_sentence": "whenweall has settled {count} dates for people so far.",
+  "landing_stats_supporting": "{polls} polls created · {responses} responses recorded"
 }
