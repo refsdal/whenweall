@@ -226,6 +226,18 @@
   --animate-cell-in: whenweall-cell-in 9s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
   --animate-pop-in: whenweall-pop-in 0.24s cubic-bezier(0.34, 1.4, 0.64, 1) both;
   --animate-best-pulse: whenweall-best-pulse 9s ease-in-out infinite;
+
+  /*
+   * The three "how it works" illustrations share one 12s cycle, each card offset by 4s via
+   * `animation-delay`, so exactly one is moving at a time and the section reads left to right as
+   * the flow it describes: propose, then share, then decide. Independent loops would put four
+   * things in motion at once alongside the hero's own.
+   */
+  --animate-step-drop: whenweall-step-drop 12s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
+  --animate-step-copy: whenweall-step-copy 12s ease-in-out infinite;
+  --animate-step-arrive: whenweall-step-arrive 12s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
+  --animate-step-fill: whenweall-step-fill 12s cubic-bezier(0.34, 1.36, 0.64, 1) infinite;
+  --animate-step-crown: whenweall-step-crown 12s ease-in-out infinite;
 }
 
 @layer base {
@@ -328,6 +340,106 @@
   }
 }
 
+/*
+ * Step 1 — an option chip dropping into the list. Each chip is offset within the card's own
+ * active window, so they land in sequence rather than together.
+ */
+@keyframes whenweall-step-drop {
+  0%,
+  2% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0) scale(1.03);
+  }
+  12%,
+  88% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+/* Step 2 — the copy tick confirming the link was taken. */
+@keyframes whenweall-step-copy {
+  0%,
+  36% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  42%,
+  88% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+/* Step 2 — avatars arriving after the link is shared. */
+@keyframes whenweall-step-arrive {
+  0%,
+  40% {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.8);
+  }
+  50%,
+  88% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.8);
+  }
+}
+
+/* Step 3 — vote cells receiving their answer colour. */
+@keyframes whenweall-step-fill {
+  0%,
+  68% {
+    background-color: var(--muted);
+    transform: scale(0.9);
+  }
+  76% {
+    transform: scale(1.08);
+  }
+  80%,
+  92% {
+    background-color: var(--step-cell-bg, var(--muted));
+    transform: scale(1);
+  }
+  100% {
+    background-color: var(--muted);
+    transform: scale(0.9);
+  }
+}
+
+/* Step 3 — the winning column crowned once the votes are in. */
+@keyframes whenweall-step-crown {
+  0%,
+  84% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  90%,
+  94% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
 @keyframes whenweall-best-pulse {
   0%,
   40% {
@@ -365,6 +477,19 @@
   [data-mock-best] {
     animation: none !important;
     opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /* Same rule for the step illustrations: show the finished state, never the loop. */
+  [data-step-animated] {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  [data-step-cell] {
+    animation: none !important;
+    background-color: var(--step-cell-bg, var(--muted)) !important;
     transform: none !important;
   }
 }
