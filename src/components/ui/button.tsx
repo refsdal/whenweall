@@ -7,10 +7,14 @@ import { cn } from '#/lib/utils'
 /**
  * whenweall buttons are pills. The filled variant uses `--primary-strong` rather than the raw
  * brand `--primary` so white label text clears 4.5:1; hover lifts the button and lights an
- * ember glow underneath instead of shifting the fill.
+ * ember glow underneath instead of shifting the fill, and every variant gives a little under the
+ * press — the one piece of feedback that belongs on every button in the product.
+ *
+ * The transition names `translate` and `scale` rather than `transform`: Tailwind v4 emits those
+ * as their own CSS properties, so a list with only `transform` in it eases neither.
  */
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,transform] duration-200 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,translate,scale] duration-200 outline-none active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
