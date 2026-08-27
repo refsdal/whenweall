@@ -72,12 +72,18 @@ increments. For a marketing counter that is an acceptable trade against a storag
 vote — and it is one of the few places in this codebase where losing data is genuinely fine. It
 must not be copied to anything that matters.
 
-**Single-instance contention is the real risk.** Every poll creation and every vote in the product
-routes an RPC to one durable object, which serialises them. At current volume this is not close to
-a problem. The concrete trigger for revisiting: if `pollsCreated + responses*` exceeds roughly
-**10 writes/second sustained**, shard into N instances (`global-0` … `global-N`) and sum on read.
-The read path is already an aggregate, so sharding is additive rather than a rewrite. Recorded here
-so the decision has a threshold attached rather than being rediscovered under load.
+**Single-instance contention is a known, accepted limit.** Every poll creation and every vote in
+the product routes an RPC to one durable object, which serialises them. Decided with Anders
+(2026-08-27): traffic is nowhere near this being a problem, and it is not worth designing around
+in advance.
+
+Recorded so the decision has a number attached rather than being rediscovered under load: the
+point to revisit is roughly **10 writes/second sustained**. The escape routes, in increasing order
+of effort, are to put a queue in front of the increments, to make the object read-mostly by
+absorbing writes elsewhere, or to shard into N instances (`global-0` … `global-N`) and sum on
+read. The read path is already an aggregate, so sharding in particular is additive rather than a
+rewrite — none of this is work that gets harder by being deferred, which is what makes deferring
+it the right call.
 
 ## §3 Increment points
 
@@ -90,12 +96,26 @@ recordPollCreated(): Promise<void>
 recordResponses(answers: Answer[]): Promise<void>
 ```
 
-Called from:
+Called from the **server-function** layer, not the services:
 
-- `createPoll` and `duplicatePoll` (`src/server/polls/service.ts`) — after the poll row is written.
-- `addParticipant` and `updateParticipant` (`src/server/polls/participants.ts`) — with the answers
-  actually submitted.
-- `applyClaim` (`src/server/polls/claims.ts`) — a sign-up claim is a `yes`.
+- `createPoll` and `duplicatePoll` (`src/server/polls/polls.functions.ts`).
+- `addParticipant` and `updateParticipant` (`src/server/polls/participants.functions.ts`) — with
+  the answers actually submitted.
+- `claimSlot` (`src/server/polls/participants.functions.ts`) — a sign-up claim is stored as a `yes`
+  vote, so it counts as one.
+
+**Changed during implementation.** The draft put these in the services (`service.ts`,
+`participants.ts`, `claims.ts`). Two problems surfaced:
+
+- `applyClaim` runs **inside** `PollRoom`, within the serialised `#serialize` block that makes
+  capacity checks atomic. Calling a second durable object from there would put every sign-up claim
+  in the product behind a round-trip to the stats object — turning a marketing counter into a
+  bottleneck on a correctness-critical path.
+- The services are also what `test/helpers.ts` calls, so every `makePoll` in the suite would
+  generate stats traffic and couple unrelated tests to the counter.
+
+The server-function boundary avoids both, and is the layer that already owns other best-effort
+side effects (`notifyChanged`, `syncDeadline`, `emitPollEvent`).
 
 A failed stats call must never surface to a user or roll back a write. This is the same rule the
 notification emit boundary follows, and for the same reason.
@@ -139,12 +159,19 @@ busiest page in the product.
 and respects `prefers-reduced-motion` by swapping to an instant update. Uses the existing `motion`
 dependency.
 
-## §6 The zero problem
+## §6 Low numbers are shown, not hidden
 
-A counter reading "12 polls created" actively undersells the product — worse than showing nothing.
-The section renders only when `pollsCreated >= STATS_MIN_POLLS` (proposed: **250**), and is omitted
-from the DOM entirely below that. One constant, one condition, and it means the feature can ship
-before the numbers are flattering.
+Decided with Anders (2026-08-27): **no threshold.** The real numbers render from the first poll
+onwards, however small.
+
+The reasoning is that a small number is not an embarrassment here, it is the message. Early
+figures signal early access to the people being invited to test, and being visibly early is a
+reason to join rather than a reason to leave. The numbers grow on their own once those testers
+start using it, so a threshold would only hide the product's own trajectory during the period it
+is most worth showing.
+
+This removes the `STATS_MIN_POLLS` constant and the conditional render the earlier draft proposed.
+The section is always present.
 
 ## §7 Privacy
 
@@ -163,23 +190,26 @@ attached to it. Noted so the decision is explicit rather than accidental.
 - **Workers** (real D1 + DO): seeding from a database with existing polls and votes; seeding
   exactly once under two concurrent first-requests; increments accumulating across a flush;
   broadcast throttling; a socket receiving an update after an increment.
-- **E2E**: the landing page renders server-side numbers with JavaScript disabled; the section is
-  absent when under the threshold.
+- **E2E**: the landing page renders server-side numbers with JavaScript disabled.
 
 ## Phasing
 
 1. **Counters and seeding** — `StatsRoom`, the client helper, increment points, lazy seed, and an
    HTTP read. No UI. Verifiable through tests alone.
-2. **Landing section** — server-rendered numbers, the threshold rule, the animated display.
+2. **Landing section** — server-rendered numbers and the animated display.
 3. **Live updates** — WebSocket, intersection-gated connection, throttled broadcast.
 
 Each phase is independently shippable, and phase 1 is useful on its own as a number to check.
 
-## Open questions for review
+## Resolved during review
 
-1. **`STATS_MIN_POLLS = 250`** is a guess. What number would you actually be happy showing a
-   stranger?
-2. **Is "responses recorded" the right framing**, given §1's decision that edits double-count? The
+1. **Threshold** — dropped entirely, see §6. Low numbers are the message, not something to hide.
+2. **Single-DO contention** — accepted as a known limit with a documented revisit point, see §2.
+
+## Still open (implemented as specified, cheap to change)
+
+3. **Is "responses recorded" the right framing**, given §1's decision that edits double-count? The
    alternative is counting _participants_ rather than answers, which is smaller but unambiguous.
-3. **Should deleted polls decrement `pollsCreated`?** This spec says no. It makes the number a
-   claim about lifetime usage rather than current inventory.
+   Implemented as answers; changing it later is a counter-definition change plus a re-seed.
+4. **Should deleting a poll decrement `pollsCreated`?** Implemented as no — the number is a claim
+   about lifetime usage rather than current inventory.
