@@ -15,15 +15,22 @@ const CROWN_LAYOUT_ID = 'poll-crown'
 export function BestBadge({
   variant = 'best',
   className,
+  layoutGroup = CROWN_LAYOUT_ID,
 }: {
   variant?: 'best' | 'picked'
   className?: string
+  /**
+   * The grid and the phone list are both mounted at once (only one is shown), so they cannot
+   * share a layout id — two live elements claiming the same one make the crown jump between
+   * layouts instead of between columns. Each layout passes its own.
+   */
+  layoutGroup?: string
 }) {
   const reduceMotion = useReducedMotion()
 
   return (
     <motion.span
-      layoutId={reduceMotion ? undefined : CROWN_LAYOUT_ID}
+      layoutId={reduceMotion ? undefined : layoutGroup}
       transition={spring}
       className={cn(
         'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase',
