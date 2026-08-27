@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import { eq } from 'drizzle-orm'
 import { createDb } from '#/server/db/client'
 import { bookingPages, bookings, type CancelledBy } from '#/server/db/schema'
-import { sendMail } from '#/server/mailer/mailer'
+import { reportMailOutcome, sendMail } from '#/server/mailer/mailer'
 import { createCalendarClient } from '#/server/google/calendar'
 import {
   cancelBooking,
@@ -216,7 +216,10 @@ export class BookingRoom extends DurableObject<Env> {
     // Lazy for the same reason as PollRoom's digest templates: `bookings/emails` pulls React and
     // every booking email component in, and the reminder path is this room's only caller.
     const { sendBookingEmails } = await import('#/server/bookings/emails')
-    await sendBookingEmails(this.env, 'reminder', bookingId, { db, mailer: this.mailer })
+    reportMailOutcome(
+      'booking.reminder',
+      await sendBookingEmails(this.env, 'reminder', bookingId, { db, mailer: this.mailer }),
+    )
   }
 
   /** `reminder:<bookingId>` keys, filtered to those whose 24h-before trigger time has passed. */

@@ -31,6 +31,7 @@ import {
   syncGoogleEventDelete,
   syncGoogleEventsForReschedule,
 } from './google-sync'
+import { reportMailOutcome } from '#/server/mailer/mailer'
 import { getPublicPage } from './pages'
 import * as bookingService from './bookings'
 import type { ActingOrg } from './bookings'
@@ -175,10 +176,13 @@ export const bookSlot = createServerFn({ method: 'POST' })
       attendeeEmail: data.email,
     })
 
-    await sendBookingEmails(env, 'confirmed', result.bookingId, {
-      db,
-      manageToken: result.manageToken,
-    })
+    reportMailOutcome(
+      'booking.confirmed',
+      await sendBookingEmails(env, 'confirmed', result.bookingId, {
+        db,
+        manageToken: result.manageToken,
+      }),
+    )
 
     return result
   })
@@ -227,7 +231,10 @@ export const cancelBooking = createServerFn({ method: 'POST' })
         }
       }
 
-      await sendBookingEmails(env, 'cancelled', data.bookingId, { db })
+      reportMailOutcome(
+        'booking.cancelled',
+        await sendBookingEmails(env, 'cancelled', data.bookingId, { db }),
+      )
     }
 
     return result
@@ -268,11 +275,14 @@ export const rescheduleBooking = createServerFn({ method: 'POST' })
     // pass it along so the confirmation email's manage link keeps working. An owner-initiated
     // reschedule has no plaintext token to hand back (only its hash is stored), so the email falls
     // back to the bare booking URL (see `sendBookingEmails`'s doc comment).
-    await sendBookingEmails(env, 'rescheduled', data.bookingId, {
-      db,
-      manageToken: data.token,
-      previousStartAt: result.previousStartAt,
-    })
+    reportMailOutcome(
+      'booking.rescheduled',
+      await sendBookingEmails(env, 'rescheduled', data.bookingId, {
+        db,
+        manageToken: data.token,
+        previousStartAt: result.previousStartAt,
+      }),
+    )
 
     return result
   })
