@@ -1,7 +1,33 @@
-import { motion } from 'motion/react'
+import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
 import { cn } from '#/lib/utils'
+
+const FILLED_MS = 900
+
+/**
+ * True for a moment after the slot goes from having room to having none.
+ *
+ * The first run only records the state: a slot that was already full when the page loaded did not
+ * just fill up, and neither did one that emptied again.
+ */
+function useJustFilled(full: boolean, durationMs = FILLED_MS): boolean {
+  const [justFilled, setJustFilled] = useState(false)
+  const wasFull = useRef<boolean | null>(null)
+
+  useEffect(() => {
+    const previous = wasFull.current
+    wasFull.current = full
+    if (previous === null || previous === full || !full) return
+
+    setJustFilled(true)
+    const timer = setTimeout(() => setJustFilled(false), durationMs)
+    return () => clearTimeout(timer)
+  }, [full, durationMs])
+
+  return justFilled
+}
 
 /** "2 of 5 spots", or "3 signed up" when the slot takes as many people as turn up. */
 export function capacityText(count: number, capacity: number | null): string {
@@ -32,16 +58,27 @@ export function CapacityBar({
   const text = capacityText(count, capacity)
   const full = capacity !== null && count >= capacity
   const ratio = capacity === null ? 0 : Math.min(1, capacity === 0 ? 1 : count / capacity)
+  const justFilled = useJustFilled(full)
 
   return (
     <div data-testid="capacity-bar" className={cn('flex flex-col gap-1.5', className)}>
       <div className="flex items-center justify-between gap-2">
         <span className={cn('text-xs font-medium', full && 'text-muted-foreground')}>{text}</span>
-        {full && (
-          <span className="rounded-full bg-secondary px-2 py-0.5 text-[0.625rem] font-semibold tracking-wide text-muted-foreground uppercase">
-            {m.signup_full()}
-          </span>
-        )}
+        {/* `initial={false}` so a slot that was already full on load does not pop on arrival —
+            only one that fills while someone is watching. */}
+        <AnimatePresence initial={false}>
+          {full && (
+            <motion.span
+              initial={reduceMotion ? false : { opacity: 0, scale: 0.6 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
+              transition={spring}
+              className="rounded-full bg-secondary px-2 py-0.5 text-[0.625rem] font-semibold tracking-wide text-muted-foreground uppercase"
+            >
+              {m.signup_full()}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </div>
 
       {capacity !== null && (
@@ -52,6 +89,7 @@ export function CapacityBar({
           aria-valuenow={Math.min(count, capacity)}
           aria-valuetext={text}
           aria-label={text}
+          data-just-filled={justFilled ? 'true' : undefined}
           className="h-1.5 w-full overflow-hidden rounded-full bg-secondary"
         >
           <motion.div

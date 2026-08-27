@@ -481,6 +481,23 @@
   animation: whenweall-row-flash 1.4s ease-out;
 }
 
+/*
+ * The moment a sign-up slot fills. The bar reaching its end is a smooth, unremarkable thing to
+ * watch; the ring going out from it is what says "that's the last spot gone".
+ */
+@keyframes whenweall-capacity-full {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--yes) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+[data-just-filled='true'] {
+  animation: whenweall-capacity-full 0.9s ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
