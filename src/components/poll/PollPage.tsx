@@ -15,6 +15,7 @@ import { VoteGrid } from '#/components/poll/VoteGrid'
 import { canVote, type ViewerState } from '#/components/poll/viewer'
 import { SlotBoard } from '#/components/signup/SlotBoard'
 import { Button } from '#/components/ui/button'
+import { celebrate } from '#/lib/confetti'
 import { clearEditToken, useEditToken } from '#/lib/edit-tokens'
 import { getLocale, m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
@@ -120,12 +121,16 @@ export function PollPage({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [shareOpen, setShareOpen] = useState(autoOpenShare)
 
-  // `?created` is a one-shot instruction: open the share sheet, then take it out of the URL so a
-  // reload or a shared link doesn't reopen it.
+  // `?created` is a one-shot instruction: celebrate, open the share sheet, then take it out of
+  // the URL so a reload or a shared link doesn't do either again.
+  //
+  // The confetti belongs here rather than in the creator: the wizard navigates away the moment
+  // the poll exists, so a burst fired there would be thrown by a component already unmounting.
   const stripped = useRef(false)
   useEffect(() => {
     if (!autoOpenShare || stripped.current) return
     stripped.current = true
+    celebrate('created')
     onShareOpened?.()
   }, [autoOpenShare, onShareOpened])
 

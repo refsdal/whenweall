@@ -15,19 +15,20 @@ function prefersReducedMotion(): boolean {
  * Fires a celebratory confetti burst.
  *
  * - `finalize` — two bursts angled in from both edges, for "the time is set".
- * - `booking` — a fountain up the middle, for "the time is yours".
+ * - `booking` / `created` — a fountain up the middle, for a milestone that is one person's:
+ *   the slot you just took, the poll you just made.
  * - `vote` — one small burst from the bottom centre, for "your vote landed".
  *
- * The three are deliberately different sizes. A vote is one of many and gets a flick; a booking
- * is the whole reason a visitor opened the page and gets a wider, slower shower; a finalize ends
- * the poll for everyone and gets both edges.
+ * The sizes are deliberately different. A vote is one of many and gets a flick; a booking or a
+ * new poll is the whole reason someone opened the app and gets a wider, slower shower; a finalize
+ * ends the poll for everyone and gets both edges.
  *
  * No-ops during SSR and whenever the visitor prefers reduced motion.
  */
-export function celebrate(kind: 'finalize' | 'booking' | 'vote'): void {
+export function celebrate(kind: 'finalize' | 'booking' | 'created' | 'vote'): void {
   if (prefersReducedMotion()) return
 
-  if (kind === 'booking') {
+  if (kind === 'booking' || kind === 'created') {
     const base = {
       spread: 80,
       startVelocity: 42,
