@@ -113,10 +113,6 @@ export function UsageStatsSection({ initial, className }: { initial: Stats; clas
 
   return (
     <section ref={ref} className={cn('flex flex-col gap-5', className)}>
-      <p className="text-sm font-medium tracking-[0.14em] text-[var(--primary-ink)] uppercase">
-        {m.landing_stats_eyebrow()}
-      </p>
-
       <p className="display max-w-2xl text-3xl leading-[1.15] text-balance sm:text-4xl">
         {parts.map((part, index) => (
           <span key={index}>
