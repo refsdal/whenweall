@@ -36,8 +36,10 @@ function LandingPage() {
   return (
     <>
       <Hero />
+      {/* Above "how it works" on purpose: the socket only opens when this scrolls into view, so
+          sitting below three explainer cards meant most visitors never saw a number move. */}
+      <UsageStatsSection initial={stats} className={cn(CONTAINER, 'pb-8 sm:pb-12')} />
       <HowItWorks />
-      <UsageStatsSection initial={stats} className={cn(CONTAINER, 'pb-16 sm:pb-24')} />
       <Outro />
     </>
   )
