@@ -9,7 +9,7 @@ describe('TermsPage', () => {
     render(<TermsPage />)
 
     expect(screen.getByRole('heading', { level: 1, name: 'Terms of Service' })).toBeInTheDocument()
-    expect(screen.getByText('Updated 26 August 2026')).toBeInTheDocument()
+    expect(screen.getByText('Updated 28 August 2026')).toBeInTheDocument()
     expect(screen.getAllByText(/Refsdal Holding AS/).length).toBeGreaterThan(0)
     expect(screen.getByText(/932 516 470/)).toBeInTheDocument()
   })

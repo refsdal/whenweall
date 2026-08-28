@@ -41,6 +41,9 @@ describe('buildClientSession', () => {
       user: { id: userId, name: 'Ada', email, image: null, locale: 'nb' },
       org: { id: orgId, slug, name: 'Ada Org', role: 'admin' },
       entitlements: FREE_ENTITLEMENTS,
+      // The org role here is 'admin' and `isStaff` is still false — the two roles are unrelated,
+      // and an org admin is not a platform administrator.
+      isStaff: false,
     })
   })
 
@@ -123,5 +126,55 @@ describe('buildClientSession', () => {
       name: 'Oldest Org',
       role: 'owner',
     })
+  })
+})
+
+// The route guard and the header link both read `isStaff` off the client session, so this is the
+// seam where a wrong answer silently locks staff out of the console (or, worse, lets someone in).
+describe('buildClientSession isStaff', () => {
+  function sessionWith(
+    user: { id: string; name: string; email: string },
+    extra: { role?: string | null; impersonatedBy?: string | null },
+  ): Session {
+    return {
+      user: { ...user, image: null, role: extra.role ?? null },
+      session: { activeOrganizationId: null, impersonatedBy: extra.impersonatedBy ?? null },
+    } as unknown as Session
+  }
+
+  it('is true for a staff user', async () => {
+    const db = createDb(env.DB)
+    const { id, email } = await makeUser(db)
+
+    const result = await buildClientSession(
+      db,
+      sessionWith({ id, name: 'S', email }, { role: 'staff' }),
+    )
+
+    expect(result!.isStaff).toBe(true)
+  })
+
+  it('is false for an ordinary user', async () => {
+    const db = createDb(env.DB)
+    const { id, email } = await makeUser(db)
+
+    const result = await buildClientSession(
+      db,
+      sessionWith({ id, name: 'U', email }, { role: 'user' }),
+    )
+
+    expect(result!.isStaff).toBe(false)
+  })
+
+  it('is false while a staff user is impersonating someone', async () => {
+    const db = createDb(env.DB)
+    const { id, email } = await makeUser(db)
+
+    const result = await buildClientSession(
+      db,
+      sessionWith({ id, name: 'S', email }, { role: 'staff', impersonatedBy: 'user_1' }),
+    )
+
+    expect(result!.isStaff).toBe(false)
   })
 })

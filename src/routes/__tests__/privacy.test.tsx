@@ -9,7 +9,7 @@ describe('PrivacyPage', () => {
     render(<PrivacyPage />)
 
     expect(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' })).toBeInTheDocument()
-    expect(screen.getByText('Updated 26 August 2026')).toBeInTheDocument()
+    expect(screen.getByText('Updated 28 August 2026')).toBeInTheDocument()
     expect(screen.getByText(/Refsdal Holding AS/)).toBeInTheDocument()
     expect(screen.getByText(/932 516 470/)).toBeInTheDocument()
     expect(screen.getAllByText(/hello@whenweall\.com/).length).toBeGreaterThan(0)

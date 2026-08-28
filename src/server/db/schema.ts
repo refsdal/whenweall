@@ -309,6 +309,40 @@ export const pushSubscriptions = sqliteTable(
   ],
 )
 
+/**
+ * Append-only record of every staff action taken through the admin console.
+ *
+ * There is deliberately no update or delete path anywhere in the codebase. D1 has no table-level
+ * permissions, so the guarantee is simply that no such code exists — a trail an admin can edit is
+ * not a trail.
+ *
+ * `actorUserId` is `set null` rather than `cascade`: deleting an admin must not erase what they
+ * did. The id alone is useless once that happens, so `actorEmail` is denormalised at write time
+ * and the row stays readable.
+ */
+export const adminAuditLog = sqliteTable(
+  'admin_audit_log',
+  {
+    id: text('id').primaryKey(),
+    actorUserId: text('actor_user_id').references(() => user.id, { onDelete: 'set null' }),
+    actorEmail: text('actor_email').notNull(),
+    action: text('action').notNull(),
+    targetType: text('target_type').notNull(),
+    targetId: text('target_id'),
+    reason: text('reason'),
+    /** JSON. Which fields changed — never their values, and never password material. */
+    metadata: text('metadata'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    index('admin_audit_log_created_idx').on(t.createdAt),
+    index('admin_audit_log_actor_idx').on(t.actorUserId),
+    index('admin_audit_log_target_idx').on(t.targetType, t.targetId),
+  ],
+)
+
+export type AdminAuditLogRow = typeof adminAuditLog.$inferSelect
+
 export type NotificationPrefs = typeof notificationPrefs.$inferSelect
 export type NotificationSubscription = typeof notificationSubscriptions.$inferSelect
 export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect

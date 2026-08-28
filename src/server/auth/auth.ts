@@ -1,6 +1,7 @@
 import { APIError, betterAuth } from 'better-auth'
 import { createAuthMiddleware, getSessionFromCtx } from 'better-auth/api'
-import { captcha, organization } from 'better-auth/plugins'
+import { admin, captcha, organization } from 'better-auth/plugins'
+import { adminAc, userAc } from 'better-auth/plugins/admin/access'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
@@ -15,6 +16,7 @@ import { sendMailOrThrow } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
+import { isAuditedAdminAction, recordAdminAction } from '#/server/admin/audit'
 import { createRateLimitStorage } from './rate-limit-storage'
 import { authorizeSubscriptionReference, createStripeClient } from '#/server/billing/stripe'
 import { getEntitlements, getSeatsUsed } from '#/server/billing/entitlements'
@@ -172,6 +174,17 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       },
     },
     plugins: [
+      // The platform role is deliberately 'staff', not the plugin's default 'admin': `OrgRole`
+      // already uses 'admin' for a per-org role on `member`, and two different `role` values
+      // sharing a name is how authorization bugs get written.
+      // `adminRoles` must name roles that exist in `roles`, so 'staff' is mapped explicitly to
+      // the plugin's own full admin permission set. Note `adminAc` deliberately omits
+      // 'impersonate-admins': one staff user cannot impersonate another.
+      admin({
+        defaultRole: 'user',
+        adminRoles: ['staff'],
+        roles: { user: userAc, staff: adminAc },
+      }),
       passkey({ rpID: url.hostname, rpName: appConfig.name, origin: env.APP_URL }),
       organization({
         creatorRole: 'owner',
@@ -263,6 +276,46 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       customStorage: createRateLimitStorage(),
     },
     hooks: {
+      /**
+       * Audits every mutating admin endpoint, wherever the call came from.
+       *
+       * Deliberately here rather than inside the admin server functions our UI calls:
+       * `/api/auth/admin/*` is reachable directly by any staff user with `curl`, and a trail that
+       * only records the calls made through our own screens is not a trail.
+       *
+       * Runs after the endpoint succeeded, so this records outcomes rather than attempts. Note
+       * that Better-Auth only runs hooks for endpoints dispatched through the HTTP router —
+       * calling `auth.api.*` as a plain function bypasses them by design, which is why the test
+       * for this drives the handler with a real Request.
+       */
+      after: createAuthMiddleware(async (ctx) => {
+        if (!ctx.path?.startsWith('/admin/')) return
+        const action = ctx.path.slice('/admin/'.length)
+        if (!isAuditedAdminAction(action)) return
+
+        try {
+          const session = await getSessionFromCtx(ctx)
+          if (!session) return
+
+          const body = (ctx.body ?? {}) as { userId?: string; data?: Record<string, unknown> }
+
+          await recordAdminAction(createDb(d1), {
+            actorUserId: session.user.id,
+            actorEmail: session.user.email,
+            action,
+            targetType: 'user',
+            targetId: body.userId ?? null,
+            reason: ctx.headers?.get('x-admin-reason') ?? null,
+            // Field NAMES only. An audit row must never become a second copy of the data it
+            // describes, and must never carry password material.
+            metadata: body.data ? { fields: Object.keys(body.data) } : null,
+          })
+        } catch (err) {
+          // The action already happened; failing the response now would tell the caller it did
+          // not. Log loudly instead — a gap in the trail is worth noticing.
+          console.error(JSON.stringify({ event: 'admin.audit_write_failed', action }), err)
+        }
+      }),
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path === '/organization/invite-member') {
           // Better-Auth's invite-member endpoint returns *before* calling
