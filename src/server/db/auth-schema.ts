@@ -14,6 +14,10 @@ export const user = sqliteTable('user', {
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
+  role: text('role'),
+  banned: integer('banned', { mode: 'boolean' }).default(false),
+  banReason: text('ban_reason'),
+  banExpires: integer('ban_expires', { mode: 'timestamp_ms' }),
   stripeCustomerId: text('stripe_customer_id'),
   locale: text('locale'),
 })
@@ -35,6 +39,7 @@ export const session = sqliteTable(
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
+    impersonatedBy: text('impersonated_by'),
     activeOrganizationId: text('active_organization_id'),
   },
   (table) => [index('session_userId_idx').on(table.userId)],
@@ -191,7 +196,8 @@ export const subscription = sqliteTable(
     stripeScheduleId: text('stripe_schedule_id'),
   },
   // `getEntitlements` (src/server/billing/entitlements.ts) queries by `referenceId` on every
-  // `getSession` call — see its own doc comment.
+  // `getSession` call — see its own doc comment. NOTE: `bun run auth:generate` overwrites this
+  // file and silently drops this index; re-add it after every regeneration.
   (table) => [index('subscription_referenceId_idx').on(table.referenceId)],
 )
 

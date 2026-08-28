@@ -1,6 +1,7 @@
 import { APIError, betterAuth } from 'better-auth'
 import { createAuthMiddleware, getSessionFromCtx } from 'better-auth/api'
-import { captcha, organization } from 'better-auth/plugins'
+import { admin, captcha, organization } from 'better-auth/plugins'
+import { adminAc, userAc } from 'better-auth/plugins/admin/access'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
@@ -172,6 +173,17 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       },
     },
     plugins: [
+      // The platform role is deliberately 'staff', not the plugin's default 'admin': `OrgRole`
+      // already uses 'admin' for a per-org role on `member`, and two different `role` values
+      // sharing a name is how authorization bugs get written.
+      // `adminRoles` must name roles that exist in `roles`, so 'staff' is mapped explicitly to
+      // the plugin's own full admin permission set. Note `adminAc` deliberately omits
+      // 'impersonate-admins': one staff user cannot impersonate another.
+      admin({
+        defaultRole: 'user',
+        adminRoles: ['staff'],
+        roles: { user: userAc, staff: adminAc },
+      }),
       passkey({ rpID: url.hostname, rpName: appConfig.name, origin: env.APP_URL }),
       organization({
         creatorRole: 'owner',

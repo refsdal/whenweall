@@ -61,10 +61,35 @@ admin({ defaultRole: 'user', adminRoles: ['staff'] }),
 
 Add the identical call to `src/server/auth/auth.cli.ts`'s `plugins` array — that file exists purely to shape the generated schema, and drifting from the runtime config produces a wrong migration.
 
+**Correction found during execution:** the plugin validates `adminRoles` against its `roles` map
+and throws `Invalid admin roles: staff` if the role is not defined there. So a custom role name
+requires an explicit mapping:
+
+```ts
+import { adminAc, userAc } from 'better-auth/plugins/admin/access'
+
+admin({
+  defaultRole: 'user',
+  adminRoles: ['staff'],
+  roles: { user: userAc, staff: adminAc },
+}),
+```
+
+Do **not** also pass `ac: defaultAc` — its concrete generic type is not assignable to the plugin's
+own `AccessControl` interface and `tsc` rejects it. Passing `roles` alone satisfies the validation.
+A welcome side effect of reusing `adminAc`: it omits `impersonate-admins`, so one staff user
+cannot impersonate another.
+
 - [ ] **Step 2: Regenerate the auth schema**
 
 Run: `bun run auth:generate`
-Expected: `src/server/db/auth-schema.ts` gains `role`, `banned`, `banReason`, `banExpires` on `user` and `impersonatedBy` on `session`. Inspect the diff — nothing else should change.
+Expected: `src/server/db/auth-schema.ts` gains `role`, `banned`, `banReason`, `banExpires` on `user` and `impersonatedBy` on `session`.
+
+**Then re-add the index the generator drops.** `auth:generate` rewrites the whole file from the
+Better-Auth config and silently loses `subscription_referenceId_idx`, which `getEntitlements`
+relies on for a lookup performed on every `getSession`. Restore it, with the warning comment,
+before generating the migration — otherwise the migration will contain a `DROP INDEX`. Confirm
+the diff against the previous version is additive only.
 
 - [ ] **Step 3: Add the audit table**
 

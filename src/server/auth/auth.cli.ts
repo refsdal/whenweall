@@ -1,6 +1,7 @@
 import { APIError, betterAuth } from 'better-auth'
 import { createAuthMiddleware } from 'better-auth/api'
-import { organization } from 'better-auth/plugins'
+import { admin, organization } from 'better-auth/plugins'
+import { adminAc, userAc } from 'better-auth/plugins/admin/access'
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { passkey } from '@better-auth/passkey'
 import { stripe } from '@better-auth/stripe'
@@ -17,6 +18,15 @@ export function createAuth(d1: D1Database) {
     database: drizzleAdapter(drizzle(d1), { provider: 'sqlite' }),
     emailAndPassword: { enabled: true },
     plugins: [
+      // Must mirror the runtime config in auth.ts — this file exists only to shape the generated
+      // schema, and drift between the two produces a wrong migration.
+      // Mirrors the runtime config in auth.ts. `adminRoles` must name roles present in
+      // `roles`, hence the explicit mapping.
+      admin({
+        defaultRole: 'user',
+        adminRoles: ['staff'],
+        roles: { user: userAc, staff: adminAc },
+      }),
       passkey(),
       organization({
         creatorRole: 'owner',
