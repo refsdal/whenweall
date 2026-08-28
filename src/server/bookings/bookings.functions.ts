@@ -32,6 +32,7 @@ import {
   syncGoogleEventsForReschedule,
 } from './google-sync'
 import { reportMailOutcome } from '#/server/mailer/mailer'
+import { enqueueMailRetry } from '#/server/mailer/queue'
 import { getPublicPage } from './pages'
 import * as bookingService from './bookings'
 import type { ActingOrg } from './bookings'
@@ -176,13 +177,21 @@ export const bookSlot = createServerFn({ method: 'POST' })
       attendeeEmail: data.email,
     })
 
-    reportMailOutcome(
-      'booking.confirmed',
-      await sendBookingEmails(env, 'confirmed', result.bookingId, {
-        db,
-        manageToken: result.manageToken,
-      }),
-    )
+    if (
+      reportMailOutcome(
+        'booking.confirmed',
+        await sendBookingEmails(env, 'confirmed', result.bookingId, {
+          db,
+          manageToken: result.manageToken,
+        }),
+      )
+    ) {
+      await enqueueMailRetry(env, {
+        kind: 'booking',
+        event: 'confirmed',
+        bookingId: result.bookingId,
+      })
+    }
 
     return result
   })
@@ -231,10 +240,18 @@ export const cancelBooking = createServerFn({ method: 'POST' })
         }
       }
 
-      reportMailOutcome(
-        'booking.cancelled',
-        await sendBookingEmails(env, 'cancelled', data.bookingId, { db }),
-      )
+      if (
+        reportMailOutcome(
+          'booking.cancelled',
+          await sendBookingEmails(env, 'cancelled', data.bookingId, { db }),
+        )
+      ) {
+        await enqueueMailRetry(env, {
+          kind: 'booking',
+          event: 'cancelled',
+          bookingId: data.bookingId,
+        })
+      }
     }
 
     return result
@@ -275,14 +292,22 @@ export const rescheduleBooking = createServerFn({ method: 'POST' })
     // pass it along so the confirmation email's manage link keeps working. An owner-initiated
     // reschedule has no plaintext token to hand back (only its hash is stored), so the email falls
     // back to the bare booking URL (see `sendBookingEmails`'s doc comment).
-    reportMailOutcome(
-      'booking.rescheduled',
-      await sendBookingEmails(env, 'rescheduled', data.bookingId, {
-        db,
-        manageToken: data.token,
-        previousStartAt: result.previousStartAt,
-      }),
-    )
+    if (
+      reportMailOutcome(
+        'booking.rescheduled',
+        await sendBookingEmails(env, 'rescheduled', data.bookingId, {
+          db,
+          manageToken: data.token,
+          previousStartAt: result.previousStartAt,
+        }),
+      )
+    ) {
+      await enqueueMailRetry(env, {
+        kind: 'booking',
+        event: 'rescheduled',
+        bookingId: data.bookingId,
+      })
+    }
 
     return result
   })

@@ -131,12 +131,14 @@ export async function sendMailOrThrow(
  * reached the visitor looked exactly like one that did. These sends are deliberately best-effort
  * (a booking must not fail because its notification did), so the outcome is logged rather than
  * raised; the structured `event` is what makes it countable and alertable.
+ *
+ * Returns whether anything failed, so a caller that can queue a retry knows to.
  */
 export function reportMailOutcome(
   context: string,
   outcome: { sent: number; failed: number },
-): void {
-  if (outcome.failed === 0) return
+): boolean {
+  if (outcome.failed === 0) return false
   console.error(
     JSON.stringify({
       event: 'mail.batch_incomplete',
@@ -145,4 +147,5 @@ export function reportMailOutcome(
       failed: outcome.failed,
     }),
   )
+  return true
 }

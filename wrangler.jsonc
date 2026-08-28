@@ -50,6 +50,22 @@
     { "tag": "v4", "new_sqlite_classes": ["RateLimitRoom"] },
   ],
   "send_email": [{ "name": "EMAIL" }],
+  // Durable retry for transactional mail. Cloudflare's send binding fails in ways nothing else
+  // recovers from — a daily quota, a burst limit — and before this a booking confirmation that
+  // failed was simply gone. `max_retries` before a message lands in the DLQ, which is where
+  // "genuinely undeliverable" accumulates and needs a human.
+  "queues": {
+    "producers": [{ "queue": "whenweall-mail", "binding": "MAIL_QUEUE" }],
+    "consumers": [
+      {
+        "queue": "whenweall-mail",
+        "max_batch_size": 10,
+        "max_batch_timeout": 30,
+        "max_retries": 5,
+        "dead_letter_queue": "whenweall-mail-dlq",
+      },
+    ],
+  },
   "ratelimits": [
     { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
   ],
@@ -93,6 +109,20 @@
         ],
       },
       "send_email": [{ "name": "EMAIL" }],
+      // Its own queues, not the production ones: two workers consuming the same queue would
+      // steal each other's messages.
+      "queues": {
+        "producers": [{ "queue": "whenweall-mail-test", "binding": "MAIL_QUEUE" }],
+        "consumers": [
+          {
+            "queue": "whenweall-mail-test",
+            "max_batch_size": 10,
+            "max_batch_timeout": 30,
+            "max_retries": 5,
+            "dead_letter_queue": "whenweall-mail-test-dlq",
+          },
+        ],
+      },
       "ratelimits": [
         { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } },
       ],
