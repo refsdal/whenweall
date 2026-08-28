@@ -29,6 +29,7 @@ async function seed(
       withSignup: opts.withSignup ?? false,
       withBookingPage: opts.withBookingPage ?? false,
       ...(opts.plan ? { plan: opts.plan } : {}),
+      ...(opts.role ? { role: opts.role } : {}),
     },
   })
   if (!response.ok()) {
