@@ -521,7 +521,13 @@ hooks: {
 },
 ```
 
-**Verify while implementing:** that `ctx.path`, `ctx.body` and `ctx.headers` are populated in an `after` hook, and that this runs _after_ the action succeeded. If `after` cannot see enough, fall back to `before` and note in the code comment that it records intent rather than outcome.
+**Verified during execution.** The `after` hook receives the full internal context — `ctx.path`, `ctx.body`, `ctx.headers` and the endpoint's result — and runs after the endpoint executed, so this records outcomes rather than attempts. No fallback needed.
+
+Three things found while proving it, all now encoded in the test:
+
+1. **Hooks run only for endpoints dispatched through the HTTP router.** `auth.api.*` called as a plain function deliberately skips them (see `dispatchAuthEndpoint`'s doc comment). Fine for the threat model — the bypass we care about is `curl` against the endpoint — but the test must drive `auth.handler(new Request(...))`, not `auth.api.banUser(...)`.
+2. **Better-Auth normalises emails to lower case on write**, so a `where email = ?` built from a mixed-case generated id silently matches nothing.
+3. **State-changing endpoints require an `Origin` header** matching the baseURL, else `MISSING_OR_NULL_ORIGIN` — Better-Auth's CSRF protection. Set it in the test rather than working around it.
 
 - [ ] **Step 6: Prove the choke point with an end-to-end test**
 
