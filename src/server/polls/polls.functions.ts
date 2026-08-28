@@ -9,6 +9,7 @@ import { rateLimitMiddleware } from '#/server/http/rate-limit.middleware'
 import { notifyChanged, syncDeadline } from '#/server/notifications/do-client'
 import { emitPollEvent } from '#/server/notifications/emit'
 import { sendFinalizedEmails } from '#/server/notifications/finalize-emails'
+import { reportMailOutcome } from '#/server/mailer/mailer'
 import { recordPollCreated, recordPollFinalized } from '#/server/stats/stats-client'
 import * as pollService from './service'
 import {
@@ -112,7 +113,9 @@ export const finalizePoll = createServerFn({ method: 'POST' })
     await notifyChanged(data.pollId, 'poll')
     // Participants always get the transactional "the time is set" mail with its .ics — that is
     // not a notification and is never gated by preferences. The organiser-side notice below is.
-    const { sent } = await sendFinalizedEmails(env, result)
+    const finalizedMail = await sendFinalizedEmails(env, result)
+    reportMailOutcome('poll.finalized', finalizedMail)
+    const { sent } = finalizedMail
     await emitPollEvent(data.pollId, 'poll.finalized', {
       actorUserId: context.session.user.id,
     })

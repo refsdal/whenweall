@@ -11,7 +11,7 @@ import { createDb, type Db } from '#/server/db/client'
 import * as schema from '#/server/db/schema'
 import { member } from '#/server/db/schema'
 import { appConfig } from '#/app.config'
-import { sendMail } from '#/server/mailer/mailer'
+import { sendMailOrThrow } from '#/server/mailer/mailer'
 import { renderOrgInvite, renderResetPassword, renderVerifyEmail } from '#/server/mailer/templates'
 import { handleSchema } from '#/server/bookings/schemas'
 import { createPersonalOrganization, deleteOrphanedOwnerOrganizations } from './personal-org'
@@ -104,7 +104,7 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
       requireEmailVerification: true,
       sendResetPassword: async ({ user, url: resetUrl }) => {
         const locale = (user as { locale?: string }).locale ?? appConfig.defaultLocale
-        await sendMail(env, {
+        await sendMailOrThrow(env, {
           to: user.email,
           ...(await renderResetPassword({ name: user.name, url: resetUrl, locale })),
         })
@@ -113,9 +113,18 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
     emailVerification: {
       sendOnSignUp: true,
       autoSignInAfterVerification: true,
+      // `sendMailOrThrow`, not `sendMail`, and the trade is deliberate. Better-Auth creates the
+      // user row before sending, so a throw here surfaces an error to someone whose account now
+      // exists — retrying the same address gets them "email taken", which is confusing.
+      //
+      // The alternative is worse. With `requireEmailVerification: true`, a verification mail that
+      // silently fails leaves an account that can never be signed in to, and the account holder
+      // cannot tell that apart from a slow inbox — so they wait, and nothing ever comes. A visible
+      // error at least says something went wrong, and the account is recoverable through the
+      // resend flow (`/send-verification-email`). Loud and recoverable beats silent and stuck.
       sendVerificationEmail: async ({ user, url: verifyUrl }) => {
         const locale = (user as { locale?: string }).locale ?? appConfig.defaultLocale
-        await sendMail(env, {
+        await sendMailOrThrow(env, {
           to: user.email,
           ...(await renderVerifyEmail({ name: user.name, url: verifyUrl, locale })),
         })
@@ -192,7 +201,7 @@ export function createAuth({ d1, env }: { d1: D1Database; env: AuthEnv }) {
         },
         sendInvitationEmail: async ({ email, organization: org, inviter, id }) => {
           const locale = (inviter.user as { locale?: string }).locale ?? appConfig.defaultLocale
-          await sendMail(env, {
+          await sendMailOrThrow(env, {
             to: email,
             ...(await renderOrgInvite({
               orgName: org.name,
