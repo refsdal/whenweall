@@ -1,5 +1,5 @@
 import { Link, useRouteContext } from '@tanstack/react-router'
-import { Plus } from 'lucide-react'
+import { Plus, ShieldCheck } from 'lucide-react'
 import { buttonVariants } from '#/components/ui/button'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
 import { Logo } from '#/components/layout/Logo'
@@ -17,6 +17,20 @@ export function Header() {
         <Logo />
 
         <nav className="flex items-center gap-1.5 sm:gap-2.5">
+          {/* Staff only, and only as a convenience — the console's own guard and every admin
+              server function re-check independently. */}
+          {session?.isStaff && (
+            <Link
+              to="/admin"
+              className={cn(
+                buttonVariants({ size: 'sm', variant: 'ghost' }),
+                'gap-1.5 max-sm:h-9 max-sm:px-3',
+              )}
+            >
+              <ShieldCheck aria-hidden="true" />
+              <span className="max-sm:sr-only">{m.admin_title()}</span>
+            </Link>
+          )}
           <LocaleSwitcher className="hidden sm:inline-flex" />
           <ThemeToggle />
           <Link

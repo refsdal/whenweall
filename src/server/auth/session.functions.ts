@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { isStaff } from './platform-roles'
 import type { Db } from '#/server/db/client'
 import { getDb } from '#/server/db/client'
 import { sessionMiddleware } from './middleware'
@@ -21,6 +22,11 @@ export type ClientSessionPayload = {
   }
   org: { id: string; slug: string; name: string; role: OrgRole } | null
   entitlements: Entitlements
+  /** Whether this session may use the admin console. A computed boolean rather than the raw
+   * `user.role`: the browser has no use for the role string, and shipping it invites a client
+   * confusing it with `org.role`, which is a different concept entirely. Navigation only — the
+   * server functions re-check with `requireStaffMiddleware`. */
+  isStaff: boolean
 }
 
 /**
@@ -49,6 +55,10 @@ export async function buildClientSession(
     },
     org: org ? { id: org.id, slug: org.slug, name: org.name, role: org.role } : null,
     entitlements,
+    isStaff: isStaff({
+      role: (s.user as { role?: string | null }).role,
+      impersonatedBy: (s.session as { impersonatedBy?: string | null }).impersonatedBy,
+    }),
   }
 }
 

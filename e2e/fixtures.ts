@@ -19,6 +19,7 @@ async function seed(
     withSignup?: boolean
     withBookingPage?: boolean
     plan?: 'premium'
+    role?: 'staff'
   } = {},
 ): Promise<SeededUser> {
   const response = await request.post('/api/test/seed', {
@@ -55,6 +56,8 @@ type Fixtures = {
    * for e2e coverage of the billing UI's Premium branch and the seat-gated invite flow, without
    * going through real Stripe. */
   userPremium: SeededUser
+  /** A verified user carrying the platform staff role, for the admin console. */
+  userStaff: SeededUser
 }
 
 /**
@@ -77,6 +80,9 @@ export const test = base.extend<Fixtures>({
   },
   userWithBookingPage: async ({ request }, provide) => {
     await provide(await seed(request, { withBookingPage: true }))
+  },
+  userStaff: async ({ request }, provide) => {
+    await provide(await seed(request, { role: 'staff' }))
   },
   userPremium: async ({ request }, provide) => {
     await provide(await seed(request, { plan: 'premium' }))

@@ -3,6 +3,7 @@ import * as z from 'zod'
 import { getDb } from '#/server/db/client'
 import { requireStaffMiddleware } from '#/server/auth/staff'
 import { getAdminStats, type AdminStats } from './stats'
+import { listAdminAuditLog } from './audit-query'
 import {
   getAdminUserDetail,
   listAdminUsers,
@@ -20,6 +21,7 @@ export const SERVER_FN_MIDDLEWARE = {
   fetchAdminStats: REQUIRE_STAFF,
   fetchAdminUsers: REQUIRE_STAFF,
   fetchAdminUserDetail: REQUIRE_STAFF,
+  fetchAdminAuditLog: REQUIRE_STAFF,
 } as const
 
 export const fetchAdminStats = createServerFn({ method: 'GET' })
@@ -45,3 +47,8 @@ export const fetchAdminUserDetail = createServerFn({ method: 'GET' })
   .handler(async ({ data }): Promise<AdminUserDetail | null> =>
     getAdminUserDetail(getDb(), data.userId),
   )
+
+export const fetchAdminAuditLog = createServerFn({ method: 'GET' })
+  .middleware(SERVER_FN_MIDDLEWARE.fetchAdminAuditLog)
+  .validator(z.object({ limit: z.number().int().min(1).max(200).default(100) }))
+  .handler(async ({ data }) => listAdminAuditLog(getDb(), data.limit))

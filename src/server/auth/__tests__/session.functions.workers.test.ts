@@ -41,6 +41,9 @@ describe('buildClientSession', () => {
       user: { id: userId, name: 'Ada', email, image: null, locale: 'nb' },
       org: { id: orgId, slug, name: 'Ada Org', role: 'admin' },
       entitlements: FREE_ENTITLEMENTS,
+      // The org role here is 'admin' and `isStaff` is still false — the two roles are unrelated,
+      // and an org admin is not a platform administrator.
+      isStaff: false,
     })
   })
 

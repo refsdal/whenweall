@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as LoginRouteImport } from './routes/login'
@@ -21,9 +22,13 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitation/$id'
+import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as AdminAuditRouteImport } from './routes/admin/audit'
+import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
+import { Route as AdminUsersIdRouteImport } from './routes/admin/users.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiStatsWsRouteImport } from './routes/api/stats/ws'
 import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
@@ -42,6 +47,11 @@ import { Route as ApiPollsIdWsRouteImport } from './routes/api/polls/$id/ws'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRouteRoute = AdminRouteRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -99,6 +109,21 @@ const AcceptInvitationIdRoute = AcceptInvitationIdRouteImport.update({
   path: '/accept-invitation/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminAuditRoute = AdminAuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminUsersRoute = AdminUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
@@ -113,6 +138,11 @@ const BookingsNewRoute = BookingsNewRouteImport.update({
   id: '/bookings/new',
   path: '/bookings/new',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminUsersIdRoute = AdminUsersIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => AdminUsersRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -187,6 +217,7 @@ const ApiPollsIdWsRoute = ApiPollsIdWsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteRouteWithChildren
   '/dashboard': typeof DashboardRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -198,9 +229,13 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
+  '/admin/audit': typeof AdminAuditRoute
+  '/admin/users': typeof AdminUsersRouteWithChildren
   '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
+  '/admin/': typeof AdminIndexRoute
   '/bookings/': typeof BookingsIndexRoute
+  '/admin/users/$id': typeof AdminUsersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/stats/ws': typeof ApiStatsWsRoute
   '/api/test/seed': typeof ApiTestSeedRoute
@@ -229,9 +264,13 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
+  '/admin/audit': typeof AdminAuditRoute
+  '/admin/users': typeof AdminUsersRouteWithChildren
   '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
+  '/admin': typeof AdminIndexRoute
   '/bookings': typeof BookingsIndexRoute
+  '/admin/users/$id': typeof AdminUsersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/stats/ws': typeof ApiStatsWsRoute
   '/api/test/seed': typeof ApiTestSeedRoute
@@ -250,6 +289,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteRouteWithChildren
   '/dashboard': typeof DashboardRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -261,9 +301,13 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
+  '/admin/audit': typeof AdminAuditRoute
+  '/admin/users': typeof AdminUsersRouteWithChildren
   '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
+  '/admin/': typeof AdminIndexRoute
   '/bookings/': typeof BookingsIndexRoute
+  '/admin/users/$id': typeof AdminUsersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/stats/ws': typeof ApiStatsWsRoute
   '/api/test/seed': typeof ApiTestSeedRoute
@@ -283,6 +327,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/forgot-password'
     | '/login'
@@ -294,9 +339,13 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/accept-invitation/$id'
+    | '/admin/audit'
+    | '/admin/users'
     | '/api/health'
     | '/bookings/new'
+    | '/admin/'
     | '/bookings/'
+    | '/admin/users/$id'
     | '/api/auth/$'
     | '/api/stats/ws'
     | '/api/test/seed'
@@ -325,9 +374,13 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/accept-invitation/$id'
+    | '/admin/audit'
+    | '/admin/users'
     | '/api/health'
     | '/bookings/new'
+    | '/admin'
     | '/bookings'
+    | '/admin/users/$id'
     | '/api/auth/$'
     | '/api/stats/ws'
     | '/api/test/seed'
@@ -345,6 +398,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/forgot-password'
     | '/login'
@@ -356,9 +410,13 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/accept-invitation/$id'
+    | '/admin/audit'
+    | '/admin/users'
     | '/api/health'
     | '/bookings/new'
+    | '/admin/'
     | '/bookings/'
+    | '/admin/users/$id'
     | '/api/auth/$'
     | '/api/stats/ws'
     | '/api/test/seed'
@@ -377,6 +435,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRouteRoute: typeof AdminRouteRouteWithChildren
   DashboardRoute: typeof DashboardRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
@@ -414,6 +473,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -493,6 +559,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AcceptInvitationIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/audit': {
+      id: '/admin/audit'
+      path: '/audit'
+      fullPath: '/admin/audit'
+      preLoaderRoute: typeof AdminAuditRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/users': {
+      id: '/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
@@ -513,6 +600,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/bookings/new'
       preLoaderRoute: typeof BookingsNewRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/users/$id': {
+      id: '/admin/users/$id'
+      path: '/$id'
+      fullPath: '/admin/users/$id'
+      preLoaderRoute: typeof AdminUsersIdRouteImport
+      parentRoute: typeof AdminUsersRoute
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -615,8 +709,37 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AdminUsersRouteChildren {
+  AdminUsersIdRoute: typeof AdminUsersIdRoute
+}
+
+const AdminUsersRouteChildren: AdminUsersRouteChildren = {
+  AdminUsersIdRoute: AdminUsersIdRoute,
+}
+
+const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
+  AdminUsersRouteChildren,
+)
+
+interface AdminRouteRouteChildren {
+  AdminAuditRoute: typeof AdminAuditRoute
+  AdminUsersRoute: typeof AdminUsersRouteWithChildren
+  AdminIndexRoute: typeof AdminIndexRoute
+}
+
+const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminAuditRoute: AdminAuditRoute,
+  AdminUsersRoute: AdminUsersRouteWithChildren,
+  AdminIndexRoute: AdminIndexRoute,
+}
+
+const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
+  AdminRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRouteRoute: AdminRouteRouteWithChildren,
   DashboardRoute: DashboardRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
