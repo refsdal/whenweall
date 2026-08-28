@@ -18,6 +18,9 @@ type SeedBody = {
   /** Inserts an active premium subscription row for the seeded org, so e2e can exercise premium
    * billing states (seat usage, "Manage billing", etc.) without going through real Stripe. */
   plan?: 'premium'
+  /** Grants the platform staff role, so e2e can exercise the admin console. Gated by the same
+   * production check as everything else in this route. */
+  role?: 'staff'
 }
 
 /** Weekday (Mon–Fri) 09:00–17:00, 30-min slots, Europe/Oslo — mirrors `test/helpers.ts`'
@@ -68,6 +71,12 @@ export async function seedResponse(body: SeedBody): Promise<Response> {
   })
 
   await env.DB.prepare('update user set email_verified = 1 where email = ?').bind(email).run()
+
+  // Set before any session is used: a session is minted from the user row as it stands at that
+  // moment, so a role granted afterwards would not apply to it.
+  if (body.role === 'staff') {
+    await env.DB.prepare("update user set role = 'staff' where email = ?").bind(email).run()
+  }
 
   // Every signup auto-gets a personal organization (Task 1) — content ownership lives there now,
   // so seeded content is created under that org rather than directly under the user.
