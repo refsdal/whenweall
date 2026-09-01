@@ -1,0 +1,7 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_claim_heading"}}
+
+{{.PollTitle}}
+{{t $locale "email_claim_body" "name" .Name}}
+{{range .Slots}}- {{.}}
+{{end}}
+{{t $locale "email_claim_cta"}}: {{.PollURL}}

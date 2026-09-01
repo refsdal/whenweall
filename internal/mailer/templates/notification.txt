@@ -1,0 +1,5 @@
+{{$locale := or .Locale "en"}}{{.Title}}
+
+{{notifBody $locale .Event .Title (or .Detail "")}}
+
+{{t $locale "email_notification_cta"}}: {{.URL}}

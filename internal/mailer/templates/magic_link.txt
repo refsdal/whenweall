@@ -1,0 +1,5 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_magic_link_heading"}}
+
+{{t $locale "email_magic_link_body" "name" .Name}}
+
+{{t $locale "email_magic_link_cta"}}: {{.URL}}

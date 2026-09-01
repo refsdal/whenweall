@@ -1,0 +1,5 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_verify_heading"}}
+
+{{t $locale "email_verify_body" "name" .Name}}
+
+{{t $locale "email_verify_cta"}}: {{.URL}}

@@ -1,0 +1,12 @@
+{{/* Ported from emails/BookingRescheduled.tsx (the visitor-facing copy — "your booking with
+     {organiser}"). Data: VisitorName, PageTitle, OrganiserName, PreviousWhen, When,
+     Location (optional), ManageURL. */}}
+{{define "subject"}}{{$locale := or .Locale "en"}}{{t $locale "email_booking_rescheduled_subject" "title" .PageTitle}}{{end}}
+{{define "content"}}{{$locale := or .Locale "en"}}
+<h1 style="font-size:20px;margin:0 0 16px;color:#18181b;">{{t $locale "email_booking_rescheduled_heading"}}</h1>
+<p style="font-size:16px;font-weight:bold;margin:0 0 8px;color:#18181b;">{{.PageTitle}}</p>
+<p style="font-size:14px;line-height:22px;color:#3f3f46;margin:0 0 16px;">{{t $locale "email_booking_rescheduled_body" "name" .VisitorName "organiser" .OrganiserName "previousWhen" .PreviousWhen "when" .When}}</p>
+{{if .Location}}<p style="font-size:14px;color:#3f3f46;margin:0 0 16px;">{{t $locale "email_booking_location" "location" .Location}}</p>{{end}}
+<a href="{{.ManageURL}}" style="background-color:#e8572a;color:#ffffff;padding:12px 20px;border-radius:8px;font-size:14px;font-weight:bold;text-decoration:none;display:inline-block;margin-top:16px;">{{t $locale "email_booking_rescheduled_cta"}}</a>
+<p style="font-size:12px;color:#71717a;word-break:break-all;margin:16px 0 0;">{{.ManageURL}}</p>
+{{end}}

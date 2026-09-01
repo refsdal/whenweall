@@ -1,0 +1,5 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_org_invite_heading" "org" .OrgName}}
+
+{{t $locale "email_org_invite_body" "inviter" .InviterName "org" .OrgName}}
+
+{{t $locale "email_org_invite_cta"}}: {{.URL}}

@@ -1,0 +1,7 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_booking_reminder_heading"}}
+
+{{.PageTitle}}
+{{t $locale "email_booking_reminder_body" "name" .RecipientName "when" .When}}
+{{if .Location}}{{t $locale "email_booking_reminder_location" "location" .Location}}
+{{end}}
+{{t $locale "email_booking_reminder_cta"}}: {{.ViewURL}}

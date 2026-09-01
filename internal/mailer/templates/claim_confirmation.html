@@ -1,0 +1,11 @@
+{{/* Ported from emails/ClaimConfirmation.tsx. Data: Name, PollTitle, PollURL, Slots ([]string). */}}
+{{define "subject"}}{{$locale := or .Locale "en"}}{{t $locale "email_claim_subject" "title" .PollTitle}}{{end}}
+{{define "content"}}{{$locale := or .Locale "en"}}
+<h1 style="font-size:20px;margin:0 0 16px;color:#18181b;">{{t $locale "email_claim_heading"}}</h1>
+<p style="font-size:16px;font-weight:bold;margin:0 0 8px;color:#18181b;">{{.PollTitle}}</p>
+<p style="font-size:14px;line-height:22px;color:#3f3f46;margin:0 0 16px;">{{t $locale "email_claim_body" "name" .Name}}</p>
+{{range .Slots}}<p style="font-size:14px;color:#3f3f46;margin:0 0 4px;">&bull; {{.}}</p>
+{{end}}
+<a href="{{.PollURL}}" style="background-color:#e8572a;color:#ffffff;padding:12px 20px;border-radius:8px;font-size:14px;font-weight:bold;text-decoration:none;display:inline-block;margin-top:16px;">{{t $locale "email_claim_cta"}}</a>
+<p style="font-size:12px;color:#71717a;word-break:break-all;margin:16px 0 0;">{{.PollURL}}</p>
+{{end}}

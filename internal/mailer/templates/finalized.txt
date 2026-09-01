@@ -1,0 +1,6 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_finalized_heading"}}
+
+{{.PollTitle}}
+{{t $locale "email_finalized_body" "name" .RecipientName "option" .OptionLabel}}
+
+{{t $locale "email_finalized_cta"}}: {{.PollURL}}

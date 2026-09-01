@@ -1,0 +1,9 @@
+{{/* New template (no .tsx source) — copy modelled on verify_email: "sign in with this link".
+     Data: Name, URL (plus the shared AppURL, Locale). */}}
+{{define "subject"}}{{$locale := or .Locale "en"}}{{t $locale "email_magic_link_subject"}}{{end}}
+{{define "content"}}{{$locale := or .Locale "en"}}
+<h1 style="font-size:20px;margin:0 0 16px;color:#18181b;">{{t $locale "email_magic_link_heading"}}</h1>
+<p style="font-size:14px;line-height:22px;color:#3f3f46;margin:0 0 16px;">{{t $locale "email_magic_link_body" "name" .Name}}</p>
+<a href="{{.URL}}" style="background-color:#e8572a;color:#ffffff;padding:12px 20px;border-radius:8px;font-size:14px;font-weight:bold;text-decoration:none;display:inline-block;">{{t $locale "email_magic_link_cta"}}</a>
+<p style="font-size:12px;color:#71717a;word-break:break-all;margin:16px 0 0;">{{.URL}}</p>
+{{end}}

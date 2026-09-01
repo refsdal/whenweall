@@ -1,0 +1,6 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_booking_cancelled_heading"}}
+
+{{.PageTitle}}
+{{cancelledBody $locale .CancelledBy .RecipientName (or .VisitorName "") .When}}
+
+{{t $locale "email_booking_cancelled_cta"}}: {{.ViewURL}}

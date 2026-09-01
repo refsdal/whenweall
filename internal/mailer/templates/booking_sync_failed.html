@@ -1,0 +1,7 @@
+{{/* Ported from emails/BookingSyncFailed.tsx. Data: PageTitle. Deliberately minimal — no CTA,
+     matching the source: the ask is just "go check your calendar". */}}
+{{define "subject"}}{{$locale := or .Locale "en"}}{{t $locale "email_booking_sync_failed_subject" "title" .PageTitle}}{{end}}
+{{define "content"}}{{$locale := or .Locale "en"}}
+<h1 style="font-size:20px;margin:0 0 16px;color:#18181b;">{{t $locale "email_booking_sync_failed_heading"}}</h1>
+<p style="font-size:14px;line-height:22px;color:#3f3f46;margin:0 0 16px;">{{t $locale "email_booking_sync_failed_body" "title" .PageTitle}}</p>
+{{end}}
