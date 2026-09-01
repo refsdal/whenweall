@@ -1,0 +1,758 @@
+// Package polls is a behavioral port of src/server/polls/{service,schemas,viewmodel}.ts: the poll
+// domain (scheduling polls, options polls, sign-up sheets) — everything except participants,
+// votes, comments and claims (Task 3) and notifications/timers (Task 4).
+package polls
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/refsdal/whenweall/internal/db"
+	"github.com/refsdal/whenweall/internal/polls/queries"
+	"github.com/refsdal/whenweall/internal/rooms"
+)
+
+// Viewer identifies who is asking for a poll's view: an authenticated user (UserID) or an
+// anonymous participant proving their identity via a guest edit token (GuestParticipantID; see
+// internal/auth.VerifyGuestToken). GetView reads only UserID today — GuestParticipantID exists on
+// this struct now because Task 3's participant/claim methods share it.
+type Viewer struct {
+	UserID             string
+	GuestParticipantID string
+}
+
+// Service is the poll domain service; every exported method below is a behavioral port of one
+// function from src/server/polls/service.ts.
+type Service struct {
+	db *sql.DB
+	q  *queries.Queries
+}
+
+// NewService builds a Service bound to sqlDB. Read-only methods use the Service's own Queries;
+// every mutating method opens its own transaction and builds a tx-scoped Queries so its domain
+// write and its rooms.Emit land atomically (rooms.Emit must run inside the same tx as the write it
+// announces — see internal/rooms's package doc).
+func NewService(sqlDB *sql.DB) *Service {
+	return &Service{db: sqlDB, q: queries.New(sqlDB)}
+}
+
+const pollFinalizedStatus = "finalized"
+
+// requireOrgPoll fetches pollID (queries.GetPoll already excludes soft-deleted rows) and checks
+// it belongs to orgID — the org-scoping half of requireManagedPoll (service.ts).
+//
+// Deviation from the TS source, both required by the brief's exact method signatures: every
+// managing call here (Update/SetStatus/Finalize/Delete/Duplicate) carries an orgID but no userID
+// or role, so the creator-or-admin/owner check requireManagedPoll also enforces
+// (canManageContent: "a same-org member who didn't create it gets FORBIDDEN") cannot be
+// reproduced at this layer — there is no identity to check it against. A second, related
+// difference: TS deliberately maps "poll exists but in a different org" to NOT_FOUND, specifically
+// so a poll id's existence is never revealed outside its own org; this port reports ErrForbidden
+// for that case instead, per the brief's own wording ("wrong org -> ErrForbidden"). Both are
+// flagged in errors.go's ErrForbidden doc comment and in the task report.
+func requireOrgPoll(ctx context.Context, q *queries.Queries, pollID, orgID string) (queries.Poll, error) {
+	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
+	if err != nil {
+		return queries.Poll{}, ErrForbidden
+	}
+	poll, err := q.GetPoll(ctx, pollID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return queries.Poll{}, ErrNotFound
+	}
+	if err != nil {
+		return queries.Poll{}, err
+	}
+	if poll.OrganizationID != orgIDInt {
+		return queries.Poll{}, ErrForbidden
+	}
+	return poll, nil
+}
+
+// Create ports createPoll. Returns the freshly created poll's view; IsOwner is always true on it
+// (the caller is, by definition, the poll's own creator).
+func (s *Service) Create(ctx context.Context, orgID, userID string, in CreatePollInput) (*PollView, error) {
+	if err := in.Validate(); err != nil {
+		return nil, err
+	}
+	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
+	if err != nil {
+		return nil, ErrForbidden
+	}
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return nil, ErrForbidden
+	}
+
+	var deadlineAt sql.NullTime
+	if in.DeadlineAt != nil {
+		t, perr := parseISODateTime(*in.DeadlineAt)
+		if perr != nil {
+			return nil, newValidationError("deadlineAt", "deadlineAt must be an ISO 8601 UTC datetime")
+		}
+		deadlineAt = sql.NullTime{Time: t, Valid: true}
+	}
+
+	allowIfNeedBe := true
+	switch {
+	case in.Type == PollTypeSignup:
+		allowIfNeedBe = false
+	case in.AllowIfNeedBe != nil:
+		allowIfNeedBe = *in.AllowIfNeedBe
+	}
+	requireParticipantEmail := false
+	if in.RequireParticipantEmail != nil {
+		requireParticipantEmail = *in.RequireParticipantEmail
+	}
+	allowComments := true
+	if in.AllowComments != nil {
+		allowComments = *in.AllowComments
+	}
+	signupMaxClaims := int32(1)
+	if in.SignupMaxClaims != nil {
+		signupMaxClaims = int32(*in.SignupMaxClaims)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	pollID := db.NewID()
+	now := time.Now().UTC()
+
+	poll := queries.Poll{
+		ID:                      pollID,
+		OrganizationID:          orgIDInt,
+		CreatedBy:               sql.NullInt64{Int64: userIDInt, Valid: true},
+		Type:                    string(in.Type),
+		Title:                   strings.TrimSpace(in.Title),
+		Description:             optionalTrimmedString(in.Description),
+		Location:                optionalTrimmedString(in.Location),
+		Timezone:                in.Timezone,
+		Status:                  "open",
+		DeadlineAt:              deadlineAt,
+		RequireParticipantEmail: requireParticipantEmail,
+		AllowComments:           allowComments,
+		AllowIfNeedBe:           allowIfNeedBe,
+		SignupMaxClaims:         signupMaxClaims,
+		CreatedAt:               now,
+		UpdatedAt:               now,
+	}
+
+	if err := q.InsertPoll(ctx, queries.InsertPollParams{
+		ID:                      poll.ID,
+		OrganizationID:          poll.OrganizationID,
+		CreatedBy:               poll.CreatedBy,
+		Type:                    poll.Type,
+		Title:                   poll.Title,
+		Description:             poll.Description,
+		Location:                poll.Location,
+		Timezone:                poll.Timezone,
+		Status:                  poll.Status,
+		DeadlineAt:              poll.DeadlineAt,
+		RequireParticipantEmail: poll.RequireParticipantEmail,
+		AllowComments:           poll.AllowComments,
+		AllowIfNeedBe:           poll.AllowIfNeedBe,
+		SignupMaxClaims:         poll.SignupMaxClaims,
+		CreatedAt:               poll.CreatedAt,
+		UpdatedAt:               poll.UpdatedAt,
+	}); err != nil {
+		return nil, err
+	}
+
+	fallback := sql.NullInt32{Int32: 1, Valid: true}
+	for i, opt := range in.Options {
+		cols, err := pollOptionColumns(opt, in.Type, fallback)
+		if err != nil {
+			return nil, err
+		}
+		if err := q.InsertPollOption(ctx, queries.InsertPollOptionParams{
+			ID:       db.NewID(),
+			PollID:   pollID,
+			Position: int32(i),
+			Kind:     cols.Kind,
+			StartAt:  cols.StartAt,
+			EndAt:    cols.EndAt,
+			Label:    cols.Label,
+			Capacity: cols.Capacity,
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	// Notification follow-on-create (ensureCreatorSubscription in the TS source) is Task 4's
+	// table to write to; not ported here — see the task report.
+
+	view, err := s.buildView(ctx, q, poll, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+// GetView ports getPollView. Returns (nil, nil) — not an error — when the poll doesn't exist or
+// is soft-deleted, matching the TS source returning null.
+func (s *Service) GetView(ctx context.Context, pollID string, viewer Viewer) (*PollView, error) {
+	poll, err := s.q.GetPoll(ctx, pollID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // mirrors getPollView returning null for missing/deleted, not an error
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.buildView(ctx, s.q, poll, viewer.UserID)
+}
+
+// Update ports updatePoll. Returns the freshly updated view. IsOwner on the returned view is
+// always false: unlike GetView/Create/Duplicate, the brief's exact signature for Update carries no
+// viewer/userID, so there is no identity to compute it against — see the task report.
+func (s *Service) Update(ctx context.Context, pollID, orgID string, in UpdatePollInput) (*PollView, error) {
+	if err := in.Validate(); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	poll, err := requireOrgPoll(ctx, q, pollID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if poll.Status == pollFinalizedStatus && in.Options != nil {
+		return nil, fmt.Errorf("%w: poll is finalized, options cannot be edited (TS: POLL_FINALIZED)", ErrConflict)
+	}
+
+	merged := poll
+	if in.Title != nil {
+		merged.Title = strings.TrimSpace(*in.Title)
+	}
+	if in.Description != nil {
+		merged.Description = optionalTrimmedString(in.Description)
+	}
+	if in.Location != nil {
+		merged.Location = optionalTrimmedString(in.Location)
+	}
+	if in.Timezone != nil {
+		merged.Timezone = *in.Timezone
+	}
+	if in.DeadlineAtSet {
+		if in.DeadlineAt == nil {
+			merged.DeadlineAt = sql.NullTime{}
+		} else {
+			t, perr := parseISODateTime(*in.DeadlineAt)
+			if perr != nil {
+				return nil, newValidationError("deadlineAt", "deadlineAt must be an ISO 8601 UTC datetime")
+			}
+			merged.DeadlineAt = sql.NullTime{Time: t, Valid: true}
+		}
+	}
+	if in.RequireParticipantEmail != nil {
+		merged.RequireParticipantEmail = *in.RequireParticipantEmail
+	}
+	if in.AllowComments != nil {
+		merged.AllowComments = *in.AllowComments
+	}
+	if in.AllowIfNeedBe != nil {
+		merged.AllowIfNeedBe = *in.AllowIfNeedBe
+	}
+	if in.SignupMaxClaims != nil {
+		merged.SignupMaxClaims = int32(*in.SignupMaxClaims)
+	}
+	merged.UpdatedAt = time.Now().UTC()
+
+	if err := q.UpdatePollScalars(ctx, queries.UpdatePollScalarsParams{
+		ID:                      pollID,
+		Title:                   merged.Title,
+		Description:             merged.Description,
+		Location:                merged.Location,
+		Timezone:                merged.Timezone,
+		DeadlineAt:              merged.DeadlineAt,
+		RequireParticipantEmail: merged.RequireParticipantEmail,
+		AllowComments:           merged.AllowComments,
+		AllowIfNeedBe:           merged.AllowIfNeedBe,
+		SignupMaxClaims:         merged.SignupMaxClaims,
+		UpdatedAt:               merged.UpdatedAt,
+	}); err != nil {
+		return nil, err
+	}
+
+	if in.Options != nil {
+		if err := replaceOptions(ctx, q, pollID, PollType(poll.Type), in.Options); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
+		return nil, err
+	}
+
+	view, err := s.buildView(ctx, q, merged, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+// replaceOptions ports the options-array half of updatePoll: options carrying an id that still
+// exists are updated in place (position/kind/fields), unrecognized/missing ids are inserted as new
+// options, and existing options not named in options are deleted (poll_options' ON DELETE CASCADE
+// on votes.option_id removes their votes as a side effect — matching the TS test "removing an
+// option deletes its votes"). For a signup poll, lowering a retained option's capacity below its
+// current claim count is rejected (ErrConflict — TS: CAPACITY_BELOW_CLAIMS) before any row is
+// touched.
+func replaceOptions(ctx context.Context, q *queries.Queries, pollID string, pollType PollType, options []OptionInput) error {
+	existing, err := q.ListOptionsByPoll(ctx, pollID)
+	if err != nil {
+		return err
+	}
+	existingByID := make(map[string]queries.PollOption, len(existing))
+	for _, o := range existing {
+		existingByID[o.ID] = o
+	}
+
+	if pollType == PollTypeSignup {
+		votes, err := q.ListVotesByPoll(ctx, pollID)
+		if err != nil {
+			return err
+		}
+		counts := map[string]int{}
+		for _, v := range votes {
+			if v.Answer == "yes" {
+				counts[v.OptionID]++
+			}
+		}
+		for _, opt := range options {
+			ex, ok := existingByID[opt.ID]
+			if opt.ID == "" || !ok {
+				continue
+			}
+			newCapacity := ex.Capacity
+			if opt.CapacitySet {
+				if opt.Capacity != nil {
+					newCapacity = sql.NullInt32{Int32: int32(*opt.Capacity), Valid: true}
+				} else {
+					newCapacity = sql.NullInt32{}
+				}
+			}
+			if newCapacity.Valid && int(newCapacity.Int32) < counts[opt.ID] {
+				return fmt.Errorf("%w: capacity below current claims (TS: CAPACITY_BELOW_CLAIMS)", ErrConflict)
+			}
+		}
+	}
+
+	keepIDs := make(map[string]bool, len(options))
+	for i, opt := range options {
+		ex, hasExisting := existingByID[opt.ID]
+		if opt.ID == "" {
+			hasExisting = false
+		}
+		id := opt.ID
+		if !hasExisting {
+			id = db.NewID()
+		}
+		keepIDs[id] = true
+
+		fallback := sql.NullInt32{Int32: 1, Valid: true}
+		if hasExisting {
+			fallback = ex.Capacity
+		}
+		cols, err := pollOptionColumns(opt, pollType, fallback)
+		if err != nil {
+			return err
+		}
+
+		if hasExisting {
+			if err := q.UpdatePollOption(ctx, queries.UpdatePollOptionParams{
+				ID: id, Position: int32(i), Kind: cols.Kind, StartAt: cols.StartAt,
+				EndAt: cols.EndAt, Label: cols.Label, Capacity: cols.Capacity,
+			}); err != nil {
+				return err
+			}
+		} else {
+			if err := q.InsertPollOption(ctx, queries.InsertPollOptionParams{
+				ID: id, PollID: pollID, Position: int32(i), Kind: cols.Kind, StartAt: cols.StartAt,
+				EndAt: cols.EndAt, Label: cols.Label, Capacity: cols.Capacity,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, ex := range existing {
+		if !keepIDs[ex.ID] {
+			if err := q.DeletePollOption(ctx, ex.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// SetStatus ports setPollStatus (open | closed).
+func (s *Service) SetStatus(ctx context.Context, pollID, orgID, status string) error {
+	if status != "open" && status != "closed" {
+		return newValidationError("status", "status must be one of open, closed")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	poll, err := requireOrgPoll(ctx, q, pollID, orgID)
+	if err != nil {
+		return err
+	}
+	if poll.Status == pollFinalizedStatus {
+		return fmt.Errorf("%w: poll is finalized (TS: POLL_FINALIZED)", ErrConflict)
+	}
+
+	if err := q.SetPollStatus(ctx, queries.SetPollStatusParams{
+		ID: pollID, Status: status, UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Finalize ports finalizePoll's domain mutation only: status -> finalized, finalized_option_id
+// set, in-tx room event. Unlike the TS source (whose finalizePoll also computes the deduped
+// recipient list and the caller then sends the finalized mail with its .ics), this port's exact
+// signature returns only an error — the recipients/mail concern is Task 4's
+// ("+ enqueues finalized mail via notifications (Task 4)" per the brief).
+func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	poll, err := requireOrgPoll(ctx, q, pollID, orgID)
+	if err != nil {
+		return err
+	}
+	if poll.Type == string(PollTypeSignup) {
+		return newValidationError("type", "signup polls cannot be finalized")
+	}
+	if poll.Status == pollFinalizedStatus {
+		return fmt.Errorf("%w: poll is already finalized", ErrConflict)
+	}
+
+	options, err := q.ListOptionsByPoll(ctx, pollID)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, o := range options {
+		if o.ID == optionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+
+	if err := q.FinalizePoll(ctx, queries.FinalizePollParams{
+		ID:                pollID,
+		FinalizedOptionID: sql.NullString{String: optionID, Valid: true},
+		Status:            pollFinalizedStatus,
+		UpdatedAt:         time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Delete ports deletePoll: a soft delete (deleted_at set). Also emits poll.changed/entity:poll —
+// the brief's own list of emitting mutations names only Update/SetStatus/Finalize, but
+// polls.functions.ts's deletePoll route calls notifyChanged(pollId, 'poll') too (so connected
+// viewers see the poll disappear), so this port includes it for TS behavioral parity; flagged in
+// the task report as an addition beyond the brief's literal list.
+func (s *Service) Delete(ctx context.Context, pollID, orgID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	if _, err := requireOrgPoll(ctx, q, pollID, orgID); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	if err := q.SoftDeletePoll(ctx, queries.SoftDeletePollParams{
+		ID: pollID, DeletedAt: sql.NullTime{Time: now, Valid: true},
+	}); err != nil {
+		return err
+	}
+	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Duplicate ports duplicatePoll: a new poll in the same org, owned by userID, with the same
+// options (fresh ids) but zero participants/votes/comments and status reset to "open". No room
+// event is emitted — the TS source doesn't call notifyChanged after duplicatePoll either, since
+// nobody is watching the brand-new poll's room yet.
+func (s *Service) Duplicate(ctx context.Context, pollID, orgID, userID string) (*PollView, error) {
+	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
+	if err != nil {
+		return nil, ErrForbidden
+	}
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return nil, ErrForbidden
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	original, err := requireOrgPoll(ctx, q, pollID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	options, err := q.ListOptionsByPoll(ctx, pollID)
+	if err != nil {
+		return nil, err
+	}
+
+	newID := db.NewID()
+	now := time.Now().UTC()
+
+	copyPoll := queries.Poll{
+		ID:                      newID,
+		OrganizationID:          orgIDInt,
+		CreatedBy:               sql.NullInt64{Int64: userIDInt, Valid: true},
+		Type:                    original.Type,
+		Title:                   original.Title + " (copy)",
+		Description:             original.Description,
+		Location:                original.Location,
+		Timezone:                original.Timezone,
+		Status:                  "open",
+		RequireParticipantEmail: original.RequireParticipantEmail,
+		AllowComments:           original.AllowComments,
+		AllowIfNeedBe:           original.AllowIfNeedBe,
+		SignupMaxClaims:         original.SignupMaxClaims,
+		CreatedAt:               now,
+		UpdatedAt:               now,
+	}
+
+	if err := q.InsertPoll(ctx, queries.InsertPollParams{
+		ID: copyPoll.ID, OrganizationID: copyPoll.OrganizationID, CreatedBy: copyPoll.CreatedBy,
+		Type: copyPoll.Type, Title: copyPoll.Title, Description: copyPoll.Description,
+		Location: copyPoll.Location, Timezone: copyPoll.Timezone, Status: copyPoll.Status,
+		DeadlineAt:              sql.NullTime{},
+		RequireParticipantEmail: copyPoll.RequireParticipantEmail,
+		AllowComments:           copyPoll.AllowComments,
+		AllowIfNeedBe:           copyPoll.AllowIfNeedBe,
+		SignupMaxClaims:         copyPoll.SignupMaxClaims,
+		CreatedAt:               copyPoll.CreatedAt,
+		UpdatedAt:               copyPoll.UpdatedAt,
+	}); err != nil {
+		return nil, err
+	}
+
+	for _, o := range options {
+		if err := q.InsertPollOption(ctx, queries.InsertPollOptionParams{
+			ID: db.NewID(), PollID: newID, Position: o.Position, Kind: o.Kind,
+			StartAt: o.StartAt, EndAt: o.EndAt, Label: o.Label, Capacity: o.Capacity,
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	// Carrying the duplicator's own notification override on the original across to the copy
+	// (originalOverride handling in the TS source) is Task 4's table to read; not ported here.
+
+	view, err := s.buildView(ctx, q, copyPoll, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+// ListMine ports listMyPolls.
+func (s *Service) ListMine(ctx context.Context, orgID string) ([]PollSummary, error) {
+	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
+	if err != nil {
+		return nil, ErrForbidden
+	}
+
+	rows, err := s.q.ListPollsByOrg(ctx, orgIDInt)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]PollSummary, 0, len(rows))
+	for _, p := range rows {
+		participants, err := s.q.ListParticipantsByPoll(ctx, p.ID)
+		if err != nil {
+			return nil, err
+		}
+		votes, err := s.q.ListVotesByPoll(ctx, p.ID)
+		if err != nil {
+			return nil, err
+		}
+		claimCount := 0
+		for _, v := range votes {
+			if v.Answer == "yes" {
+				claimCount++
+			}
+		}
+		out = append(out, PollSummary{
+			ID:               p.ID,
+			Title:            p.Title,
+			Type:             p.Type,
+			Status:           p.Status,
+			DeadlineAt:       nullTimeToISO(p.DeadlineAt),
+			ParticipantCount: len(participants),
+			ClaimCount:       claimCount,
+			CreatedAt:        formatISO(p.CreatedAt),
+			UpdatedAt:        formatISO(p.UpdatedAt),
+		})
+	}
+	return out, nil
+}
+
+// CloseExpired ports closeExpiredPoll — the job handler body a scheduled "poll.deadline" job
+// (Task 4) calls. Returns (false, nil) for a missing/deleted poll, a non-open poll, one with no
+// deadline, or one whose deadline hasn't passed yet; (true, nil) after closing it.
+//
+// The TS source has a second regression test here for a real bug in that implementation: D1
+// stored deadlineAt as text, and comparing two ISO timestamp *strings* lexicographically
+// disagrees with comparing the *instants* they denote once one of them lacks the other's
+// fractional-second digits (e.g. "…10:00:00Z" sorts after "…10:00:00.004Z" as strings, even
+// though the first instant is earlier) — Date.parse was used specifically to avoid that. Postgres
+// stores deadline_at as timestamptz and this port compares real time.Time instants throughout, so
+// that bug class cannot occur here; the ported test case is kept anyway, as a regression-proof of
+// the same real-world input shape (a whole-second, no-fraction deadline).
+func (s *Service) CloseExpired(ctx context.Context, pollID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	poll, err := q.GetPoll(ctx, pollID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if poll.Status != "open" || !poll.DeadlineAt.Valid || poll.DeadlineAt.Time.After(time.Now()) {
+		return false, nil
+	}
+
+	if err := q.SetPollStatus(ctx, queries.SetPollStatusParams{
+		ID: pollID, Status: "closed", UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		return false, err
+	}
+	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// optionalTrimmedString converts a *string field (nil = omitted) to sql.NullString, trimming
+// whitespace the same way zod's z.string().trim() would on the field's parsed value. A provided-
+// but-empty-after-trim string is still stored (Valid: true, String: "") — only an omitted (nil)
+// field is stored as SQL NULL.
+func optionalTrimmedString(s *string) sql.NullString {
+	if s == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: strings.TrimSpace(*s), Valid: true}
+}
+
+// optionColumns is the set of poll_options columns derived from one OptionInput.
+type optionColumns struct {
+	Kind     string
+	StartAt  sql.NullTime
+	EndAt    sql.NullTime
+	Label    sql.NullString
+	Capacity sql.NullInt32
+}
+
+// pollOptionColumns ports optionRowFields (service.ts). fallbackCapacity is used only when the
+// option's own capacity is omitted (OptionInput.CapacitySet == false) — see OptionInput's doc
+// comment for why omitted and explicit-null are handled differently.
+func pollOptionColumns(opt OptionInput, pollType PollType, fallbackCapacity sql.NullInt32) (optionColumns, error) {
+	var capacity sql.NullInt32
+	if pollType == PollTypeSignup {
+		switch {
+		case opt.CapacitySet && opt.Capacity != nil:
+			capacity = sql.NullInt32{Int32: int32(*opt.Capacity), Valid: true}
+		case opt.CapacitySet:
+			// explicit null -> unlimited (capacity left as the zero value, i.e. SQL NULL)
+		default:
+			capacity = fallbackCapacity
+		}
+	}
+
+	switch opt.Kind {
+	case OptionKindDate:
+		t, err := parseDateOnly(opt.Date)
+		if err != nil {
+			return optionColumns{}, fmt.Errorf("polls: invalid date option %q: %w", opt.Date, err)
+		}
+		return optionColumns{Kind: string(OptionKindDate), StartAt: sql.NullTime{Time: t, Valid: true}, Capacity: capacity}, nil
+	case OptionKindDatetime:
+		start, err := parseISODateTime(opt.StartAt)
+		if err != nil {
+			return optionColumns{}, fmt.Errorf("polls: invalid datetime option startAt %q: %w", opt.StartAt, err)
+		}
+		cols := optionColumns{Kind: string(OptionKindDatetime), StartAt: sql.NullTime{Time: start, Valid: true}, Capacity: capacity}
+		if opt.EndAt != nil && *opt.EndAt != "" {
+			end, err := parseISODateTime(*opt.EndAt)
+			if err != nil {
+				return optionColumns{}, fmt.Errorf("polls: invalid datetime option endAt %q: %w", *opt.EndAt, err)
+			}
+			cols.EndAt = sql.NullTime{Time: end, Valid: true}
+		}
+		return cols, nil
+	default: // text
+		return optionColumns{Kind: string(OptionKindText), Label: sql.NullString{String: opt.Label, Valid: true}, Capacity: capacity}, nil
+	}
+}

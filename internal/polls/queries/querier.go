@@ -9,7 +9,9 @@ import (
 )
 
 type Querier interface {
+	DeletePollOption(ctx context.Context, id string) error
 	FinalizePoll(ctx context.Context, arg FinalizePollParams) error
+	GetOrganizationName(ctx context.Context, id int64) (string, error)
 	GetPoll(ctx context.Context, id string) (Poll, error)
 	InsertComment(ctx context.Context, arg InsertCommentParams) error
 	InsertParticipant(ctx context.Context, arg InsertParticipantParams) error
@@ -22,6 +24,8 @@ type Querier interface {
 	ListVotesByPoll(ctx context.Context, pollID string) ([]Vote, error)
 	SetPollStatus(ctx context.Context, arg SetPollStatusParams) error
 	SoftDeletePoll(ctx context.Context, arg SoftDeletePollParams) error
+	UpdatePollOption(ctx context.Context, arg UpdatePollOptionParams) error
+	UpdatePollScalars(ctx context.Context, arg UpdatePollScalarsParams) error
 	UpsertVote(ctx context.Context, arg UpsertVoteParams) error
 }
 

@@ -61,3 +61,33 @@ INSERT INTO comments (
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7
 );
+
+-- name: UpdatePollScalars :exec
+UPDATE polls SET
+  title = $2,
+  description = $3,
+  location = $4,
+  timezone = $5,
+  deadline_at = $6,
+  require_participant_email = $7,
+  allow_comments = $8,
+  allow_if_need_be = $9,
+  signup_max_claims = $10,
+  updated_at = $11
+WHERE id = $1;
+
+-- name: UpdatePollOption :exec
+UPDATE poll_options SET
+  position = $2,
+  kind = $3,
+  start_at = $4,
+  end_at = $5,
+  label = $6,
+  capacity = $7
+WHERE id = $1;
+
+-- name: DeletePollOption :exec
+DELETE FROM poll_options WHERE id = $1;
+
+-- name: GetOrganizationName :one
+SELECT name FROM organizations WHERE id = $1;

@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+const deletePollOption = `-- name: DeletePollOption :exec
+DELETE FROM poll_options WHERE id = $1
+`
+
+func (q *Queries) DeletePollOption(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deletePollOption, id)
+	return err
+}
+
 const finalizePoll = `-- name: FinalizePoll :exec
 UPDATE polls SET finalized_option_id = $2, status = $3, updated_at = $4 WHERE id = $1
 `
@@ -30,6 +39,17 @@ func (q *Queries) FinalizePoll(ctx context.Context, arg FinalizePollParams) erro
 		arg.UpdatedAt,
 	)
 	return err
+}
+
+const getOrganizationName = `-- name: GetOrganizationName :one
+SELECT name FROM organizations WHERE id = $1
+`
+
+func (q *Queries) GetOrganizationName(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRowContext(ctx, getOrganizationName, id)
+	var name string
+	err := row.Scan(&name)
+	return name, err
 }
 
 const getPoll = `-- name: GetPoll :one
@@ -422,6 +442,86 @@ type SoftDeletePollParams struct {
 
 func (q *Queries) SoftDeletePoll(ctx context.Context, arg SoftDeletePollParams) error {
 	_, err := q.db.ExecContext(ctx, softDeletePoll, arg.ID, arg.DeletedAt)
+	return err
+}
+
+const updatePollOption = `-- name: UpdatePollOption :exec
+UPDATE poll_options SET
+  position = $2,
+  kind = $3,
+  start_at = $4,
+  end_at = $5,
+  label = $6,
+  capacity = $7
+WHERE id = $1
+`
+
+type UpdatePollOptionParams struct {
+	ID       string
+	Position int32
+	Kind     string
+	StartAt  sql.NullTime
+	EndAt    sql.NullTime
+	Label    sql.NullString
+	Capacity sql.NullInt32
+}
+
+func (q *Queries) UpdatePollOption(ctx context.Context, arg UpdatePollOptionParams) error {
+	_, err := q.db.ExecContext(ctx, updatePollOption,
+		arg.ID,
+		arg.Position,
+		arg.Kind,
+		arg.StartAt,
+		arg.EndAt,
+		arg.Label,
+		arg.Capacity,
+	)
+	return err
+}
+
+const updatePollScalars = `-- name: UpdatePollScalars :exec
+UPDATE polls SET
+  title = $2,
+  description = $3,
+  location = $4,
+  timezone = $5,
+  deadline_at = $6,
+  require_participant_email = $7,
+  allow_comments = $8,
+  allow_if_need_be = $9,
+  signup_max_claims = $10,
+  updated_at = $11
+WHERE id = $1
+`
+
+type UpdatePollScalarsParams struct {
+	ID                      string
+	Title                   string
+	Description             sql.NullString
+	Location                sql.NullString
+	Timezone                string
+	DeadlineAt              sql.NullTime
+	RequireParticipantEmail bool
+	AllowComments           bool
+	AllowIfNeedBe           bool
+	SignupMaxClaims         int32
+	UpdatedAt               time.Time
+}
+
+func (q *Queries) UpdatePollScalars(ctx context.Context, arg UpdatePollScalarsParams) error {
+	_, err := q.db.ExecContext(ctx, updatePollScalars,
+		arg.ID,
+		arg.Title,
+		arg.Description,
+		arg.Location,
+		arg.Timezone,
+		arg.DeadlineAt,
+		arg.RequireParticipantEmail,
+		arg.AllowComments,
+		arg.AllowIfNeedBe,
+		arg.SignupMaxClaims,
+		arg.UpdatedAt,
+	)
 	return err
 }
 
