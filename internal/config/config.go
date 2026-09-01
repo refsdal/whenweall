@@ -120,13 +120,13 @@ func Load(env map[string]string) (*Config, []string, error) {
 
 		EnableTestRoutes: boolEnv("ENABLE_TEST_ROUTES", false),
 		TrustProxy:       boolEnv("TRUST_PROXY", true),
-		// No env var: unlike TrustProxy, TS has no MIGRATE_ON_BOOT knob, and the brief
-		// specifies only a default, not a name to read it from.
-		MigrateOnBoot: true,
+		MigrateOnBoot:    boolEnv("MIGRATE_ON_BOOT", true),
 	}
 
 	if cfg.AppEnv == "" {
 		cfg.AppEnv = "development"
+	} else if cfg.AppEnv != "development" && cfg.AppEnv != "test" && cfg.AppEnv != "production" {
+		errs = append(errs, "APP_ENV must be one of development, test, production")
 	}
 	if cfg.EmailFrom == "" {
 		cfg.EmailFrom = "whenweall <no-reply@localhost>"
@@ -147,7 +147,7 @@ func Load(env map[string]string) (*Config, []string, error) {
 	rawAppURL := get("APP_URL")
 	if rawAppURL == "" {
 		errs = append(errs, "APP_URL is required, e.g. https://whenweall.example")
-	} else if u, err := url.Parse(rawAppURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	} else if u, err := url.Parse(rawAppURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		errs = append(errs, "APP_URL must be an absolute http(s) URL, e.g. https://whenweall.example")
 	} else {
 		cfg.AppURL = strings.TrimSuffix(rawAppURL, "/")

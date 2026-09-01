@@ -138,3 +138,49 @@ func TestOIDCNeedsAllThree(t *testing.T) {
 		t.Errorf("OIDCName default = %q, want sso", cfg.OIDCName)
 	}
 }
+
+func TestMigrateOnBootEnvOverride(t *testing.T) {
+	env := valid()
+	env["MIGRATE_ON_BOOT"] = "false"
+	cfg, _, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MigrateOnBoot {
+		t.Error("MigrateOnBoot should be false when MIGRATE_ON_BOOT=false")
+	}
+
+	cfg, _, err = Load(valid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MigrateOnBoot {
+		t.Error("MigrateOnBoot should default true when MIGRATE_ON_BOOT is unset")
+	}
+}
+
+func TestAppEnvMustBeValidEnum(t *testing.T) {
+	env := valid()
+	env["APP_ENV"] = "prod"
+	_, _, err := Load(env)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if !strings.Contains(err.Error(), "APP_ENV") {
+		t.Errorf("error should mention APP_ENV; got %q", err.Error())
+	}
+}
+
+func TestAppURLRequiresHost(t *testing.T) {
+	for _, bad := range []string{"https://", "https:example.com"} {
+		env := valid()
+		env["APP_URL"] = bad
+		_, _, err := Load(env)
+		if err == nil {
+			t.Fatalf("APP_URL=%q: want error", bad)
+		}
+		if !strings.Contains(err.Error(), "APP_URL") {
+			t.Errorf("APP_URL=%q: error should mention APP_URL; got %q", bad, err.Error())
+		}
+	}
+}
