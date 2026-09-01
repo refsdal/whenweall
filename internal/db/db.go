@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -33,8 +35,11 @@ func Open(ctx context.Context, databaseURL string, poolSize int) (*sql.DB, error
 	}
 	d.SetMaxOpenConns(poolSize)
 	d.SetMaxIdleConns(poolSize)
+	// Recycle connections periodically so a long-lived pool doesn't keep using connections
+	// that predate a Postgres failover or restart.
+	d.SetConnMaxLifetime(30 * time.Minute)
 	if err := d.PingContext(ctx); err != nil {
-		d.Close()
+		_ = d.Close()
 		return nil, fmt.Errorf("database unreachable: %w", err)
 	}
 	return d, nil
@@ -48,11 +53,18 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLock); err != nil {
 		return err
 	}
-	defer conn.ExecContext(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLock)
+	defer func() {
+		// The connection is about to be released back to the pool (or closed) regardless, so a
+		// failed unlock can't be retried here — but it's worth knowing about: it means the
+		// advisory lock stays held until Postgres notices the session end.
+		if _, err := conn.ExecContext(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLock); err != nil {
+			slog.Warn("failed to release migration advisory lock", "error", err)
+		}
+	}()
 
 	goose.SetBaseFS(migrations.FS)
 	if err := goose.SetDialect("postgres"); err != nil {

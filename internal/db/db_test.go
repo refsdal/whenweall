@@ -56,7 +56,7 @@ func TestMigrateNeverStarvesOnMinimalPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	if err := db.Migrate(ctx, d); err != nil {
 		t.Fatal(err)
