@@ -81,7 +81,7 @@ func Load(env map[string]string) (*Config, []string, error) {
 		if v == "" {
 			return def
 		}
-		return v == "true" || v == "1"
+		return strings.EqualFold(v, "true") || v == "1"
 	}
 
 	intEnv := func(k string, def int) int {

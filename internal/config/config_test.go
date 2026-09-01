@@ -159,6 +159,20 @@ func TestMigrateOnBootEnvOverride(t *testing.T) {
 	}
 }
 
+func TestBoolEnvIsCaseInsensitive(t *testing.T) {
+	for _, v := range []string{"true", "TRUE", "True", "1"} {
+		env := valid()
+		env["TRUST_PROXY"] = v
+		cfg, _, err := Load(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.TrustProxy {
+			t.Errorf("TRUST_PROXY=%q: TrustProxy = false, want true", v)
+		}
+	}
+}
+
 func TestAppEnvMustBeValidEnum(t *testing.T) {
 	env := valid()
 	env["APP_ENV"] = "prod"
