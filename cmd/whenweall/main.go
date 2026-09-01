@@ -18,6 +18,7 @@ import (
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/httpserver"
+	"github.com/refsdal/whenweall/internal/jobs"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -76,6 +77,15 @@ func serve() int {
 			return 1
 		}
 	}
+
+	// replicaID identifies this process to ClaimDue's locked_by column — it only needs to be
+	// unique among concurrently running replicas, not stable across restarts.
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "replica"
+	}
+	worker := jobs.NewWorker(sqlDB, hostname+"-"+db.NewID()[:6], slog.Default())
+	go worker.Run(ctx)
 
 	srv := httpserver.New(cfg, sqlDB)
 	if err := srv.ListenAndServe(ctx); err != nil {
