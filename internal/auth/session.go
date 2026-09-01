@@ -46,6 +46,11 @@ func (s *Service) resolveSession(r *http.Request) *Session {
 		Email:  validated.User.Email,
 	}
 
+	// Every authenticated request is where the personal-org invariant gets enforced (lazily,
+	// once per user per process) — see ensurePersonalOrgOnce's doc comment in auth.go for why
+	// this replaced an earlier Limen-hook-based attempt.
+	s.ensurePersonalOrgOnce(r.Context(), validated.User)
+
 	if validated.Session != nil {
 		if activeOrgID, err := s.orgs.GetActiveOrganizationID(r.Context(), validated.Session); err == nil && activeOrgID != nil {
 			sess.ActiveOrgID = fmt.Sprint(activeOrgID)

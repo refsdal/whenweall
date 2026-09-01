@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/thecodearcher/limen"
 	sqladapter "github.com/thecodearcher/limen/adapters/sql"
@@ -57,6 +59,12 @@ type Service struct {
 	cfg         *config.Config
 	enqueueMail Enqueuer
 	logger      *slog.Logger
+
+	// personalOrgEnsured is an in-process once-cache (keyed by fmt.Sprint(user.ID)) of users this
+	// process has already confirmed have at least one organization — see
+	// ensurePersonalOrgOnce's doc comment for why the invariant is enforced here, lazily, rather
+	// than via a Limen HTTP hook.
+	personalOrgEnsured sync.Map
 }
 
 // New builds the Service: constructs the Limen configuration (every plugin the product needs,
@@ -181,7 +189,15 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 		)),
 		HTTP: limen.NewDefaultHTTPConfig(
 			limen.WithHTTPBasePath("/api/v1/auth"),
-			limen.WithHTTPHooks(s.personalOrgHooks()),
+			// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
+			// (this package's first attempt at the personal-org invariant) turns out to miss most
+			// real signups. ctx.GetAuthResult() is only populated when the route handler itself
+			// calls Responder.SessionResponse — but this config's oauth plugin runs in its
+			// default redirect mode (RedirectWithSession), which redirects the browser instead of
+			// calling SessionResponse, and magic-link's verify (autoCreateUser default true) has
+			// the same gap. A hook keyed to specific route IDs silently no-ops for both. The
+			// invariant is instead enforced lazily, once per user per process, in
+			// resolveSession (session.go) — see ensurePersonalOrgOnce.
 		),
 		CLI: cliCfg,
 	}
@@ -218,63 +234,126 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 	return nil
 }
 
-// personalOrgHooks builds the After hook that gives every user a personal organization the
-// moment they authenticate in a way that might be the very first time: route ID "signup"
-// (credential-password's POST /signup/credential) and "oauth-callback" (oauth's
-// GET /oauth/:provider/callback) — see internal/auth/routes.txt — are the only two routes that
-// can establish a session for a user who didn't already exist a moment ago. A plain "signin"
-// never needs this: by definition the user already exists, and (per the invariant this hook
-// maintains) already has at least one organization. Ports the intent of
-// src/server/auth/personal-org.ts's createPersonalOrganization.
-func (s *Service) personalOrgHooks() *limen.Hooks {
-	return &limen.Hooks{
-		After: []*limen.Hook{
-			{
-				PathMatcher: func(ctx *limen.HookContext) bool {
-					routeID := ctx.RouteID()
-					return routeID == "signup" || routeID == "oauth-callback"
-				},
-				Run: s.ensurePersonalOrganization,
-			},
-		},
+// ensurePersonalOrgOnce is called from resolveSession (session.go) for every request that carries
+// a valid session, on the request's own goroutine. It guarantees user has at least one
+// organization — the silent "personal org" every user gets, named from their email's local part
+// (ports src/server/auth/personal-org.ts's createPersonalOrganization) — enforcing the invariant
+// lazily rather than via a Limen HTTP hook (see the comment in buildLimenConfig's HTTP block for
+// why: GetAuthResult() misses both redirect-mode OAuth and magic-link signins). This runs on
+// literally every authenticated request until it succeeds once for a given user, at which point
+// personalOrgEnsured short-circuits every later request for that user in this process — so the
+// one-time cost (an advisory-lock round trip plus a ListOrganizations call) is paid at most once
+// per user per process, not per request.
+//
+// Never fails the request: any error is logged and swallowed. The user is deliberately NOT cached
+// on error, so the very next request from them retries rather than silently giving up on the
+// invariant for the rest of this process's life.
+func (s *Service) ensurePersonalOrgOnce(ctx context.Context, user *limen.User) {
+	key := fmt.Sprint(user.ID)
+	if _, done := s.personalOrgEnsured.Load(key); done {
+		return
+	}
+
+	if err := s.ensurePersonalOrganizationForUser(ctx, user); err != nil {
+		s.logger.Error("auth: personal-org: ensure failed", "user_id", key, "error", err)
+		return
+	}
+
+	s.personalOrgEnsured.Store(key, struct{}{})
+}
+
+// personalOrgLockRetryInterval is how long ensurePersonalOrganizationForUser waits between
+// attempts to acquire the per-user advisory lock when it's currently held by someone else.
+const personalOrgLockRetryInterval = 20 * time.Millisecond
+
+// ensurePersonalOrganizationForUser is the reusable core: check-then-create, made safe against two
+// concurrent first-requests for the same brand-new user (across goroutines in this process, or
+// across replicas) via a Postgres advisory lock scoped to the user.
+//
+// The lock is acquired with pg_try_advisory_xact_lock in a poll loop — deliberately NOT a
+// blocking pg_advisory_xact_lock, despite that being the more obvious way to write this. A
+// blocking acquire holds its database/sql connection checked out of the pool for the entire wait.
+// With several concurrent callers contending for the same key, every "loser" then sits blocked
+// with a connection pinned; meanwhile the "winner" (the one actually holding the lock) needs a
+// *second*, independent connection to run ListOrganizations/CreateOrganization on (those go
+// through the organization plugin's own connection acquisition, not this function's transaction —
+// there is no supported way to make them share it). Once the pool is smaller than
+// (contending callers + 1), that second connection can never become free — the callers are all
+// parked waiting on a lock only the goroutine that can't get its second connection will ever
+// release. Self-deadlock. This is exactly what
+// TestPersonalOrgConcurrentFirstRequestsCreateExactlyOne hit (hard hang) against testdb's
+// 5-connection pool with a plain blocking pg_advisory_xact_lock, which is what caught this.
+// Polling with a non-blocking try-lock and releasing the connection between attempts means no
+// caller ever blocks while pinning a connection, so the winner's second connection is always
+// eventually available regardless of pool size.
+func (s *Service) ensurePersonalOrganizationForUser(ctx context.Context, user *limen.User) error {
+	for {
+		acquired, err := s.withPersonalOrgTryLock(ctx, fmt.Sprint(user.ID), func() error {
+			return s.createPersonalOrgIfMissing(ctx, user)
+		})
+		if err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(personalOrgLockRetryInterval):
+		}
 	}
 }
 
-// ensurePersonalOrganization is the After hook's Run function. It must never fail the request a
-// personal organization is a convenience, not something worth 500ing a signup or OAuth callback
-// over — so every error is logged and swallowed, and this always returns true (continue).
-func (s *Service) ensurePersonalOrganization(ctx *limen.HookContext) bool {
-	authResult := ctx.GetAuthResult()
-	if authResult == nil || authResult.User == nil {
-		// The route didn't actually establish a session (e.g. signup failed validation, or the
-		// oauth callback errored before a session was created) — nothing to do.
-		return true
+// withPersonalOrgTryLock makes a single, non-blocking attempt to take the advisory lock scoped to
+// key. If acquired, it runs fn and commits (releasing the xact-scoped lock) only after fn
+// succeeds; if the lock is currently held by someone else, it returns acquired == false, err ==
+// nil so the caller can back off and retry.
+func (s *Service) withPersonalOrgTryLock(ctx context.Context, key string, fn func() error) (acquired bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin personal-org lock tx: %w", err)
 	}
-	s.ensurePersonalOrganizationForUser(ctx.Request().Context(), authResult.User)
-	return true
+	defer func() { _ = tx.Rollback() }() // no-op once Commit has run
+
+	var gotLock bool
+	if err := tx.QueryRowContext(ctx,
+		"SELECT pg_try_advisory_xact_lock(hashtext('personal-org:' || $1))", key,
+	).Scan(&gotLock); err != nil {
+		return false, fmt.Errorf("try personal-org advisory lock: %w", err)
+	}
+	if !gotLock {
+		return false, nil
+	}
+
+	if err := fn(); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit personal-org lock tx: %w", err)
+	}
+	return true, nil
 }
 
-// ensurePersonalOrganizationForUser is personalOrgHooks' idempotency check plus creation, factored
-// out of ensurePersonalOrganization so it can be exercised directly in tests (see
-// personal_org_test.go) without needing a real oauth-callback round trip against a live OAuth
-// provider to prove the "does nothing for an existing user" half of the contract: this is exactly
-// what an oauth-callback re-sign-in of an existing user would hit.
-func (s *Service) ensurePersonalOrganizationForUser(ctx context.Context, user *limen.User) {
+// createPersonalOrgIfMissing re-checks organization membership — necessary because another caller
+// may have created the org and released the lock while this one was retrying to acquire it — and
+// creates the personal organization (named from the user's email local part, plugin-generated
+// slug) only if the user still has none.
+func (s *Service) createPersonalOrgIfMissing(ctx context.Context, user *limen.User) error {
 	page, err := s.orgs.ListOrganizations(ctx, user, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 1})
 	if err != nil {
-		s.logger.Error("auth: personal-org hook: listing organizations failed", "error", err)
-		return
+		return fmt.Errorf("list organizations: %w", err)
 	}
 	if page.Total > 0 {
-		// Already has at least one org (the common case: an existing user signing back in via
-		// oauth-callback) — idempotent no-op.
-		return
+		return nil
 	}
 
 	name := nameFromEmail(user.Email)
 	if _, err := s.orgs.CreateOrganization(ctx, user, &organization.CreateOrganizationRequest{Name: name, Slug: ""}); err != nil {
-		s.logger.Error("auth: personal-org hook: creating personal organization failed", "error", err)
+		return fmt.Errorf("create personal organization: %w", err)
 	}
+	return nil
 }
 
 // parseLimenID converts a Session's stringified id (UserID/ActiveOrgID, both fmt.Sprint of
