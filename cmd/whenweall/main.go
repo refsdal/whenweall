@@ -68,7 +68,7 @@ func serve() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 
 	if cfg.MigrateOnBoot {
 		if err := db.Migrate(ctx, sqlDB); err != nil {
@@ -102,7 +102,7 @@ func migrateCmd() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 
 	if err := db.Migrate(ctx, sqlDB); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -123,7 +123,7 @@ func healthcheck() int {
 	if err != nil {
 		return 1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return 1
 	}
