@@ -47,19 +47,22 @@ const pollFinalizedStatus = "finalized"
 // requireOrgPoll fetches pollID (queries.GetPoll already excludes soft-deleted rows) and checks
 // it belongs to orgID — the org-scoping half of requireManagedPoll (service.ts).
 //
-// Deviation from the TS source, both required by the brief's exact method signatures: every
-// managing call here (Update/SetStatus/Finalize/Delete/Duplicate) carries an orgID but no userID
-// or role, so the creator-or-admin/owner check requireManagedPoll also enforces
-// (canManageContent: "a same-org member who didn't create it gets FORBIDDEN") cannot be
-// reproduced at this layer — there is no identity to check it against. A second, related
-// difference: TS deliberately maps "poll exists but in a different org" to NOT_FOUND, specifically
-// so a poll id's existence is never revealed outside its own org; this port reports ErrForbidden
-// for that case instead, per the brief's own wording ("wrong org -> ErrForbidden"). Both are
-// flagged in errors.go's ErrForbidden doc comment and in the task report.
+// Wrong-org poll -> ErrNotFound, matching the TS source's own leak-avoidance intent: a poll id's
+// existence must never be revealed outside its own org. (Task 7 reverted an earlier, documented
+// deviation here that mapped this case to ErrForbidden instead — see the task 7 report for why:
+// an accumulated review requirement from Tasks 2-4's own reviews.)
+//
+// Deviation from the TS source that DOES still hold, required by the brief's exact method
+// signatures: every managing call here (Update/SetStatus/Finalize/Delete/Duplicate) carries an
+// orgID but no userID or role, so the creator-or-admin/owner check requireManagedPoll also
+// enforces (canManageContent: "a same-org member who didn't create it gets FORBIDDEN") cannot be
+// reproduced by requireOrgPoll itself — there is no identity to check it against here. Task 7
+// retrofits that check at the HTTP handler layer instead, via RequireManageable below, which has
+// the caller's Session identity to check it against.
 func requireOrgPoll(ctx context.Context, q *queries.Queries, pollID, orgID string) (queries.Poll, error) {
 	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
 	if err != nil {
-		return queries.Poll{}, ErrForbidden
+		return queries.Poll{}, ErrNotFound
 	}
 	poll, err := q.GetPoll(ctx, pollID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -69,9 +72,32 @@ func requireOrgPoll(ctx context.Context, q *queries.Queries, pollID, orgID strin
 		return queries.Poll{}, err
 	}
 	if poll.OrganizationID != orgIDInt {
-		return queries.Poll{}, ErrForbidden
+		return queries.Poll{}, ErrNotFound
 	}
 	return poll, nil
+}
+
+// RequireManageable ports the identity-aware half of requireManagedPoll (service.ts) that
+// requireOrgPoll's own signature can't reach: NOT_FOUND for a missing or wrong-org poll (see
+// requireOrgPoll's doc comment), then FORBIDDEN unless userID is the poll's own creator or an
+// owner/admin of orgID (canManagePoll — the same predicate participants.go/claims.go already use
+// for participant/comment/claim authorization). Task 7's HTTP handler layer calls this before
+// Update/SetStatus/Finalize/Delete/Duplicate — the five T2 "managing" methods whose own brief-
+// pinned signatures carry no identity to check this against themselves — so the retrofit lives
+// here rather than widening each of their signatures.
+func (s *Service) RequireManageable(ctx context.Context, pollID, orgID, userID string) error {
+	poll, err := requireOrgPoll(ctx, s.q, pollID, orgID)
+	if err != nil {
+		return err
+	}
+	canManage, err := s.canManagePoll(ctx, s.q, poll.OrganizationID, poll.CreatedBy, userID)
+	if err != nil {
+		return err
+	}
+	if !canManage {
+		return ErrForbidden
+	}
+	return nil
 }
 
 // Create ports createPoll. Returns the freshly created poll's view; IsOwner is always true on it
@@ -465,12 +491,14 @@ func (s *Service) SetStatus(ctx context.Context, pollID, orgID, status string) e
 	return tx.Commit()
 }
 
-// Finalize ports finalizePoll's domain mutation only: status -> finalized, finalized_option_id
-// set, in-tx room event. Unlike the TS source (whose finalizePoll also computes the deduped
-// recipient list and the caller then sends the finalized mail with its .ics), this port's exact
-// signature returns only an error — the recipients/mail concern is Task 4's
-// ("+ enqueues finalized mail via notifications (Task 4)" per the brief).
-func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID string) error {
+// Finalize ports finalizePoll's domain mutation, its unconditional participant/owner "the time is
+// set" mail (Task 4), AND — actorUserID, added in Task 7 per an accumulated review requirement —
+// the separate subscriber notification polls.functions.ts's finalizePoll ROUTE fires afterward via
+// emitPollEvent(pollId, 'poll.finalized', {actorUserId}): every org member subscribed to this poll
+// with the poll.finalized email channel on, EXCLUDING the acting user (resolveRecipients already
+// drops actorUserID) and excluding anyone already enqueued the direct-mail way above (so a
+// subscribed owner/participant never gets two "finalized" emails for the same event).
+func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUserID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -527,6 +555,7 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID string) 
 	// cased), owner added only if not already present. One "mail:poll"/"finalized" job per unique
 	// recipient, ids-only (participantId or userId — never an address).
 	seenEmail := make(map[string]bool)
+	seenUserID := make(map[string]bool)
 	participantRows, err := q.ListParticipantsByPoll(ctx, pollID)
 	if err != nil {
 		return err
@@ -553,13 +582,33 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID string) 
 			return oerr
 		default:
 			key := strings.ToLower(owner.Email)
+			ownerIDStr := strconv.FormatInt(owner.ID, 10)
 			if !seenEmail[key] {
 				if err := enqueueMailPoll(ctx, tx, mailPollPayload{
-					PollID: pollID, Event: "finalized", UserID: strconv.FormatInt(owner.ID, 10),
+					PollID: pollID, Event: "finalized", UserID: ownerIDStr,
 				}); err != nil {
 					return err
 				}
 			}
+			seenUserID[ownerIDStr] = true
+		}
+	}
+
+	// Task 7: the separate subscriber notification (emitPollEvent's own poll.finalized call in
+	// polls.functions.ts's finalizePoll route) — every org member subscribed to poll.finalized's
+	// email channel, minus the actor (resolveRecipients' own actorUserID parameter) and minus
+	// anyone the direct-mail loop above already enqueued for.
+	recipients, err := s.resolveRecipients(ctx, q, poll.OrganizationID, pollID, EventPollFinalized, actorUserID)
+	if err != nil {
+		return err
+	}
+	for _, r := range recipients {
+		if seenUserID[r.UserID] {
+			continue
+		}
+		seenUserID[r.UserID] = true
+		if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "finalized", UserID: r.UserID}); err != nil {
+			return err
 		}
 	}
 

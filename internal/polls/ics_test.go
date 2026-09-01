@@ -70,7 +70,7 @@ func TestBuildPollICS(t *testing.T) {
 			t.Fatalf("Create: %v", err)
 		}
 
-		if err := s.Finalize(ctx, view.ID, orgID, view.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, view.ID, orgID, view.Options[0].ID, userID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -91,7 +91,7 @@ func TestBuildPollICS(t *testing.T) {
 		view := createTestPoll(t, ctx, s, orgID, userID)
 		optionID := view.Options[0].ID
 
-		if err := s.Finalize(ctx, view.ID, orgID, optionID); err != nil {
+		if err := s.Finalize(ctx, view.ID, orgID, optionID, userID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -153,7 +153,7 @@ func TestBuildPollICS(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := s.Finalize(ctx, view.ID, orgID, view.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, view.ID, orgID, view.Options[0].ID, userID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 

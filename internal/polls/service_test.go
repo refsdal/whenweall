@@ -574,7 +574,7 @@ func TestUpdate(t *testing.T) {
 		orgID, ownerID := seedOrgAndUser(t, d)
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1 := created.Options[0]
-		if err := s.Finalize(ctx, created.ID, orgID, opt1.ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, opt1.ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -591,7 +591,7 @@ func TestUpdate(t *testing.T) {
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -736,7 +736,7 @@ func TestSetStatus(t *testing.T) {
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -756,7 +756,7 @@ func TestFinalize(t *testing.T) {
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1 := created.Options[0]
 
-		if err := s.Finalize(ctx, created.ID, orgID, opt1.ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, opt1.ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 		view, err := s.GetView(ctx, created.ID, polls.Viewer{})
@@ -775,7 +775,7 @@ func TestFinalize(t *testing.T) {
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		other := createTestPoll(t, ctx, s, orgID, ownerID)
 
-		if err := s.Finalize(ctx, created.ID, orgID, other.Options[0].ID); !errors.Is(err, polls.ErrNotFound) {
+		if err := s.Finalize(ctx, created.ID, orgID, other.Options[0].ID, ownerID); !errors.Is(err, polls.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
 	})
@@ -785,11 +785,11 @@ func TestFinalize(t *testing.T) {
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[1].ID); !errors.Is(err, polls.ErrConflict) {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[1].ID, ownerID); !errors.Is(err, polls.ErrConflict) {
 			t.Errorf("err = %v, want ErrConflict", err)
 		}
 	})
@@ -807,7 +807,7 @@ func TestFinalize(t *testing.T) {
 			t.Fatalf("before.BestOptionID = %v, want %s", before.BestOptionID, opt1.ID)
 		}
 
-		if err := s.Finalize(ctx, created.ID, orgID, opt2.ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, opt2.ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 		after, _ := s.GetView(ctx, created.ID, polls.Viewer{})
@@ -825,7 +825,7 @@ func TestFinalize(t *testing.T) {
 		orgID, ownerID := seedOrgAndUser(t, d)
 		created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 0)
 
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); !errors.Is(err, polls.ErrValidation) {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); !errors.Is(err, polls.ErrValidation) {
 			t.Errorf("err = %v, want ErrValidation", err)
 		}
 	})
@@ -1020,7 +1020,7 @@ func TestCloseExpired(t *testing.T) {
 		if _, err := s.Update(ctx, created.ID, orgID, polls.UpdatePollInput{DeadlineAtSet: true, DeadlineAt: &past}); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -1035,12 +1035,17 @@ func TestCloseExpired(t *testing.T) {
 }
 
 // TestOrgScoping ports the org-scoping half of org-authz.workers.test.ts's "org authorization
-// matrix" test: requireManagedPoll's NOT_FOUND-for-missing and (this port's) ErrForbidden-for-
-// wrong-org behavior. The TS test's other half — a same-org member who didn't create the poll
-// gets FORBIDDEN, while an admin/owner who didn't create it is still allowed — is not portable at
-// this layer: Update/SetStatus/Finalize/Delete/Duplicate's brief-mandated signatures take only an
-// orgID, never a userID or role, so there is no way for this service to tell "some other member of
-// this org" apart from "the creator" or "an admin". See requireOrgPoll's doc comment.
+// matrix" test: requireManagedPoll's NOT_FOUND-for-missing AND NOT_FOUND-for-wrong-org behavior.
+// Task 7 reverted requireOrgPoll's wrong-org mapping from this port's earlier (documented)
+// ErrForbidden deviation back to ErrNotFound, matching the TS source's own leak-avoidance intent
+// (a poll id's existence must never be revealed outside its own org) — see the accumulated
+// review requirement in the task 7 report. The TS test's other half — a same-org member who
+// didn't create the poll gets FORBIDDEN, while an admin/owner who didn't create it is still
+// allowed — is retrofitted at the HTTP handler layer (Service.RequireManageable), since
+// Update/SetStatus/Finalize/Delete/Duplicate's brief-mandated signatures take only an orgID,
+// never a userID or role, so there is no way for this service's own methods to tell "some other
+// member of this org" apart from "the creator" or "an admin". See requireOrgPoll's and
+// RequireManageable's doc comments.
 func TestOrgScoping(t *testing.T) {
 	ctx := context.Background()
 	d := testdb.New(t)
@@ -1052,20 +1057,20 @@ func TestOrgScoping(t *testing.T) {
 	if _, err := s.Update(ctx, "missing12345", orgID, polls.UpdatePollInput{}); !errors.Is(err, polls.ErrNotFound) {
 		t.Errorf("Update(missing) err = %v, want ErrNotFound", err)
 	}
-	if _, err := s.Update(ctx, created.ID, otherOrgID, polls.UpdatePollInput{}); !errors.Is(err, polls.ErrForbidden) {
-		t.Errorf("Update(wrong org) err = %v, want ErrForbidden", err)
+	if _, err := s.Update(ctx, created.ID, otherOrgID, polls.UpdatePollInput{}); !errors.Is(err, polls.ErrNotFound) {
+		t.Errorf("Update(wrong org) err = %v, want ErrNotFound", err)
 	}
-	if err := s.SetStatus(ctx, created.ID, otherOrgID, "closed"); !errors.Is(err, polls.ErrForbidden) {
-		t.Errorf("SetStatus(wrong org) err = %v, want ErrForbidden", err)
+	if err := s.SetStatus(ctx, created.ID, otherOrgID, "closed"); !errors.Is(err, polls.ErrNotFound) {
+		t.Errorf("SetStatus(wrong org) err = %v, want ErrNotFound", err)
 	}
-	if err := s.Finalize(ctx, created.ID, otherOrgID, created.Options[0].ID); !errors.Is(err, polls.ErrForbidden) {
-		t.Errorf("Finalize(wrong org) err = %v, want ErrForbidden", err)
+	if err := s.Finalize(ctx, created.ID, otherOrgID, created.Options[0].ID, ownerID); !errors.Is(err, polls.ErrNotFound) {
+		t.Errorf("Finalize(wrong org) err = %v, want ErrNotFound", err)
 	}
-	if err := s.Delete(ctx, created.ID, otherOrgID); !errors.Is(err, polls.ErrForbidden) {
-		t.Errorf("Delete(wrong org) err = %v, want ErrForbidden", err)
+	if err := s.Delete(ctx, created.ID, otherOrgID); !errors.Is(err, polls.ErrNotFound) {
+		t.Errorf("Delete(wrong org) err = %v, want ErrNotFound", err)
 	}
-	if _, err := s.Duplicate(ctx, created.ID, otherOrgID, otherUserID); !errors.Is(err, polls.ErrForbidden) {
-		t.Errorf("Duplicate(wrong org) err = %v, want ErrForbidden", err)
+	if _, err := s.Duplicate(ctx, created.ID, otherOrgID, otherUserID); !errors.Is(err, polls.ErrNotFound) {
+		t.Errorf("Duplicate(wrong org) err = %v, want ErrNotFound", err)
 	}
 
 	// Same org, different (arbitrary) member: allowed, since this layer only checks org

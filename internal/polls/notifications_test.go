@@ -130,7 +130,7 @@ func TestFinalizeEnqueuesMailForEachEmailedParticipant(t *testing.T) {
 	seedParticipant(t, d, created.ID, "Bob", map[string]string{slot: "yes"}, "")                 // no email -> excluded
 	seedParticipant(t, d, created.ID, "Cleo", map[string]string{slot: "yes"}, "ADA@example.com") // same address, different case -> deduped with Ada
 
-	if err := s.Finalize(ctx, created.ID, orgID, slot); err != nil {
+	if err := s.Finalize(ctx, created.ID, orgID, slot, ownerID); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestFinalizeCancelsPendingDeadlineJob(t *testing.T) {
 		t.Fatalf("poll.deadline jobs before finalize = %d, want 1", n)
 	}
 
-	if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); err != nil {
+	if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -701,7 +701,7 @@ func TestMailPollDeliversRealMail(t *testing.T) {
 	// finalized: a datetime poll, one participant with an email, finalize it.
 	scheduling := createTestPoll(t, ctx, s, orgID, ownerID)
 	seedParticipant(t, d, scheduling.ID, "Ada", map[string]string{scheduling.Options[0].ID: "yes"}, "ada@example.com")
-	if err := s.Finalize(ctx, scheduling.ID, orgID, scheduling.Options[0].ID); err != nil {
+	if err := s.Finalize(ctx, scheduling.ID, orgID, scheduling.Options[0].ID, ownerID); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 

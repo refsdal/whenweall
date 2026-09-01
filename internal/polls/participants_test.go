@@ -630,7 +630,7 @@ func TestRemoveParticipant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AddParticipant: %v", err)
 		}
-		if err := s.Finalize(ctx, created.ID, orgID, opt1.ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, opt1.ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 
@@ -779,7 +779,7 @@ func TestAddComment(t *testing.T) {
 			t.Fatalf("AddComment (closed): %v", err)
 		}
 
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID); err != nil {
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
 			t.Fatalf("Finalize: %v", err)
 		}
 		if _, err := s.AddComment(ctx, created.ID, polls.CommentInput{AuthorName: "Bob", Body: "y"}, polls.Viewer{}); err != nil {
