@@ -4,12 +4,12 @@ package polls
 // src/lib/ics.ts's buildIcs (the actual VCALENDAR/VEVENT string builder) — Go has no shared
 // frontend/worker "lib" package to split the two across, so both live in this one file.
 //
-// Deviation from the brief's literal port: buildIcs (TS) takes an absolute `url` built from
-// `env.APP_URL` (a Workers binding). BuildPollICS's pinned signature — (ctx, q, pollID), no
-// config — has no App URL to inject, so the VEVENT's URL property is a host-relative "/p/{id}"
-// instead of an absolute link. Neither ported test asserts the URL property's value, so this
-// doesn't affect byte-fidelity of anything under test; flagged for whoever wires this into the
-// calendar.ics route (task 7) in case an absolute URL turns out to matter there.
+// Deviation from the brief's literal signature: BuildPollICS takes an extra pollURL parameter
+// (the caller's already-computed absolute URL, e.g. `${APP_URL}/p/{id}`) that the brief's pinned
+// (ctx, q, pollID) didn't include. TS's buildOptionIcs/buildPollIcs build that same absolute URL
+// from env.APP_URL (a Workers binding) that BuildPollICS itself has no access to — the caller
+// already has it (see timers.go's sendFinalizedMail, which already computed pollURL for its own
+// mail body), so it's threaded straight through rather than reconstructed.
 
 import (
 	"context"
@@ -191,11 +191,13 @@ func buildIcsCalendar(e icsEvent, now time.Time) string {
 	return strings.Join(folded, "\r\n") + "\r\n"
 }
 
-// BuildPollICS builds the .ics file for pollID's finalized option. Returns ("", nil, nil) — not an
-// error — when the poll is missing/soft-deleted, isn't finalized, its finalized option is gone, or
-// the finalized option is a plain-text option with no calendar meaning; ports buildPollIcs's own
-// "return null" cases (ics.ts) plus the filename the caller attaches it under.
-func BuildPollICS(ctx context.Context, q *queries.Queries, pollID string) (filename string, ics []byte, err error) {
+// BuildPollICS builds the .ics file for pollID's finalized option, with the VEVENT's URL property
+// set to pollURL (the caller's absolute poll link, e.g. "https://whenweall.example/p/{id}" —
+// ports TS's `${env.APP_URL}/p/${poll.id}`). Returns ("", nil, nil) — not an error — when the
+// poll is missing/soft-deleted, isn't finalized, its finalized option is gone, or the finalized
+// option is a plain-text option with no calendar meaning; ports buildPollIcs's own "return null"
+// cases (ics.ts) plus the filename the caller attaches it under.
+func BuildPollICS(ctx context.Context, q *queries.Queries, pollID, pollURL string) (filename string, ics []byte, err error) {
 	poll, err := q.GetPoll(ctx, pollID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, nil
@@ -230,7 +232,7 @@ func BuildPollICS(ctx context.Context, q *queries.Queries, pollID string) (filen
 	event := icsEvent{
 		uid:   poll.ID + "@whenweall",
 		title: poll.Title,
-		url:   "/p/" + poll.ID,
+		url:   pollURL,
 		start: start,
 	}
 	if poll.Description.Valid {

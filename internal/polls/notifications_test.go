@@ -598,11 +598,13 @@ type mailpitMessagesResponse struct {
 }
 
 type mailpitAttachment struct {
+	PartID      string `json:"PartID"`
 	FileName    string `json:"FileName"`
 	ContentType string `json:"ContentType"`
 }
 
 type mailpitMessageDetail struct {
+	ID          string              `json:"ID"`
 	Attachments []mailpitAttachment `json:"Attachments"`
 }
 
@@ -662,6 +664,23 @@ func fetchMailpitMessageTo(t *testing.T, apiBaseURL, to string) mailpitMessageDe
 		t.Fatalf("unmarshal /api/v1/message/%s: %v", id, err)
 	}
 	return out
+}
+
+// fetchMailpitAttachmentContent fetches one attachment part's raw bytes via Mailpit's
+// GET /api/v1/message/{ID}/part/{PartID} — the message detail response only carries the
+// attachment's metadata (name/content-type), not its content.
+func fetchMailpitAttachmentContent(t *testing.T, apiBaseURL, messageID, partID string) string {
+	t.Helper()
+	resp, err := http.Get(apiBaseURL + "/api/v1/message/" + messageID + "/part/" + partID)
+	if err != nil {
+		t.Fatalf("GET /api/v1/message/%s/part/%s: %v", messageID, partID, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /api/v1/message/%s/part/%s: %v", messageID, partID, err)
+	}
+	return string(body)
 }
 
 // TestMailPollDeliversRealMail runs the "finalized" (participant path) and "claim_confirmation"
@@ -731,5 +750,14 @@ func TestMailPollDeliversRealMail(t *testing.T) {
 	}
 	if att.ContentType != "text/calendar" {
 		t.Errorf("attachment ContentType = %q, want %q", att.ContentType, "text/calendar")
+	}
+
+	// The VEVENT's URL property must be the same absolute poll link (m.AppURL() + "/p/" + id)
+	// sendFinalizedMail's own mail body links to, not a bare "/p/{id}" — the .ics is attached
+	// via BuildPollICS(ctx, s.q, poll.ID, pollURL), threading that absolute URL straight through.
+	wantURL := m.AppURL() + "/p/" + scheduling.ID
+	icsBody := fetchMailpitAttachmentContent(t, apiBaseURL, detail.ID, att.PartID)
+	if !strings.Contains(icsBody, "URL:"+wantURL) {
+		t.Errorf(".ics body missing absolute URL %q: %q", wantURL, icsBody)
 	}
 }

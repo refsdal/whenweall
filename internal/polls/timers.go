@@ -309,9 +309,9 @@ func (s *Service) handleMailPollJob(ctx context.Context, m *mailer.Mailer, job j
 // un-finalized — between scheduling and sending must not send a stale "the time is set" mail for
 // an option that's no longer the answer).
 //
-// Attaches the finalized option's .ics invite (internal/polls/ics.go's BuildPollICS) whenever it
-// has calendar meaning — nil for a plain-text finalized option, matching buildOptionIcs's own
-// null case (finalize-emails.ts).
+// Attaches the finalized option's .ics invite (internal/polls/ics.go's BuildPollICS, given the
+// same absolute pollURL this mail's own body links to) whenever it has calendar meaning — nil for
+// a plain-text finalized option, matching buildOptionIcs's own null case (finalize-emails.ts).
 func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if poll.Status != pollFinalizedStatus || !poll.FinalizedOptionID.Valid {
 		return nil
@@ -332,7 +332,7 @@ func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll 
 		return nil
 	}
 
-	icsFilename, ics, err := BuildPollICS(ctx, s.q, poll.ID)
+	icsFilename, ics, err := BuildPollICS(ctx, s.q, poll.ID, pollURL)
 	if err != nil {
 		return err
 	}
