@@ -164,3 +164,70 @@ func TestWorkerUnknownKindDeadLettersEventually(t *testing.T) {
 		t.Errorf("last_error = %q, want to contain %q", lastError, "no handler registered")
 	}
 }
+
+// TestSelfReschedulingHandlerSurvivesCompletion is the regression test for a real bug found while
+// building the housekeeping jobs (internal/jobs/housekeeping.go): a handler that reschedules
+// itself under the same kind+room_key it was claimed on is upserting the very row RunOnce claimed
+// — and Worker.process runs Complete(job.ID) right after a handler returns nil. If Schedule's
+// ON CONFLICT path kept the old id, that Complete would delete the freshly rescheduled row and
+// silently kill the chain after one run. Schedule now takes EXCLUDED.id on conflict specifically
+// so the surviving row's id no longer matches what Complete is about to delete.
+func TestSelfReschedulingHandlerSurvivesCompletion(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	room := "room-self-reschedule"
+
+	w := jobs.NewWorker(d, "w1", slog.Default())
+	w.Register("t:self-reschedule", func(ctx context.Context, _ jobs.Job) error {
+		return jobs.Schedule(ctx, d, jobs.ScheduleInput{
+			Kind:    "t:self-reschedule",
+			RoomKey: &room,
+			RunAt:   time.Now().Add(time.Hour),
+		})
+	})
+
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "t:self-reschedule", RoomKey: &room, RunAt: time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	var originalID string
+	if err := d.QueryRowContext(ctx,
+		"SELECT id FROM scheduled_jobs WHERE kind = $1 AND room_key = $2", "t:self-reschedule", room,
+	).Scan(&originalID); err != nil {
+		t.Fatalf("select original id: %v", err)
+	}
+
+	processed, err := w.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	var count int
+	if err := d.QueryRowContext(ctx,
+		"SELECT count(*) FROM scheduled_jobs WHERE kind = $1 AND room_key = $2", "t:self-reschedule", room,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 (the rescheduled row must survive Worker.process's Complete)", count)
+	}
+
+	var newID string
+	var runAt time.Time
+	if err := d.QueryRowContext(ctx,
+		"SELECT id, run_at FROM scheduled_jobs WHERE kind = $1 AND room_key = $2", "t:self-reschedule", room,
+	).Scan(&newID, &runAt); err != nil {
+		t.Fatalf("select rescheduled row: %v", err)
+	}
+	if newID == originalID {
+		t.Errorf("rescheduled row kept the old id %s; Schedule's ON CONFLICT must take EXCLUDED.id", originalID)
+	}
+	if !runAt.After(time.Now()) {
+		t.Errorf("run_at = %v, want in the future", runAt)
+	}
+}

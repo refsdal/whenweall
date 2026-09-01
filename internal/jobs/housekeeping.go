@@ -55,6 +55,11 @@ func RegisterHousekeeping(w *Worker, sqlDB *sql.DB) {
 // called once from serve(): every replica calling it on startup is safe because Schedule's
 // RoomKey upsert collapses concurrent seeding attempts (and a still-pending job from a previous
 // boot) down to the one row per kind that scheduled_jobs_room_kind_idx allows.
+//
+// A boot-time reseed can also race a handler that's mid-run and about to reschedule itself; this
+// is harmless the same way any two concurrent Schedule calls on the same kind+room_key are — the
+// unique index and the upsert's id swap (see Schedule's doc comment) guarantee exactly one
+// surviving row, just possibly re-armed to whichever of the two run_at values lands last.
 func EnsureScheduled(ctx context.Context, sqlDB *sql.DB) error {
 	for _, s := range []struct {
 		kind     string
@@ -85,18 +90,10 @@ func seedHousekeeping(ctx context.Context, sqlDB *sql.DB, kind string, interval 
 }
 
 // rescheduleHousekeeping is seedHousekeeping's counterpart for a handler rearming its own next
-// run from inside RunOnce.
-//
-// It cannot simply call seedHousekeeping: Schedule's RoomKey upsert resolves to the very row this
-// handler was claimed on (same kind, same room_key), and ON CONFLICT DO UPDATE never changes a
-// row's id — so the "rescheduled" row would keep the current job's id. Worker.process runs
-// Complete(job.ID) right after a handler returns nil, which would then delete that row again,
-// silently undoing the reschedule and leaving the chain dead. Cancelling first removes the row
-// entirely, so Schedule's INSERT lands with no conflict and a fresh id; Complete's later
-// DELETE-by-old-id then matches nothing and is a harmless no-op.
+// run from inside RunOnce: a plain upsert under the same kind+room_key this handler was claimed
+// on. This is safe to do mid-run because Schedule's conflict path takes EXCLUDED.id (see its doc
+// comment) — the row that survives carries a fresh id, so Worker.process's post-handler
+// Complete(job.ID) (keyed to the id this run claimed) matches nothing once Schedule has run.
 func rescheduleHousekeeping(ctx context.Context, sqlDB *sql.DB, kind string, interval time.Duration) error {
-	if err := Cancel(ctx, sqlDB, kind, housekeepingRoomKey); err != nil {
-		return err
-	}
 	return seedHousekeeping(ctx, sqlDB, kind, interval)
 }

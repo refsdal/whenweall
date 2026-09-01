@@ -69,6 +69,13 @@ type ScheduleInput struct {
 //
 // Re-scheduling deliberately resets attempts: the caller is asking for a fresh run at a new time,
 // not resuming a failing one.
+//
+// The conflict path also takes EXCLUDED.id, swapping in the new row's id rather than keeping the
+// old one: a handler that reschedules itself (same kind+room_key) mid-run is upserting the very
+// row it was claimed on, and the worker completes a successful run with DELETE ... WHERE id =
+// <the id it claimed>. Without the id swap that DELETE would land on the freshly rescheduled row
+// and silently kill any self-rescheduling chain after one run; with it, the claimed id is already
+// gone from the table by the time Complete runs, so that DELETE matches nothing.
 func Schedule(ctx context.Context, tx db.DBTX, in ScheduleInput) error {
 	maxAttempts := in.MaxAttempts
 	if maxAttempts == 0 {
@@ -98,6 +105,7 @@ func Schedule(ctx context.Context, tx db.DBTX, in ScheduleInput) error {
 			VALUES ($1, $2, $3, $4, $5::jsonb, $6)
 			ON CONFLICT (kind, room_key) WHERE room_key IS NOT NULL
 			DO UPDATE SET
+				id = EXCLUDED.id,
 				run_at = EXCLUDED.run_at,
 				payload = EXCLUDED.payload,
 				max_attempts = EXCLUDED.max_attempts,
