@@ -52,6 +52,10 @@ func (s *Server) authRateLimit(name string) func(http.Handler) http.Handler {
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 
+	// CheckOrigin covers every /api/v1/* route registered below, auth included: Limen has its own
+	// CSRF protection on its mount (see internal/auth/routes.txt), so this is belt-and-suspenders
+	// there, and the sole guard for any other mutating /api/v1/* route later plans add.
+	checkOrigin := CheckOrigin(s.cfg.AppURL)
 	authHandler := s.authSvc.Handler()
 
 	// The hot, unauthenticated auth endpoints get their own exact-path patterns, each wrapped
@@ -69,18 +73,18 @@ func (s *Server) routes() {
 		{"POST /api/v1/auth/passwords/request-reset", "auth.password_reset"},
 		{"POST /api/v1/auth/magic-link/signin", "auth.magic_link"},
 	} {
-		s.mux.Handle(route.pattern, s.authRateLimit(route.name)(authHandler))
+		s.mux.Handle(route.pattern, checkOrigin(s.authRateLimit(route.name)(authHandler)))
 	}
 
 	// More specific than the "/api/" catch-all below, so ServeMux prefers this regardless of
 	// registration order (longest-pattern-wins). authSvc.Handler() already strips nothing itself
 	// — Limen's own router owns everything under its configured base path (WithHTTPBasePath
 	// "/api/v1/auth" in internal/auth.buildLimenConfig), so this mounts it directly.
-	s.mux.Handle("/api/v1/auth/", authHandler)
+	s.mux.Handle("/api/v1/auth/", checkOrigin(authHandler))
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.
-	s.mux.HandleFunc("/api/", apiNotFound)
+	s.mux.Handle("/api/", checkOrigin(http.HandlerFunc(apiNotFound)))
 
 	// Everything else — including / — falls to the embedded SPA, which serves the exact file
 	// if one exists (e.g. /assets/*.js) or index.html otherwise (client-side routing).
