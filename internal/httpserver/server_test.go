@@ -36,7 +36,7 @@ func TestHealthzOK(t *testing.T) {
 
 func TestHealthzDegradedWhenDBDown(t *testing.T) {
 	d := testdb.New(t)
-	d.Close() // kill the pool
+	_ = d.Close() // kill the pool
 	srv := httpserver.New(testConfig(), d)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))

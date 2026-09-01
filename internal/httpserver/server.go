@@ -52,20 +52,22 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := s.db.PingContext(ctx); err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"status":"degraded"}`))
+		_, _ = w.Write([]byte(`{"status":"degraded"}`))
 		return
 	}
-	w.Write([]byte(`{"status":"ok"}`))
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// Handler returns the middleware-wrapped mux — Recover outermost (so it can catch panics from
-// anything below it, including the logger and header middleware), then SecurityHeaders, then
-// RequestLogger, then the mux itself.
+// Handler returns the middleware-wrapped mux — SecurityHeaders outermost (so headers land on
+// every response, including panics), then RequestLogger, then Recover innermost around the mux.
+// Recover must sit inside RequestLogger, not outside it: Recover swallows the panic and returns
+// normally, so RequestLogger's post-call log line always runs — a panicking request still
+// produces both a panic log and a request log, not just the former.
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
+	h = Recover(s.logger)(h)
 	h = RequestLogger(s.logger)(h)
 	h = SecurityHeaders(h)
-	h = Recover(s.logger)(h)
 	return h
 }
 
@@ -73,8 +75,11 @@ func (s *Server) Handler() http.Handler {
 // down with a 10s timeout.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	httpSrv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.cfg.Port),
-		Handler: s.Handler(),
+		Addr:              fmt.Sprintf(":%d", s.cfg.Port),
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// No WriteTimeout: plan 4's websockets are long-lived by design.
 	}
 
 	errCh := make(chan error, 1)

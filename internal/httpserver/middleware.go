@@ -31,6 +31,10 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// Unwrap lets http.ResponseController reach the real ResponseWriter, so websocket
+// hijacking and flushing still work through the logging middleware.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 // RequestLogger logs one structured line per request: method, path, status, duration.
 func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -69,9 +73,17 @@ func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
 						"error", rec,
 						"stack", string(debug.Stack()),
 					)
+					// If the handler already wrote a header (or body) before panicking, the
+					// response is already committed: a second WriteHeader would just log
+					// net/http's "superfluous response.WriteHeader call" and the JSON envelope
+					// would corrupt whatever was already sent. Only write the envelope when we
+					// know for certain nothing has gone out yet.
+					if sr, ok := w.(*statusRecorder); ok && sr.wroteHeader {
+						return
+					}
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
-					w.Write([]byte(`{"error":{"code":"internal","message":"internal error"}}`))
+					_, _ = w.Write([]byte(`{"error":{"code":"internal","message":"internal error"}}`))
 				}
 			}()
 			next.ServeHTTP(w, r)
