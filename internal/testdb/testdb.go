@@ -24,7 +24,8 @@ import (
 
 var (
 	once    sync.Once
-	baseURL string // connection URL to the container's postgres database
+	baseURL string  // connection URL to the container's postgres database
+	adminDB *sql.DB // one shared admin pool, opened once in setup(), reused by every New(t)
 	initErr error
 	seq     atomic.Int64
 )
@@ -49,13 +50,14 @@ func setup() {
 		return
 	}
 
-	admin, err := db.Open(ctx, baseURL, 2)
+	// One admin pool for the whole test run: it outlives setup() (unlike the template pool
+	// below) because every New(t) clone/drop goes through it via URL().
+	adminDB, err = db.Open(ctx, baseURL, 10)
 	if err != nil {
 		initErr = err
 		return
 	}
-	defer admin.Close()
-	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+template); err != nil {
+	if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+template); err != nil {
 		initErr = err
 		return
 	}
@@ -65,7 +67,7 @@ func setup() {
 		initErr = err
 		return
 	}
-	defer tmpl.Close()
+	defer func() { _ = tmpl.Close() }()
 	initErr = db.Migrate(ctx, tmpl)
 }
 
@@ -84,27 +86,26 @@ func URL(t *testing.T) (string, *sql.DB) {
 	}
 	ctx := context.Background()
 	name := fmt.Sprintf("wt_%d_%d", time.Now().UnixNano(), seq.Add(1))
-	admin, err := db.Open(ctx, baseURL, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := admin.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s", name, template)); err != nil {
-		admin.Close()
+	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s", name, template)); err != nil {
 		t.Fatal(err)
 	}
 	d, err := db.Open(ctx, urlFor(name), 5)
 	if err != nil {
-		admin.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		d.Close()
-		admin.ExecContext(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)")
-		admin.Close()
+		_ = d.Close()
+		if _, err := adminDB.ExecContext(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
+			t.Errorf("dropping test database %s: %v", name, err)
+		}
 	})
 	return urlFor(name), d
 }
 
 // New returns an isolated *sql.DB on a freshly cloned, fully migrated database.
 // Skips the test (t.Skip) if Docker is unavailable. Closes and drops on t.Cleanup.
-func New(t *testing.T) *sql.DB { _, d := URL(t); return d }
+func New(t *testing.T) *sql.DB {
+	t.Helper()
+	_, d := URL(t)
+	return d
+}
