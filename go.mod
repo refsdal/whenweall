@@ -7,13 +7,24 @@ require (
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	github.com/thecodearcher/limen v0.2.2-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/adapters/sql v0.2.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/credential-password v0.2.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/magic-link v0.2.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/oauth v0.2.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/oauth-generic v0.2.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/oauth-google v0.2.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/organization v0.1.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen/plugins/two-factor v0.2.1-0.20260813001613-c6a34aa6dcb4
 	github.com/wneessen/go-mail v0.8.1
 )
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
@@ -34,6 +45,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
@@ -51,6 +63,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/pquerna/otp v1.4.0 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.6 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
@@ -65,6 +78,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

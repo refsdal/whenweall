@@ -1,0 +1,324 @@
+// Package auth is the seam between whenweall and Limen (github.com/thecodearcher/limen), the
+// self-hosted authentication library backing signup/signin/sessions/organizations. No other
+// package may import Limen directly: everything the rest of the application needs — Service,
+// Session, the middleware, and the staff/org-membership helpers — is exported from here, so a
+// future replacement of Limen (or an upgrade that changes its API) only ever touches this
+// package.
+//
+// internal/auth/schemagen is the one exception, and only because it exists to make Limen dump
+// its schema definitions to disk (see GenerateSchemas) — it never touches Limen directly either;
+// it just calls into this package.
+package auth
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/thecodearcher/limen"
+	sqladapter "github.com/thecodearcher/limen/adapters/sql"
+	credentialpassword "github.com/thecodearcher/limen/plugins/credential-password"
+	magiclink "github.com/thecodearcher/limen/plugins/magic-link"
+	"github.com/thecodearcher/limen/plugins/oauth"
+	oauthgeneric "github.com/thecodearcher/limen/plugins/oauth-generic"
+	oauthgoogle "github.com/thecodearcher/limen/plugins/oauth-google"
+	"github.com/thecodearcher/limen/plugins/organization"
+	twofactor "github.com/thecodearcher/limen/plugins/two-factor"
+
+	"github.com/refsdal/whenweall/internal/config"
+	"github.com/refsdal/whenweall/internal/db"
+	"github.com/refsdal/whenweall/internal/mailer"
+)
+
+// ErrUnauthenticated is returned by RequireOrgMember when ctx carries no session. Handlers that
+// call it directly (rather than sitting behind RequireSession) translate this into a 401.
+var ErrUnauthenticated = errors.New("auth: unauthenticated")
+
+// ErrForbidden is returned by RequireOrgMember when the caller is not a member of orgID.
+// Handlers translate this into a 403.
+var ErrForbidden = errors.New("auth: forbidden")
+
+// Enqueuer matches mailer.Enqueue's signature exactly, so tests can substitute a stub that
+// captures mail instead of writing to scheduled_jobs.
+type Enqueuer func(ctx context.Context, tx db.DBTX, msg mailer.Message) error
+
+// Service is the seam: everything the rest of the application needs from Limen, wrapped so
+// nothing outside this package touches Limen types.
+type Service struct {
+	limen       *limen.Limen
+	orgs        organization.API
+	db          *sql.DB
+	cfg         *config.Config
+	enqueueMail Enqueuer
+	logger      *slog.Logger
+}
+
+// New builds the Service: constructs the Limen configuration (every plugin the product needs,
+// oauth providers gated on cfg.Capabilities), and mounts it at /api/v1/auth via Handler.
+func New(cfg *config.Config, sqlDB *sql.DB) (*Service, error) {
+	return newService(cfg, sqlDB, mailer.Enqueue)
+}
+
+// newService is the real constructor; New and tests both funnel through it, differing only in
+// which Enqueuer they pass (mailer.Enqueue for New, a capturing stub for tests).
+func newService(cfg *config.Config, sqlDB *sql.DB, enqueue Enqueuer) (*Service, error) {
+	s := &Service{
+		db:          sqlDB,
+		cfg:         cfg,
+		enqueueMail: enqueue,
+		logger:      slog.Default(),
+	}
+
+	a, err := limen.New(buildLimenConfig(cfg, sqlDB, s, false))
+	if err != nil {
+		return nil, fmt.Errorf("auth: limen.New: %w", err)
+	}
+	s.limen = a
+	s.orgs = organization.Use(a)
+	return s, nil
+}
+
+// GenerateSchemas is a dev-only entry point for internal/auth/schemagen: it builds the exact
+// Limen configuration newService builds (same plugins, same options — the controller's dispatch
+// ruling requires schemagen to construct the config Task 2 actually uses, so both call paths run
+// through buildLimenConfig rather than two copies that could drift apart), but with
+// CLI.Enabled true. Calling limen.New with that config is what makes Limen write
+// .limen/schemas.json — see Limen's Config.prepareCLIConfig. The mail callbacks are wired to a
+// no-op Enqueuer: schemagen never signs anyone up, so they're never invoked.
+func GenerateSchemas(cfg *config.Config, sqlDB *sql.DB) error {
+	s := &Service{
+		db:  sqlDB,
+		cfg: cfg,
+		enqueueMail: func(context.Context, db.DBTX, mailer.Message) error {
+			return nil
+		},
+		logger: slog.Default(),
+	}
+	_, err := limen.New(buildLimenConfig(cfg, sqlDB, s, true))
+	return err
+}
+
+// buildLimenConfig is the one place the Limen configuration is assembled — shared by newService
+// (cliEnabled false) and GenerateSchemas (cliEnabled true).
+func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled bool) *limen.Config {
+	plugins := []limen.Plugin{
+		credentialpassword.New(
+			credentialpassword.WithSendPasswordResetEmail(func(email, token string) {
+				s.enqueueTokenMail(email, "reset_password", "/reset-password", token)
+			}),
+		),
+		organization.New(
+			organization.WithSendInvitationMail(func(ctx context.Context, d *organization.SendInvitationMailData) {
+				s.enqueueInviteMail(ctx, d)
+			}),
+		),
+		magiclink.New(
+			magiclink.WithSendMagicLink(func(m magiclink.MagicLinkMessage) {
+				s.enqueueMagicLinkMail(m)
+			}),
+		),
+		twofactor.New(),
+	}
+
+	// oauth is only added when at least one provider is actually configured — an empty oauth
+	// plugin would register /oauth/:provider/* routes that 404 on every provider anyway, so
+	// leaving it out entirely when neither capability is on is both simpler and lets
+	// TestOAuthRoutesAbsentWithoutConfig assert on a real 404 rather than a "provider unknown"
+	// error from an oauth plugin with no providers.
+	if cfg.Capabilities.Google || cfg.Capabilities.OIDC {
+		var providers []oauth.Provider
+		if cfg.Capabilities.Google {
+			providers = append(providers, oauthgoogle.New(
+				oauthgoogle.WithClientID(cfg.GoogleClientID),
+				oauthgoogle.WithClientSecret(cfg.GoogleClientSecret),
+			))
+		}
+		if cfg.Capabilities.OIDC {
+			providers = append(providers, oauthgeneric.New(
+				oauthgeneric.WithName(cfg.OIDCName),
+				oauthgeneric.WithDiscoveryURL(cfg.OIDCIssuer),
+				oauthgeneric.WithClientID(cfg.OIDCClientID),
+				oauthgeneric.WithClientSecret(cfg.OIDCClientSecret),
+			))
+		}
+		plugins = append(plugins, oauth.New(oauth.WithProviders(providers...)))
+	}
+
+	var cliCfg *limen.CLIConfig
+	if cliEnabled {
+		cliCfg = &limen.CLIConfig{Enabled: true}
+	}
+
+	return &limen.Config{
+		BaseURL:  cfg.AppURL,
+		Database: sqladapter.NewPostgreSQL(sqlDB),
+		Secret:   cfg.LimenSecret,
+		Plugins:  plugins,
+		// Limen's core schema set always includes a "rate_limits" table (RateLimit is a
+		// standing field on SchemaConfig, discovered unconditionally — see schema_discovery.go
+		// — regardless of whether the HTTP rate limiter actually uses it; the default
+		// NewDefaultRateLimiterConfig uses StoreTypeCache, an in-memory store, so nothing ever
+		// writes to it). That name collides with our own rate_limits table (migrations/00001,
+		// used by the mailer/room rate limiter — see internal/jobs/housekeeping.go), whose
+		// columns (key, count, reset_at) are incompatible with what Limen would otherwise try to
+		// ALTER in (id, last_request_at NOT NULL) — confirmed against the pinned CLI generator,
+		// which emitted exactly that ALTER TABLE. Renaming Limen's own (unused) table via its
+		// supported schema-customization option is the documented fix, not a workaround: it
+		// never touches our table, and Limen's DB-backed rate limiting isn't in use anyway.
+		Schema: limen.NewDefaultSchemaConfig(
+			limen.WithSchemaRateLimit(limen.WithRateLimitTableName("limen_rate_limits")),
+		),
+		Email: limen.NewDefaultEmailConfig(limen.WithEmailVerification(
+			limen.WithSendEmailVerificationMail(func(email, token string) {
+				s.enqueueTokenMail(email, "verify_email", "/verify-email", token)
+			}),
+		)),
+		HTTP: limen.NewDefaultHTTPConfig(
+			limen.WithHTTPBasePath("/api/v1/auth"),
+			// WithHTTPHooks(s.personalOrgHooks()) lands in a later plan (auto-creating a
+			// personal organization on signup); nothing to hook yet.
+		),
+		CLI: cliCfg,
+	}
+}
+
+// Handler returns Limen's own http.Handler, already mounted at the base path configured above
+// (/api/v1/auth). The caller (internal/httpserver) mounts this at "/api/v1/auth/".
+func (s *Service) Handler() http.Handler {
+	return s.limen.Handler()
+}
+
+// MakeStaff flags email's user as platform staff, used by the create-staff-user bootstrap
+// command. It looks up the user directly against Limen's users table (there is no public
+// find-by-email API on Limen itself) rather than through any Limen plugin, since staff is purely
+// our own concept — see staff_users' doc comment in migrations/00002_auth.sql for why it's a
+// separate table rather than an extension of Limen's user schema.
+func (s *Service) MakeStaff(ctx context.Context, email string) error {
+	normalized := limen.NormalizeEmail(email)
+
+	var userID int64
+	err := s.db.QueryRowContext(ctx, "SELECT id FROM users WHERE email = $1", normalized).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("auth: no user with email %q", email)
+	}
+	if err != nil {
+		return fmt.Errorf("auth: looking up user by email: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		"INSERT INTO staff_users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING", userID,
+	); err != nil {
+		return fmt.Errorf("auth: inserting staff_users: %w", err)
+	}
+	return nil
+}
+
+// parseLimenID converts a Session's stringified id (UserID/ActiveOrgID, both fmt.Sprint of
+// Limen's `any` id) back to the type Limen's default schema actually stores — int64, since
+// buildLimenConfig sets no Schema.IDGenerator. Falls back to the raw string so this keeps
+// working if a later change switches to a string/UUID id generator.
+func parseLimenID(id string) any {
+	if n, err := strconv.ParseInt(id, 10, 64); err == nil {
+		return n
+	}
+	return id
+}
+
+// enqueueTokenMail builds the reset-password/verify-email link (Limen only ever passes the
+// callback a bare token; there is no URL to preserve as-is here, unlike magic-link) and enqueues
+// it under templateName. path is the SPA route that will read ?token= and complete the flow.
+func (s *Service) enqueueTokenMail(email, templateName, path, token string) {
+	s.sendMail(mailer.Message{
+		To:       email,
+		Template: templateName,
+		Data: map[string]any{
+			"URL":  s.cfg.AppURL + path + "?token=" + token,
+			"Name": nameFromEmail(email),
+		},
+	})
+}
+
+// enqueueMagicLinkMail sends the magic-link sign-in mail. Unlike verify-email/reset-password,
+// Limen already builds a full URL for magic links (m.URL, pointed at its own
+// GET /api/v1/auth/magic-link/verify route) and hands it to this callback — so this uses that
+// URL as-is rather than building a separate SPA link.
+func (s *Service) enqueueMagicLinkMail(m magiclink.MagicLinkMessage) {
+	s.sendMail(mailer.Message{
+		To:       m.Email,
+		Template: "magic_link",
+		Data: map[string]any{
+			"URL":  m.URL,
+			"Name": nameFromEmail(m.Email),
+		},
+	})
+}
+
+// enqueueInviteMail sends the org_invite mail. The link points at the SPA's accept-invitation
+// page (not a Limen backend route — there is no such route; the SPA reads the token from the
+// path and calls organization's respond-to-invitation API itself).
+func (s *Service) enqueueInviteMail(ctx context.Context, d *organization.SendInvitationMailData) {
+	if d == nil || d.Invitation == nil || d.Organization == nil {
+		s.logger.Error("auth: org invite mail callback missing invitation or organization data")
+		return
+	}
+
+	inviterName := ""
+	if d.Inviter != nil {
+		inviterName = nameFromEmail(d.Inviter.Email)
+	}
+
+	s.sendMailCtx(ctx, mailer.Message{
+		To:       d.Invitation.Email,
+		Template: "org_invite",
+		Data: map[string]any{
+			"URL":         s.cfg.AppURL + "/accept-invitation/" + d.Invitation.Token,
+			"InviterName": inviterName,
+			"OrgName":     d.Organization.Name,
+		},
+	})
+}
+
+// sendMail enqueues msg on a background context. Every Limen mail callback above fires
+// synchronously inside a request/handler goroutine with no ctx of its own (WithSendPasswordResetEmail
+// and WithSendEmailVerificationMail take only (email, token string); WithSendMagicLink takes only
+// a message) — using context.Background() here (rather than propagating a request context that
+// may already be canceled by the time the callback runs) matches the brief's "enqueue outside any
+// tx" instruction: this is a fire-and-forget queue write, not part of the request's own work.
+func (s *Service) sendMail(msg mailer.Message) {
+	s.sendMailCtx(context.Background(), msg)
+}
+
+// sendMailCtx is sendMail's ctx-carrying twin, used by callbacks that do receive a context
+// (organization.WithSendInvitationMail).
+func (s *Service) sendMailCtx(ctx context.Context, msg mailer.Message) {
+	if err := s.enqueueMail(ctx, s.db, msg); err != nil {
+		// Never panic or block the caller (a Limen request handler) on a queue write failure —
+		// log and move on, same contract as every other Limen mail callback here.
+		s.logger.Error("auth: enqueue mail failed", "template", msg.Template, "error", err)
+	}
+}
+
+// nameFromEmail is the best-effort display name used in mail copy: Limen's mail callbacks never
+// hand this package a display name (User only carries ID/Email/EmailVerifiedAt), so the email's
+// local part stands in for it rather than leaving the template's {{.Name}} placeholder empty.
+func nameFromEmail(email string) string {
+	if i := strings.IndexByte(email, '@'); i > 0 {
+		return email[:i]
+	}
+	return email
+}
+
+// writeErrorEnvelope writes the standard JSON error envelope used by RequireSession/RequireStaff.
+func writeErrorEnvelope(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{"code": code, "message": message},
+	})
+}

@@ -10,7 +10,10 @@ import (
 
 func TestMigrationsCreateInfraTables(t *testing.T) {
 	d := testdb.New(t)
-	for _, table := range []string{"rate_limits", "room_events", "room_state", "scheduled_jobs", "ws_presence"} {
+	for _, table := range []string{
+		"rate_limits", "room_events", "room_state", "scheduled_jobs", "ws_presence",
+		"users", "staff_users",
+	} {
 		var n int
 		err := d.QueryRowContext(context.Background(),
 			"SELECT count(*) FROM information_schema.tables WHERE table_name = $1", table).Scan(&n)
