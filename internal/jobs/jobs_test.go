@@ -149,6 +149,72 @@ func TestRoomKeyUpsertKeepsOneJob(t *testing.T) {
 	}
 }
 
+// TestScheduleIfAbsentInsertsOnlyWhenNothingPending is the regression test for IMPORTANT 4
+// (EnsureScheduled clobbering run_at on every boot): unlike Schedule, ScheduleIfAbsent must
+// insert the first row for a (kind, room_key) but leave a second call — with a different run_at —
+// completely alone.
+func TestScheduleIfAbsentInsertsOnlyWhenNothingPending(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	room := "room-absent"
+
+	first := time.Now().Add(time.Hour)
+	if err := jobs.ScheduleIfAbsent(ctx, d, jobs.ScheduleInput{
+		Kind: "t:seed", RoomKey: &room, RunAt: first,
+	}); err != nil {
+		t.Fatalf("ScheduleIfAbsent (first): %v", err)
+	}
+
+	var count int
+	if err := d.QueryRowContext(ctx, "SELECT count(*) FROM scheduled_jobs").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+
+	// A second call with a different run_at must not move it: this is the whole point of
+	// ScheduleIfAbsent over Schedule's upsert.
+	second := time.Now().Add(-time.Second)
+	if err := jobs.ScheduleIfAbsent(ctx, d, jobs.ScheduleInput{
+		Kind: "t:seed", RoomKey: &room, RunAt: second,
+	}); err != nil {
+		t.Fatalf("ScheduleIfAbsent (second): %v", err)
+	}
+
+	if err := d.QueryRowContext(ctx, "SELECT count(*) FROM scheduled_jobs").Scan(&count); err != nil {
+		t.Fatalf("count after second call: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 (still no duplicate)", count)
+	}
+
+	var runAt time.Time
+	if err := d.QueryRowContext(ctx,
+		"SELECT run_at FROM scheduled_jobs WHERE kind = $1 AND room_key = $2", "t:seed", room,
+	).Scan(&runAt); err != nil {
+		t.Fatalf("select run_at: %v", err)
+	}
+	if diff := runAt.Sub(first); diff < -time.Second || diff > time.Second {
+		t.Errorf("run_at = %v, want ~%v (the first call's value, untouched by the second)", runAt, first)
+	}
+}
+
+// TestScheduleIfAbsentRequiresRoomKey documents that ScheduleIfAbsent only makes sense for the
+// singleton (kind, room_key) jobs it exists for: a nil RoomKey has no upsert target to be absent
+// or present under.
+func TestScheduleIfAbsentRequiresRoomKey(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+
+	err := jobs.ScheduleIfAbsent(ctx, d, jobs.ScheduleInput{
+		Kind: "t:no-room", RunAt: time.Now(),
+	})
+	if err == nil {
+		t.Fatal("want an error for a nil RoomKey, got nil")
+	}
+}
+
 func TestFailBacksOffThenDeadLetters(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()

@@ -123,6 +123,56 @@ func Schedule(ctx context.Context, tx db.DBTX, in ScheduleInput) error {
 	return err
 }
 
+// ScheduleIfAbsent schedules a room-scoped job only if no job of that (kind, room_key) already
+// exists; an existing row — whatever its run_at — is left completely untouched.
+//
+// It exists for EnsureScheduled and the boot-time seed path (IMPORTANT 4): those run on every
+// replica restart, and Schedule's upsert semantics — the right behavior for a handler re-arming
+// its own next run mid-chain, or an API request replacing a pending job with a fresh one — are
+// the wrong behavior at boot. Schedule's ON CONFLICT DO UPDATE resets run_at (and attempts,
+// locked_by, last_error) unconditionally, so seeding on every restart would clobber a job that's
+// already correctly scheduled far in the future, repeatedly pulling it back to "shortly after
+// boot" — a restart-happy deploy (or a crash loop) could starve a housekeeping chain of ever
+// reaching its real run_at, since every restart yanks it back to now()+interval again. DO NOTHING
+// leaves a pre-existing row (from an earlier boot, or a handler's own in-flight re-arm) alone,
+// and only inserts the first row when there's truly nothing scheduled yet.
+//
+// In.RoomKey must be non-nil: this only makes sense for the singleton (kind, room_key) jobs
+// EnsureScheduled seeds. A nil RoomKey job has no upsert target to be absent or present under, so
+// it returns an error rather than silently behaving like a plain insert.
+func ScheduleIfAbsent(ctx context.Context, tx db.DBTX, in ScheduleInput) error {
+	if in.RoomKey == nil {
+		return fmt.Errorf("jobs: ScheduleIfAbsent requires a non-nil RoomKey (kind %q)", in.Kind)
+	}
+
+	maxAttempts := in.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 5
+	}
+
+	var payloadArg any
+	if in.Payload != nil {
+		b, err := json.Marshal(in.Payload)
+		if err != nil {
+			return fmt.Errorf("jobs: marshal payload: %w", err)
+		}
+		payloadArg = string(b)
+	}
+
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO scheduled_jobs (id, kind, room_key, run_at, payload, max_attempts)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+		ON CONFLICT (kind, room_key) WHERE room_key IS NOT NULL
+		DO NOTHING
+	`, db.NewID(), in.Kind, *in.RoomKey, in.RunAt, payloadArg, maxAttempts)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, `SELECT pg_notify($1, '')`, JobsChannel)
+	return err
+}
+
 // Cancel cancels a room's pending job of one kind. The DO equivalent was deleting a storage key
 // and re-arming; here there is nothing to re-arm. Cancelling a job that isn't there is not an
 // error.
@@ -183,6 +233,17 @@ func Complete(ctx context.Context, tx db.DBTX, id string) error {
 // is where genuinely undeliverable work accumulates and needs a human — the same contract the
 // Cloudflare DLQ had, minus a second piece of infrastructure.
 func Fail(ctx context.Context, tx db.DBTX, id, errMsg string) (bool, error) {
+	willRetry, _, err := fail(ctx, tx, id, errMsg)
+	return willRetry, err
+}
+
+// fail is Fail's implementation, additionally reporting whether id still had a row to update.
+// Fail's own (bool, error) signature can't tell "false because attempts >= max_attempts" (a real
+// dead-letter) apart from "false because the row is already gone" (it completed or rescheduled
+// itself under a fresh id in between — see Schedule's doc comment on the EXCLUDED.id swap — a
+// routine race, not something a human needs to see at ERROR). Worker.process, in the same
+// package, calls this directly to make that distinction; Fail stays the stable public API.
+func fail(ctx context.Context, tx db.DBTX, id, errMsg string) (willRetry, rowFound bool, err error) {
 	errMsg = truncateLastError(errMsg)
 
 	row := tx.QueryRowContext(ctx, `
@@ -200,14 +261,13 @@ func Fail(ctx context.Context, tx db.DBTX, id, errMsg string) (bool, error) {
 		RETURNING attempts < max_attempts AS will_retry
 	`, id, errMsg)
 
-	var willRetry bool
-	if err := row.Scan(&willRetry); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+	if scanErr := row.Scan(&willRetry); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return false, false, nil
 		}
-		return false, err
+		return false, false, scanErr
 	}
-	return willRetry, nil
+	return willRetry, true, nil
 }
 
 // Dead is the dead-letter view: jobs that exhausted their attempts. Nothing reclaims these.
