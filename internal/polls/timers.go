@@ -309,8 +309,9 @@ func (s *Service) handleMailPollJob(ctx context.Context, m *mailer.Mailer, job j
 // un-finalized — between scheduling and sending must not send a stale "the time is set" mail for
 // an option that's no longer the answer).
 //
-// TODO(task-5): attach the finalized option's .ics invite once internal/polls/ics (the calendar
-// writer) lands — this send is deliberately without an attachment until then.
+// Attaches the finalized option's .ics invite (internal/polls/ics.go's BuildPollICS) whenever it
+// has calendar meaning — nil for a plain-text finalized option, matching buildOptionIcs's own
+// null case (finalize-emails.ts).
 func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if poll.Status != pollFinalizedStatus || !poll.FinalizedOptionID.Valid {
 		return nil
@@ -329,6 +330,15 @@ func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll 
 	}
 	if option == nil {
 		return nil
+	}
+
+	icsFilename, ics, err := BuildPollICS(ctx, s.q, poll.ID)
+	if err != nil {
+		return err
+	}
+	var attachments []mailer.Attachment
+	if ics != nil {
+		attachments = []mailer.Attachment{{Filename: icsFilename, ContentType: "text/calendar", Content: ics}}
 	}
 
 	var name, email, locale string
@@ -372,6 +382,7 @@ func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll 
 			"RecipientName": name,
 			"Locale":        locale,
 		},
+		Attachments: attachments,
 	})
 }
 
@@ -438,7 +449,11 @@ func (s *Service) sendDigestMail(ctx context.Context, m *mailer.Mailer, poll que
 // reflects whatever their claims are by the time this actually sends — and is a no-op for every
 // "nothing to send" case: participant gone, no email on file, or no claims left.
 //
-// TODO(task-5): attach the claimed slots' .ics invite once internal/polls/ics lands.
+// Still without an .ics attachment: TS's sendClaimConfirmation attaches one VEVENT per claimed
+// slot via buildIcsMulti (claim-emails.ts) — a poll need not be finalized for a claim to happen,
+// so this can't reuse BuildPollICS (internal/polls/ics.go), which only ever builds the single
+// finalized-option event. Left as a follow-up task (a BuildPollICSMulti or equivalent) rather than
+// task 5's scope, which produced BuildPollICS for the finalized-mail path only.
 func (s *Service) sendClaimConfirmationMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if payload.ParticipantID == "" {
 		return nil

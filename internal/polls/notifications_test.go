@@ -583,11 +583,30 @@ func startMailpitForPolls(t *testing.T) (smtpHost string, smtpPort int, apiBaseU
 	return host, int(smtpMapped.Num()), fmt.Sprintf("http://%s:%s", host, apiMapped.Port())
 }
 
-type mailpitMessagesResponse struct {
-	Total int `json:"total"`
+type mailpitAddress struct {
+	Address string `json:"Address"`
 }
 
-func mailpitTotal(t *testing.T, apiBaseURL string) int {
+type mailpitMessageSummary struct {
+	ID string           `json:"ID"`
+	To []mailpitAddress `json:"To"`
+}
+
+type mailpitMessagesResponse struct {
+	Total    int                     `json:"total"`
+	Messages []mailpitMessageSummary `json:"messages"`
+}
+
+type mailpitAttachment struct {
+	FileName    string `json:"FileName"`
+	ContentType string `json:"ContentType"`
+}
+
+type mailpitMessageDetail struct {
+	Attachments []mailpitAttachment `json:"Attachments"`
+}
+
+func fetchMailpitMessages(t *testing.T, apiBaseURL string) mailpitMessagesResponse {
 	t.Helper()
 	resp, err := http.Get(apiBaseURL + "/api/v1/messages")
 	if err != nil {
@@ -602,7 +621,47 @@ func mailpitTotal(t *testing.T, apiBaseURL string) int {
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("unmarshal /api/v1/messages: %v", err)
 	}
-	return out.Total
+	return out
+}
+
+func mailpitTotal(t *testing.T, apiBaseURL string) int {
+	t.Helper()
+	return fetchMailpitMessages(t, apiBaseURL).Total
+}
+
+// fetchMailpitMessageTo returns the detail (including attachments) of the one message addressed
+// to `to`. Fails the test if there isn't exactly one.
+func fetchMailpitMessageTo(t *testing.T, apiBaseURL, to string) mailpitMessageDetail {
+	t.Helper()
+	list := fetchMailpitMessages(t, apiBaseURL)
+	var id string
+	matches := 0
+	for _, msg := range list.Messages {
+		for _, addr := range msg.To {
+			if addr.Address == to {
+				id = msg.ID
+				matches++
+			}
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("mailpit messages to %q = %d, want 1", to, matches)
+	}
+
+	resp, err := http.Get(apiBaseURL + "/api/v1/message/" + id)
+	if err != nil {
+		t.Fatalf("GET /api/v1/message/%s: %v", id, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /api/v1/message/%s: %v", id, err)
+	}
+	var out mailpitMessageDetail
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("unmarshal /api/v1/message/%s: %v", id, err)
+	}
+	return out
 }
 
 // TestMailPollDeliversRealMail runs the "finalized" (participant path) and "claim_confirmation"
@@ -657,5 +716,20 @@ func TestMailPollDeliversRealMail(t *testing.T) {
 	// finalized (participant) + finalized (owner) + claim_confirmation = 3 real sends.
 	if total := mailpitTotal(t, apiBaseURL); total != 3 {
 		t.Errorf("mailpit total = %d, want 3", total)
+	}
+
+	// The finalized participant mail (Ada) is for a datetime poll's finalized option — it must
+	// carry the .ics invite BuildPollICS produces (internal/polls/ics.go), attached by
+	// sendFinalizedMail (timers.go).
+	detail := fetchMailpitMessageTo(t, apiBaseURL, "ada@example.com")
+	if len(detail.Attachments) != 1 {
+		t.Fatalf("len(Attachments) for ada@example.com = %d, want 1", len(detail.Attachments))
+	}
+	att := detail.Attachments[0]
+	if att.FileName != "calendar.ics" {
+		t.Errorf("attachment FileName = %q, want %q", att.FileName, "calendar.ics")
+	}
+	if att.ContentType != "text/calendar" {
+		t.Errorf("attachment ContentType = %q, want %q", att.ContentType, "text/calendar")
 	}
 }
