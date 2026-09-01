@@ -87,6 +87,11 @@ func serve() int {
 	}
 	worker := jobs.NewWorker(sqlDB, hostname+"-"+db.NewID()[:6], slog.Default())
 	mailer.New(cfg).RegisterHandler(worker)
+	jobs.RegisterHousekeeping(worker, sqlDB)
+	if err := jobs.EnsureScheduled(ctx, sqlDB); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	go worker.Run(ctx)
 
 	srv := httpserver.New(cfg, sqlDB)
