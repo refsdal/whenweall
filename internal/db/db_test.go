@@ -13,6 +13,8 @@ func TestMigrationsCreateInfraTables(t *testing.T) {
 	for _, table := range []string{
 		"rate_limits", "room_events", "room_state", "scheduled_jobs", "ws_presence",
 		"users", "staff_users",
+		"polls", "poll_options", "participants", "votes", "comments",
+		"notification_prefs", "notification_subscriptions",
 	} {
 		var n int
 		err := d.QueryRowContext(context.Background(),
