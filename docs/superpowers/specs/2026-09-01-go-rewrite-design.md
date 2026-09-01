@@ -224,6 +224,23 @@ Rewritten around: **one ~20 MB container, one Postgres, nothing else.**
   Docker build · Playwright against the image.
 - Implementation follows TDD.
 
+## Amendment (2026-09-01, post-plan-1): baseline deltas vs §4/§5
+
+The frozen goose baseline ports the Bun-branch DDL (the proven behavioral reference) rather than
+this spec's sketches. Three deliberate deltas, ruled during plan 1's final review:
+
+- **`room_events` has a global `bigserial id`, not a per-room `seq`.** The id is the client
+  cursor. Known hazard plan 6 Task 1 MUST resolve before building catch-up: bigserial values are
+  allocated before commit, so a lower-id event can become visible after a higher-id one was
+  delivered, and a client resuming from `id > lastSeen` would miss it. Resolve via a visibility
+  watermark (replay from `min(in-flight)`), or by assigning ids under the `room_state` row lock.
+- **`scheduled_jobs` keeps `kind`/`locked_at`/`max_attempts` (default 5) and no status column** —
+  §5's `type`/`locked_until`/`failed` wording is superseded; dead-letter = `attempts >=
+  max_attempts`, lock expiry = `locked_at` + 5-minute timeout in code, mail jobs pass
+  `max_attempts: 10` explicitly.
+- **`ws_presence` keeps per-replica counts** (`room_key`, `replica_id`, `count`, `heartbeat_at`),
+  not §4's per-connection rows. Presence totals are sums over replicas.
+
 ## Out of scope
 
 - Data migration of any kind (no live users).
