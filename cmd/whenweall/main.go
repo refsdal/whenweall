@@ -19,6 +19,7 @@ import (
 	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/httpserver"
 	"github.com/refsdal/whenweall/internal/jobs"
+	"github.com/refsdal/whenweall/internal/mailer"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -85,6 +86,7 @@ func serve() int {
 		hostname = "replica"
 	}
 	worker := jobs.NewWorker(sqlDB, hostname+"-"+db.NewID()[:6], slog.Default())
+	mailer.New(cfg).RegisterHandler(worker)
 	go worker.Run(ctx)
 
 	srv := httpserver.New(cfg, sqlDB)
