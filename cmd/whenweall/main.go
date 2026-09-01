@@ -22,6 +22,7 @@ import (
 	"github.com/refsdal/whenweall/internal/httpserver"
 	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/mailer"
+	"github.com/refsdal/whenweall/internal/polls"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -90,8 +91,16 @@ func serve() int {
 		hostname = "replica"
 	}
 	worker := jobs.NewWorker(sqlDB, hostname+"-"+db.NewID()[:6], slog.Default())
-	mailer.New(cfg).RegisterHandler(worker)
+	m := mailer.New(cfg)
+	m.RegisterHandler(worker)
 	jobs.RegisterHousekeeping(worker, sqlDB)
+
+	// pollsSvc owns the poll/sign-up-sheet domain: its HTTP surface (Register, below) and its
+	// three scheduled job kinds (poll.deadline/poll.digest/mail:poll — RegisterJobs) share this
+	// one instance, bound to the same *sql.DB the rest of the process uses.
+	pollsSvc := polls.NewService(sqlDB)
+	pollsSvc.RegisterJobs(worker, m)
+
 	if err := jobs.EnsureScheduled(ctx, sqlDB); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -105,6 +114,7 @@ func serve() int {
 	}
 
 	srv := httpserver.New(cfg, sqlDB, authSvc)
+	srv.RegisterAPI(func(mux *http.ServeMux) { pollsSvc.Register(mux, authSvc, cfg) })
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

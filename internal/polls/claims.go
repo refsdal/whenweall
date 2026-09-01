@@ -295,9 +295,9 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 	}, nil
 }
 
-// Unclaim ports removeClaim (claims.ts). Its signature (ctx, pollID, optionID, viewer) — per the
-// task brief — carries no participant identifier distinct from Viewer, unlike Claim's ClaimInput.
-// The target participant is therefore always resolved from Viewer itself:
+// Unclaim ports removeClaim (claims.ts)'s self-service path: its signature (ctx, pollID, optionID,
+// viewer) carries no participant identifier distinct from Viewer, unlike Claim's ClaimInput. The
+// target participant is therefore always resolved from Viewer itself:
 //
 //   - Viewer.GuestParticipantID, if set: that participant — already verified by the auth seam
 //     (Task 7) as this caller's own, exactly like removeClaim's TS callers always pass a
@@ -309,13 +309,32 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 //     if they have none).
 //   - Otherwise: ErrForbidden (no identity to act on at all).
 //
-// Deviation from TS: unclaimSlot also lets an org manager unclaim an arbitrary *other*
-// participant's slot (removeClaim's "allowClosed" owner path) — that needs a participantId
-// distinct from the acting viewer, which this exact signature has no room for, so it isn't
-// reachable here. What IS preserved is the closed-poll bypass itself: allowClosed is computed as
-// "can this viewer manage the poll" regardless of whose row was resolved above, so a manager who
-// is also a participant can still free their own slot after the poll closes. See the task report.
+// See UnclaimFor for the manager force-unclaim path (removeClaim's "allowClosed" owner path,
+// acting on an arbitrary *other* participant's claim) that this exact signature has no room for.
 func (s *Service) Unclaim(ctx context.Context, pollID, optionID string, viewer Viewer) error {
+	return s.unclaim(ctx, pollID, optionID, "", viewer)
+}
+
+// UnclaimFor is Unclaim's manager force-unclaim twin, added in Task 7 per an accumulated review
+// requirement: ports the other half of removeClaim (claims.ts)/unclaimSlot (participants.functions.ts)
+// that Unclaim's brief-pinned signature has no room for — a poll manager (org owner/admin, or the
+// poll's own creator) freeing an arbitrary OTHER participant's claimed slot, not just their own.
+// targetParticipantID must be non-empty (use Unclaim for the self-service path); the caller must
+// be able to manage the poll (ErrForbidden otherwise — this is not a way for an ordinary
+// participant to unclaim someone else's slot), and targetParticipantID must actually belong to
+// pollID (ErrNotFound otherwise), mirroring requireParticipantAuth's own participant-scoping check
+// (claim-auth.ts) that the self-service path deliberately skips (see Unclaim's doc comment).
+func (s *Service) UnclaimFor(ctx context.Context, pollID, optionID, targetParticipantID string, viewer Viewer) error {
+	if targetParticipantID == "" {
+		return ErrForbidden
+	}
+	return s.unclaim(ctx, pollID, optionID, targetParticipantID, viewer)
+}
+
+// unclaim is Unclaim/UnclaimFor's shared body. targetParticipantID == "" selects Unclaim's
+// resolve-from-viewer behavior; non-empty selects UnclaimFor's manager-forced behavior — see both
+// methods' doc comments.
+func (s *Service) unclaim(ctx context.Context, pollID, optionID, targetParticipantID string, viewer Viewer) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -341,6 +360,21 @@ func (s *Service) Unclaim(ctx context.Context, pollID, optionID string, viewer V
 
 	var participantID string
 	switch {
+	case targetParticipantID != "":
+		if !canManage {
+			return ErrForbidden
+		}
+		target, terr := q.GetParticipant(ctx, targetParticipantID)
+		if errors.Is(terr, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if terr != nil {
+			return terr
+		}
+		if target.PollID != pollID {
+			return ErrNotFound
+		}
+		participantID = target.ID
 	case viewer.GuestParticipantID != "":
 		participantID = viewer.GuestParticipantID
 	case viewer.UserID != "":
@@ -376,4 +410,50 @@ func (s *Service) Unclaim(ctx context.Context, pollID, optionID string, viewer V
 		return err
 	}
 	return tx.Commit()
+}
+
+// SignupFull ports the capacity half of PollRoom's #emitIfSheetFilled (PollRoom.ts): true iff
+// pollID's sign-up sheet has every option's capacity claim count at or above its capacity. Always
+// false for a sheet with no options, or with any unlimited-capacity option (options.some(capacity
+// === null) in the TS source) — an unlimited option can never be "full". Added in Task 7 (an
+// accumulated review requirement) for the HTTP handler layer to call after a claim that actually
+// changed something, to decide whether to raise a signup.full digest item.
+//
+// Deviation: #emitIfSheetFilled also storage-flags the transition so a later claim/unclaim cycle
+// on an already-full sheet doesn't re-announce it every time someone re-takes the last slot, and
+// clears that flag on any unclaim. This port has no equivalent per-poll storage slot to flag (no
+// durable object), so it reports "full" on every call where the sheet is currently full — the
+// handler calling this after each Changed claim may raise more than one signup.full digest item
+// over the sheet's lifetime where the TS source would raise exactly one per fill. Flagged in the
+// task report as a follow-up (e.g. a small poll-scoped flag row) rather than this task's scope.
+func (s *Service) SignupFull(ctx context.Context, pollID string) (bool, error) {
+	options, err := s.q.ListOptionsByPoll(ctx, pollID)
+	if err != nil {
+		return false, err
+	}
+	if len(options) == 0 {
+		return false, nil
+	}
+	for _, o := range options {
+		if !o.Capacity.Valid {
+			return false, nil
+		}
+	}
+
+	votes, err := s.q.ListVotesByPoll(ctx, pollID)
+	if err != nil {
+		return false, err
+	}
+	counts := map[string]int{}
+	for _, v := range votes {
+		if v.Answer == "yes" {
+			counts[v.OptionID]++
+		}
+	}
+	for _, o := range options {
+		if counts[o.ID] < int(o.Capacity.Int32) {
+			return false, nil
+		}
+	}
+	return true, nil
 }

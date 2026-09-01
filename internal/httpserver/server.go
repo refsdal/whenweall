@@ -95,26 +95,34 @@ func (s *Server) authRateLimitMiddleware(authHandler http.Handler) http.Handler 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 
-	// CheckOrigin covers every /api/v1/* route registered below, auth included: Limen has its own
-	// CSRF protection on its mount (see internal/auth/routes.txt), so this is belt-and-suspenders
-	// there, and the sole guard for any other mutating /api/v1/* route later plans add.
-	checkOrigin := CheckOrigin(s.cfg.AppURL)
 	authHandler := s.authSvc.Handler()
 
 	// The whole mount goes through one middleware that applies the hot, unauthenticated auth
 	// routes' 10/min-per-IP budget (see authRateLimitMiddleware for why this replaced a set of
 	// ServeMux exact-pattern registrations) before ever reaching Limen's own handler, which owns
 	// everything under its configured base path (WithHTTPBasePath "/api/v1/auth" in
-	// internal/auth.buildLimenConfig) unmodified either way.
-	s.mux.Handle("/api/v1/auth/", checkOrigin(s.authRateLimitMiddleware(authHandler)))
+	// internal/auth.buildLimenConfig) unmodified either way. CheckOrigin is applied globally in
+	// Handler() below (scoped to /api/ via APIOnly) rather than per-route here, so it also covers
+	// whatever else RegisterAPI mounts on this same mux — see Handler()'s doc comment.
+	s.mux.Handle("/api/v1/auth/", s.authRateLimitMiddleware(authHandler))
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.
-	s.mux.Handle("/api/", checkOrigin(http.HandlerFunc(apiNotFound)))
+	s.mux.Handle("/api/", http.HandlerFunc(apiNotFound))
 
 	// Everything else — including / — falls to the embedded SPA, which serves the exact file
 	// if one exists (e.g. /assets/*.js) or index.html otherwise (client-side routing).
 	s.mux.Handle("/", spaHandler())
+}
+
+// RegisterAPI lets a later plan mount additional /api/v1/* routes on this Server's own mux —
+// e.g. internal/polls's Register(mux, auth, cfg) — so they inherit the same session resolution,
+// origin check, panic recovery, and request logging every other /api/ route gets (see Handler's
+// doc comment), without this package importing that plan's package directly (New's signature, and
+// this package's own dependency graph, stay exactly as they were). Callers register their routes
+// after New returns and before ListenAndServe/Handler is first called.
+func (s *Server) RegisterAPI(register func(mux *http.ServeMux)) {
+	register(s.mux)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -150,15 +158,23 @@ func APIOnly(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler
 
 // Handler returns the middleware-wrapped mux — SecurityHeaders outermost (so headers land on
 // every response, including panics), then RequestLogger, then Recover, then authSvc.Middleware
-// (scoped to /api/ by APIOnly) innermost around the mux. Recover must sit inside RequestLogger,
-// not outside it: Recover swallows the panic and returns normally, so RequestLogger's post-call
-// log line always runs — a panicking request still produces both a panic log and a request log,
-// not just the former. authSvc.Middleware sits inside Recover so a panic resolving the session
-// (e.g. a database error) is caught the same as a panic in any other handler, and outside the mux
-// so every /api/ handler — not just those under /api/v1/auth/ — can read the caller's Session via
-// auth.FromContext.
+// (scoped to /api/ by APIOnly), then CheckOrigin (also scoped to /api/ by APIOnly) innermost
+// around the mux. Recover must sit inside RequestLogger, not outside it: Recover swallows the
+// panic and returns normally, so RequestLogger's post-call log line always runs — a panicking
+// request still produces both a panic log and a request log, not just the former.
+// authSvc.Middleware sits inside Recover so a panic resolving the session (e.g. a database error)
+// is caught the same as a panic in any other handler, and outside the mux so every /api/ handler
+// — not just those under /api/v1/auth/ — can read the caller's Session via auth.FromContext.
+//
+// CheckOrigin is applied here, globally over every /api/ request, rather than per mux.Handle
+// registration (routes()'s previous approach): a ServeMux dispatches to exactly one registered
+// pattern per request, so wrapping a coarser pattern (e.g. "/api/v1/") would never actually run
+// for a more specific one (e.g. "POST /api/v1/polls/{id}") that RegisterAPI mounts later — only a
+// wrap around the whole mux, applied here, reaches every route regardless of which pattern it
+// matched, present or future.
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
+	h = APIOnly(CheckOrigin(s.cfg.AppURL))(h)
 	h = APIOnly(s.authSvc.Middleware)(h)
 	h = Recover(s.logger)(h)
 	h = RequestLogger(s.logger)(h)

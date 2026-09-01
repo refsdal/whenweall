@@ -115,6 +115,15 @@ func FromContext(ctx context.Context) (*Session, bool) {
 	return sess, true
 }
 
+// FromContext is a method wrapper around the package-level function of the same name, so a
+// package that only ever sees *Service through a narrower interface (internal/polls's Auth seam)
+// can still read the caller's Session back out of a context without importing package auth's own
+// top-level function — the interface can only name methods, not free functions. Purely a
+// delegation; it carries no state of its own.
+func (s *Service) FromContext(ctx context.Context) (*Session, bool) {
+	return FromContext(ctx)
+}
+
 // RequireSession rejects an anonymous request with 401 {"error":{"code":"unauthenticated",...}}
 // before calling next; a request with a valid session passes through unchanged (next reads the
 // Session back out via FromContext same as any other handler).
