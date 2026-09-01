@@ -181,8 +181,7 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 		)),
 		HTTP: limen.NewDefaultHTTPConfig(
 			limen.WithHTTPBasePath("/api/v1/auth"),
-			// WithHTTPHooks(s.personalOrgHooks()) lands in a later plan (auto-creating a
-			// personal organization on signup); nothing to hook yet.
+			limen.WithHTTPHooks(s.personalOrgHooks()),
 		),
 		CLI: cliCfg,
 	}
@@ -217,6 +216,65 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 		return fmt.Errorf("auth: inserting staff_users: %w", err)
 	}
 	return nil
+}
+
+// personalOrgHooks builds the After hook that gives every user a personal organization the
+// moment they authenticate in a way that might be the very first time: route ID "signup"
+// (credential-password's POST /signup/credential) and "oauth-callback" (oauth's
+// GET /oauth/:provider/callback) — see internal/auth/routes.txt — are the only two routes that
+// can establish a session for a user who didn't already exist a moment ago. A plain "signin"
+// never needs this: by definition the user already exists, and (per the invariant this hook
+// maintains) already has at least one organization. Ports the intent of
+// src/server/auth/personal-org.ts's createPersonalOrganization.
+func (s *Service) personalOrgHooks() *limen.Hooks {
+	return &limen.Hooks{
+		After: []*limen.Hook{
+			{
+				PathMatcher: func(ctx *limen.HookContext) bool {
+					routeID := ctx.RouteID()
+					return routeID == "signup" || routeID == "oauth-callback"
+				},
+				Run: s.ensurePersonalOrganization,
+			},
+		},
+	}
+}
+
+// ensurePersonalOrganization is the After hook's Run function. It must never fail the request a
+// personal organization is a convenience, not something worth 500ing a signup or OAuth callback
+// over — so every error is logged and swallowed, and this always returns true (continue).
+func (s *Service) ensurePersonalOrganization(ctx *limen.HookContext) bool {
+	authResult := ctx.GetAuthResult()
+	if authResult == nil || authResult.User == nil {
+		// The route didn't actually establish a session (e.g. signup failed validation, or the
+		// oauth callback errored before a session was created) — nothing to do.
+		return true
+	}
+	s.ensurePersonalOrganizationForUser(ctx.Request().Context(), authResult.User)
+	return true
+}
+
+// ensurePersonalOrganizationForUser is personalOrgHooks' idempotency check plus creation, factored
+// out of ensurePersonalOrganization so it can be exercised directly in tests (see
+// personal_org_test.go) without needing a real oauth-callback round trip against a live OAuth
+// provider to prove the "does nothing for an existing user" half of the contract: this is exactly
+// what an oauth-callback re-sign-in of an existing user would hit.
+func (s *Service) ensurePersonalOrganizationForUser(ctx context.Context, user *limen.User) {
+	page, err := s.orgs.ListOrganizations(ctx, user, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 1})
+	if err != nil {
+		s.logger.Error("auth: personal-org hook: listing organizations failed", "error", err)
+		return
+	}
+	if page.Total > 0 {
+		// Already has at least one org (the common case: an existing user signing back in via
+		// oauth-callback) — idempotent no-op.
+		return
+	}
+
+	name := nameFromEmail(user.Email)
+	if _, err := s.orgs.CreateOrganization(ctx, user, &organization.CreateOrganizationRequest{Name: name, Slug: ""}); err != nil {
+		s.logger.Error("auth: personal-org hook: creating personal organization failed", "error", err)
+	}
 }
 
 // parseLimenID converts a Session's stringified id (UserID/ActiveOrgID, both fmt.Sprint of
