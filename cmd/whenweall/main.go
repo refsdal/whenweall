@@ -15,6 +15,7 @@ import (
 
 	_ "time/tzdata" // scratch has no /usr/share/zoneinfo; scheduling needs real tz data.
 
+	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/httpserver"
@@ -94,7 +95,13 @@ func serve() int {
 	}
 	go worker.Run(ctx)
 
-	srv := httpserver.New(cfg, sqlDB)
+	authSvc, err := auth.New(cfg, sqlDB)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	srv := httpserver.New(cfg, sqlDB, authSvc)
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

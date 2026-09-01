@@ -11,7 +11,8 @@ import (
 
 func TestSPAFallback(t *testing.T) {
 	d := testdb.New(t)
-	srv := httpserver.New(testConfig(), d)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
 	for _, path := range []string{"/", "/dashboard", "/p/abc123"} {
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
@@ -29,7 +30,8 @@ func TestSPAFallback(t *testing.T) {
 
 func TestUnknownAPIPathIs404NotSPA(t *testing.T) {
 	d := testdb.New(t)
-	srv := httpserver.New(testConfig(), d)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/nope", nil))
 	if rec.Code != 404 {
@@ -41,7 +43,8 @@ func TestUnknownAPIPathIs404NotSPA(t *testing.T) {
 // index.html: that would look like a stale build succeeding instead of loudly failing.
 func TestAssetMissIs404NotSPA(t *testing.T) {
 	d := testdb.New(t)
-	srv := httpserver.New(testConfig(), d)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/assets/does-not-exist.js", nil))
 	if rec.Code != 404 {
@@ -57,7 +60,8 @@ func TestAssetMissIs404NotSPA(t *testing.T) {
 // cache the app shell indefinitely.
 func TestIndexHTMLExactMatchGetsNoCache(t *testing.T) {
 	d := testdb.New(t)
-	srv := httpserver.New(testConfig(), d)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/index.html", nil))
 	if rec.Code != 200 {
@@ -72,7 +76,8 @@ func TestIndexHTMLExactMatchGetsNoCache(t *testing.T) {
 // "all:dist" embed directive pulls in the whole dist/ tree) ever being served to a client.
 func TestDotfileBasenameIs404(t *testing.T) {
 	d := testdb.New(t)
-	srv := httpserver.New(testConfig(), d)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/.gitignore", nil))
 	if rec.Code != 404 {

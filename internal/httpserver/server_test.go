@@ -1,10 +1,12 @@
 package httpserver_test
 
 import (
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/httpserver"
 	"github.com/refsdal/whenweall/internal/testdb"
@@ -21,9 +23,20 @@ func testConfig() *config.Config {
 	return cfg
 }
 
+// testAuthService builds a real auth.Service against d, the same way cmd/whenweall does.
+func testAuthService(t *testing.T, cfg *config.Config, d *sql.DB) *auth.Service {
+	t.Helper()
+	svc, err := auth.New(cfg, d)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	return svc
+}
+
 func TestHealthzOK(t *testing.T) {
 	d := testdb.New(t)
-	srv := httpserver.New(testConfig(), d)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 200 {
@@ -36,8 +49,10 @@ func TestHealthzOK(t *testing.T) {
 
 func TestHealthzDegradedWhenDBDown(t *testing.T) {
 	d := testdb.New(t)
+	cfg := testConfig()
+	authSvc := testAuthService(t, cfg, d)
 	_ = d.Close() // kill the pool
-	srv := httpserver.New(testConfig(), d)
+	srv := httpserver.New(cfg, d, authSvc)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 503 {
