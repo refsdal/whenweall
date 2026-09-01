@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -42,11 +43,13 @@ func run(args []string) int {
 		return migrateCmd()
 	case "healthcheck":
 		return healthcheck()
+	case "create-staff-user":
+		return createStaffUserCmd(args[2:])
 	case "version":
 		fmt.Println(version)
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (serve|migrate|healthcheck|version)\n", cmd)
+		fmt.Fprintf(os.Stderr, "unknown command %q (serve|migrate|healthcheck|create-staff-user|version)\n", cmd)
 		return 2
 	}
 }
@@ -132,6 +135,53 @@ func migrateCmd() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	return 0
+}
+
+// createStaffUserCmd loads configuration, opens the database, and flags the given email's user
+// as platform staff (see auth.Service.MakeStaff) — the bootstrap path for granting the first
+// staff account, replacing the old seed-script approach. Idempotent: re-running against an
+// already-staffed email succeeds silently.
+func createStaffUserCmd(args []string) int {
+	fs := flag.NewFlagSet("create-staff-user", flag.ContinueOnError)
+	email := fs.String("email", "", "email of the user to flag as platform staff (required)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *email == "" {
+		fmt.Fprintln(os.Stderr, "create-staff-user: --email is required")
+		return 1
+	}
+
+	cfg, warnings, err := config.FromOS()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, w := range warnings {
+		slog.Warn(w)
+	}
+
+	ctx := context.Background()
+	sqlDB, err := db.Open(ctx, cfg.DatabaseURL, cfg.DatabasePoolSize)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = sqlDB.Close() }()
+
+	authSvc, err := auth.New(cfg, sqlDB)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	if err := authSvc.MakeStaff(ctx, *email); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	fmt.Printf("%s is now a staff user\n", *email)
 	return 0
 }
 

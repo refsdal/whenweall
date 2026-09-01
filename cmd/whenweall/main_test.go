@@ -13,3 +13,9 @@ func TestRunDispatchVersion(t *testing.T) {
 		t.Errorf("version should exit 0, got %d", got)
 	}
 }
+
+func TestRunDispatchCreateStaffUserMissingEmail(t *testing.T) {
+	if got := run([]string{"whenweall", "create-staff-user"}); got == 0 {
+		t.Error("create-staff-user with no --email should exit non-zero")
+	}
+}
