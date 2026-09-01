@@ -15,3 +15,6 @@ test-results/
 # checkouts, sometimes on other branches — never this repo's own source to format.
 .claude/
 docs/superpowers/
+internal/
+cmd/
+migrations/
