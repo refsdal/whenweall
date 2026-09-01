@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/testdb"
@@ -370,6 +371,49 @@ func TestRetryResurrectsDeadJob(t *testing.T) {
 	}
 	if lastError.Valid {
 		t.Errorf("last_error = %q, want NULL", lastError.String)
+	}
+}
+
+func TestFailTruncatesErrorOnRuneBoundary(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "mail:send", RunAt: time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	claimed, err := jobs.ClaimDue(ctx, d, "w1", 10)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("len(claimed) = %d, want 1", len(claimed))
+	}
+	id := claimed[0].ID
+
+	// "€" is 3 bytes; 800 copies is 2400 bytes, and 2000 (maxLastErrorLen) is not a multiple
+	// of 3 — a naive errMsg[:2000] byte-slice would land mid-rune here.
+	longErr := strings.Repeat("€", 800)
+
+	willRetry, err := jobs.Fail(ctx, d, id, longErr)
+	if err != nil {
+		t.Fatalf("Fail must not fail on a multi-byte truncation boundary: %v", err)
+	}
+	if !willRetry {
+		t.Fatal("willRetry = false, want true (fresh job, default max_attempts)")
+	}
+
+	var lastError string
+	if err := d.QueryRowContext(ctx, "SELECT last_error FROM scheduled_jobs WHERE id = $1", id).Scan(&lastError); err != nil {
+		t.Fatalf("select last_error: %v", err)
+	}
+	if !utf8.ValidString(lastError) {
+		t.Errorf("last_error is not valid UTF-8: %q", lastError)
+	}
+	if len(lastError) > 2000 {
+		t.Errorf("len(last_error) = %d, want <= 2000", len(lastError))
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/refsdal/whenweall/internal/db"
 )
@@ -174,9 +175,7 @@ func Complete(ctx context.Context, tx db.DBTX, id string) error {
 // is where genuinely undeliverable work accumulates and needs a human — the same contract the
 // Cloudflare DLQ had, minus a second piece of infrastructure.
 func Fail(ctx context.Context, tx db.DBTX, id, errMsg string) (bool, error) {
-	if len(errMsg) > maxLastErrorLen {
-		errMsg = errMsg[:maxLastErrorLen]
-	}
+	errMsg = truncateLastError(errMsg)
 
 	row := tx.QueryRowContext(ctx, `
 		UPDATE scheduled_jobs
@@ -237,6 +236,23 @@ func Retry(ctx context.Context, tx db.DBTX, id string) error {
 		WHERE id = $1
 	`, id)
 	return err
+}
+
+// truncateLastError caps errMsg at maxLastErrorLen bytes without splitting a multi-byte rune.
+// A naive byte-slice (errMsg[:maxLastErrorLen]) can land mid-rune — error text (SMTP bounce
+// bodies, foreign-language content) is exactly where non-ASCII shows up — and Postgres rejects
+// an UPDATE carrying invalid UTF-8 with "invalid byte sequence for encoding UTF8", which would
+// make Fail itself fail and leave the job locked until LOCK_TIMEOUT instead of retrying or
+// dead-lettering promptly.
+func truncateLastError(s string) string {
+	if len(s) <= maxLastErrorLen {
+		return s
+	}
+	cut := maxLastErrorLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // rowScanner is the shape both *sql.Row and *sql.Rows share, so scanJob works for either.
