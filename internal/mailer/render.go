@@ -3,9 +3,6 @@
 // under emails/*.tsx: same visual shell (_Layout.tsx becomes layout.html, an inline-styled table
 // so the markup survives an email client's stripped-down CSS support), same copy (ported from
 // messages/en.json and messages/nb.json into catalog, see messages.go), same set of templates.
-//
-// Sending mail (SMTP transport) is a later task; this package only turns a template name and
-// data into the three strings a transport needs to send.
 package mailer
 
 import (
@@ -51,7 +48,7 @@ var (
 func funcMap() map[string]any {
 	return map[string]any{
 		"t":             translate,
-		"join":          strings.Join,
+		"join":          joinStrings,
 		"notifSubject":  notifSubject,
 		"notifBody":     notifBody,
 		"digestLine":    digestLineLabel,

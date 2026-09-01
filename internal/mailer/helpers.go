@@ -52,7 +52,16 @@ func notifBody(locale, event, title, detail string) string {
 
 // digestLineLabel renders one summarised row of the "digest" template — "3 new responses" —
 // keyed by DigestLine.Event (see lineLabel in emails/Digest.tsx).
-func digestLineLabel(locale, event string, count int) string {
+//
+// count is `any`, not `int`: a queued job's payload arrives via a JSON round-trip
+// (job.Payload -> json.Unmarshal(..., &msg) -> Message.Data map[string]any), and
+// encoding/json decodes every JSON number into a Go float64 when the destination is an
+// interface{} (as map[string]any values are) rather than a concrete int. A template func
+// declared to take `int` panics with "wrong type for value; expected int; got float64" the
+// moment it's called with that decoded data — which is every real send, only unit tests that
+// build DigestLine{Count: N} in Go and hand it to Render directly happened to avoid it. See
+// toInt.
+func digestLineLabel(locale, event string, count any) string {
 	key := map[string]string{
 		"response.created":   "email_digest_line_response_created",
 		"response.updated":   "email_digest_line_response_updated",
@@ -63,7 +72,60 @@ func digestLineLabel(locale, event string, count int) string {
 	if key == "" {
 		return ""
 	}
-	return translate(locale, key, "count", count)
+	return translate(locale, key, "count", toInt(count))
+}
+
+// toInt coerces a template value to int, tolerating every shape a DigestLine.Count can arrive
+// in: a plain int (data built directly in Go, e.g. in tests), or a float64/int64/json.Number
+// (the same value after a JSON round-trip through the job queue). Anything else — including a
+// missing field the caller forgot to set, which text/template represents as a nil interface —
+// coerces to 0 rather than panicking; a missing required key is a caller bug the required-keys
+// contract catches elsewhere, not something this helper needs to enforce.
+func toInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case int32:
+		return int(n)
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+// toStringSlice coerces a template value to []string, tolerating both shapes DigestLine.Names/
+// claim_confirmation's Slots can arrive in: a plain []string (data built directly in Go), or
+// []any of strings (the same value after a JSON round-trip, since encoding/json decodes a JSON
+// array into []any when the destination is an interface{}). Anything else — including nil/a
+// missing key — coerces to nil, matching {{if .Names}}'s existing "no names" behaviour.
+func toStringSlice(v any) []string {
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
+			} else {
+				out = append(out, fmt.Sprint(item))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// joinStrings is the "join" template func: strings.Join, but taking `any` instead of []string
+// for the same reason digestLineLabel takes `any` for count — see toStringSlice.
+func joinStrings(v any, sep string) string {
+	return strings.Join(toStringSlice(v), sep)
 }
 
 // bookingCancelledBody picks the right first-person/third-person wording for

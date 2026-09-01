@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -185,7 +186,18 @@ func TestRenderAllTemplates(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rendered, err := Render(tc.name, tc.data)
+			// Round-trip data through JSON before rendering, the same way it actually reaches
+			// Render in production: a queued job's payload is json.Marshal'd by jobs.Schedule and
+			// json.Unmarshal'd back into a Message (mailer.RegisterHandler), so Data arrives as
+			// map[string]any with every number decoded to float64 and every slice decoded to
+			// []any — never the concrete int/[]string a test table can hand Render directly. A
+			// case built only from Go literals (as every case above is) would never exercise that
+			// path and would hide exactly the bug this test exists to catch (CRITICAL 1: digest
+			// dead-lettering on "wrong type for value; expected int; got float64"). This is a
+			// permanent guard: any future template/data shape gets the same round-trip for free.
+			data := roundTripJSON(t, tc.data)
+
+			rendered, err := Render(tc.name, data)
 			if err != nil {
 				t.Fatalf("Render(%q) returned error: %v", tc.name, err)
 			}
@@ -209,7 +221,7 @@ func TestRenderAllTemplates(t *testing.T) {
 			"URL":    "https://app.example/verify/abc123",
 			"Locale": locale,
 		}
-		rendered, err := Render("verify_email", data)
+		rendered, err := Render("verify_email", roundTripJSON(t, data))
 		if err != nil {
 			t.Fatalf("Render(verify_email, locale=%s) error: %v", locale, err)
 		}
@@ -217,6 +229,23 @@ func TestRenderAllTemplates(t *testing.T) {
 			t.Errorf("Render(verify_email, locale=%s) produced empty output", locale)
 		}
 	}
+}
+
+// roundTripJSON marshals then unmarshals data, returning the map[string]any that comes back —
+// the same shape Render actually receives in production (see the comment in
+// TestRenderAllTemplates). Every template case must be run through this rather than the literal
+// map a test table builds by hand.
+func roundTripJSON(t *testing.T, data map[string]any) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("json.Marshal(data): %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("json.Unmarshal(data): %v", err)
+	}
+	return out
 }
 
 func TestRenderEscapesHTML(t *testing.T) {
