@@ -151,6 +151,41 @@ func TestSendRedactsRecipientAddressFromError(t *testing.T) {
 	}
 }
 
+// TestSendRedactsUnparseableRecipientAddress covers the other place a recipient address could
+// leak: an unparseable To that go-mail's gm.To/AddToFormat rejects locally, before any SMTP
+// round trip. go-mail's own error text there is `failed to parse mail address %q: ...` — the bad
+// address verbatim — so Send must swap in a fixed, address-free error rather than wrapping it.
+func TestSendRedactsUnparseableRecipientAddress(t *testing.T) {
+	const badAddress = "not an address\r\n<x@y>"
+
+	cfg := &config.Config{
+		SMTPHost:  "127.0.0.1",
+		SMTPPort:  1, // unused: the address is rejected before any network dial is attempted.
+		EmailFrom: "whenweall <no-reply@whenweall.example>",
+		AppURL:    "https://whenweall.example",
+	}
+	m := mailer.New(cfg)
+
+	msg := mailer.Message{
+		To:       badAddress,
+		Template: "verify_email",
+		Data: map[string]any{
+			"Name": "Ada",
+			"URL":  "https://whenweall.example/verify/abc123",
+		},
+	}
+
+	err := m.Send(context.Background(), msg)
+	if err == nil {
+		t.Fatal("Send returned nil, want an error from the unparseable recipient address")
+	}
+
+	got := err.Error()
+	if strings.Contains(got, "x@y") || strings.Contains(got, "not an address") {
+		t.Errorf("error %q contains the recipient address text, want it redacted", got)
+	}
+}
+
 // startRejectingSMTPServer starts a minimal single-connection fake SMTP server on 127.0.0.1: it
 // completes EHLO/MAIL FROM normally (no STARTTLS/AUTH extensions offered, so go-mail's
 // TLSOpportunistic policy and no-auth default both proceed without negotiating either), then

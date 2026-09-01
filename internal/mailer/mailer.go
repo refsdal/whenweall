@@ -111,7 +111,12 @@ func (m *Mailer) Send(ctx context.Context, msg Message) error {
 		err = gm.To(msg.To)
 	}
 	if err != nil {
-		return fmt.Errorf("mailer: to address: %w", err)
+		// go-mail's own error here is `failed to parse mail address %q: %w` — msg.To verbatim,
+		// same privacy problem redactSendErr exists to solve for a rejected-RCPT failure, just
+		// hit earlier (address syntax rejected locally, before any SMTP round trip). No %w: that
+		// would leave the address recoverable via errors.Unwrap/Is despite the message text
+		// being clean.
+		return errors.New("mailer: invalid recipient address")
 	}
 
 	gm.Subject(rendered.Subject)
@@ -169,6 +174,22 @@ func redactSendErr(err error) error {
 // Enqueue schedules kind "mail:send" with msg as its JSON payload (MaxAttempts 10, run
 // immediately). This is the only send API request handlers may use — Send itself is reserved for
 // the job handler (RegisterHandler) and tests, so a request never blocks on an SMTP round trip.
+//
+// This path — a fully-rendered Message queued as-is — is for auth/org mail only: verify_email,
+// reset_password, magic_link, org_invite, and the like, whose tokens are minted once, live only
+// inside the request that minted them, and cannot be re-derived later (see ParseFromAddress's
+// callers and the token packages upstream of them). There is nothing to go stale, so queuing the
+// finished Message is safe.
+//
+// Entity mail — poll/booking notifications, landing in plans 4 and 5 (finalized, closed, digest,
+// notification, claim_confirmation, booking_*) — must NOT enqueue through this function with a
+// pre-rendered Message. It must enqueue ids-only, under its own job kind, and re-read the entity
+// at send time instead. This mirrors src/server/mailer/queue.ts's MailJob (ids only, never a
+// rendered message or address) and the reasoning behind it: a retry — or here, any queued send
+// that sits in scheduled_jobs for a while before a worker claims it — must reflect the world as
+// it is when it actually sends, not as it was when it was queued. A booking cancelled in the
+// meantime must not have its confirmation sent anyway just because the job was already sitting in
+// the queue with the old (now stale) data baked into its payload.
 func Enqueue(ctx context.Context, tx db.DBTX, msg Message) error {
 	return jobs.Schedule(ctx, tx, jobs.ScheduleInput{
 		Kind:        mailSendKind,
