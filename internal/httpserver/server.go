@@ -39,14 +39,44 @@ func New(cfg *config.Config, sqlDB *sql.DB, authSvc *auth.Service) *Server {
 	return s
 }
 
+// authRateLimit builds the auth-endpoint limiter: 10 hits per minute per client IP, mirroring
+// Better-Auth's own stricter built-in rules for sign-in/sign-up/password-reset
+// (src/server/auth/auth.ts leaves those defaults alone) now that the storage moves from a
+// per-isolate Map/durable object to this shared Postgres counter.
+func (s *Server) authRateLimit(name string) func(http.Handler) http.Handler {
+	return RateLimit(s.db, name, 10, time.Minute, func(r *http.Request) string {
+		return ClientIP(r, s.cfg.TrustProxy)
+	})
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+
+	authHandler := s.authSvc.Handler()
+
+	// The hot, unauthenticated auth endpoints get their own exact-path patterns, each wrapped
+	// with a 10/min-per-IP limiter before delegating to the same Limen handler. These are more
+	// specific than the "/api/v1/auth/" mount below, so ServeMux prefers them regardless of
+	// registration order (longest-pattern-wins); Limen's own router still sees the full,
+	// unmodified request path either way, so it stays completely unaware a limiter sits in front
+	// of it.
+	for _, route := range []struct {
+		pattern string
+		name    string
+	}{
+		{"POST /api/v1/auth/signin/credential", "auth.signin"},
+		{"POST /api/v1/auth/signup/credential", "auth.signup"},
+		{"POST /api/v1/auth/passwords/request-reset", "auth.password_reset"},
+		{"POST /api/v1/auth/magic-link/signin", "auth.magic_link"},
+	} {
+		s.mux.Handle(route.pattern, s.authRateLimit(route.name)(authHandler))
+	}
 
 	// More specific than the "/api/" catch-all below, so ServeMux prefers this regardless of
 	// registration order (longest-pattern-wins). authSvc.Handler() already strips nothing itself
 	// — Limen's own router owns everything under its configured base path (WithHTTPBasePath
 	// "/api/v1/auth" in internal/auth.buildLimenConfig), so this mounts it directly.
-	s.mux.Handle("/api/v1/auth/", s.authSvc.Handler())
+	s.mux.Handle("/api/v1/auth/", authHandler)
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.

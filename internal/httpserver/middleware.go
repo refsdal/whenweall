@@ -1,11 +1,22 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"time"
 )
+
+// writeErrorEnvelope writes the standard JSON error envelope, shared by RateLimit and CheckOrigin
+// (mirrors internal/auth's unexported helper of the same shape).
+func writeErrorEnvelope(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{"code": code, "message": message},
+	})
+}
 
 // statusRecorder captures the status code written by downstream handlers so RequestLogger can
 // log it — http.ResponseWriter has no getter for what WriteHeader was called with.
