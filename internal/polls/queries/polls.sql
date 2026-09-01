@@ -91,3 +91,53 @@ DELETE FROM poll_options WHERE id = $1;
 
 -- name: GetOrganizationName :one
 SELECT name FROM organizations WHERE id = $1;
+
+-- Task 3 (participants/votes/comments/claims) queries below.
+
+-- name: GetParticipant :one
+SELECT * FROM participants WHERE id = $1;
+
+-- name: GetParticipantByPollAndUser :one
+SELECT * FROM participants WHERE poll_id = $1 AND user_id = $2;
+
+-- name: UpdateParticipantName :exec
+UPDATE participants SET name = $2, updated_at = $3 WHERE id = $1;
+
+-- name: DeleteParticipant :exec
+DELETE FROM participants WHERE id = $1;
+
+-- name: ListVotesByParticipant :many
+SELECT * FROM votes WHERE participant_id = $1;
+
+-- name: DeleteVote :exec
+DELETE FROM votes WHERE participant_id = $1 AND option_id = $2;
+
+-- name: DeleteVotesByParticipant :exec
+DELETE FROM votes WHERE participant_id = $1;
+
+-- name: GetPollOptionForUpdate :one
+-- Locks the option row for the duration of the enclosing transaction — THE atomicity primitive
+-- Claim relies on (see claims.go's doc comment): every concurrent claimant on the same option
+-- blocks here until the transaction holding the lock commits or rolls back, so the capacity count
+-- taken after this line and the vote inserted before commit can never race with another claimant's
+-- count-then-insert on the same option.
+SELECT * FROM poll_options WHERE id = $1 FOR UPDATE;
+
+-- name: CountYesVotesForOption :one
+SELECT count(*) FROM votes WHERE option_id = $1 AND answer = 'yes';
+
+-- name: GetComment :one
+SELECT * FROM comments WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: SoftDeleteComment :exec
+UPDATE comments SET deleted_at = $3 WHERE id = $1 AND poll_id = $2;
+
+-- name: MemberHasManagingRole :one
+-- Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
+-- in organizationId? (The creator-manages-their-own-content half is checked separately by the
+-- caller against polls.created_by — this query only ever answers the role question.)
+SELECT EXISTS (
+  SELECT 1 FROM organization_members om
+  JOIN organization_member_roles omr ON omr.member_id = om.id
+  WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role IN ('owner', 'admin')
+) AS has_role;

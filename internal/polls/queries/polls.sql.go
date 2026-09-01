@@ -11,12 +11,55 @@ import (
 	"time"
 )
 
+const countYesVotesForOption = `-- name: CountYesVotesForOption :one
+SELECT count(*) FROM votes WHERE option_id = $1 AND answer = 'yes'
+`
+
+func (q *Queries) CountYesVotesForOption(ctx context.Context, optionID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countYesVotesForOption, optionID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteParticipant = `-- name: DeleteParticipant :exec
+DELETE FROM participants WHERE id = $1
+`
+
+func (q *Queries) DeleteParticipant(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteParticipant, id)
+	return err
+}
+
 const deletePollOption = `-- name: DeletePollOption :exec
 DELETE FROM poll_options WHERE id = $1
 `
 
 func (q *Queries) DeletePollOption(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deletePollOption, id)
+	return err
+}
+
+const deleteVote = `-- name: DeleteVote :exec
+DELETE FROM votes WHERE participant_id = $1 AND option_id = $2
+`
+
+type DeleteVoteParams struct {
+	ParticipantID string
+	OptionID      string
+}
+
+func (q *Queries) DeleteVote(ctx context.Context, arg DeleteVoteParams) error {
+	_, err := q.db.ExecContext(ctx, deleteVote, arg.ParticipantID, arg.OptionID)
+	return err
+}
+
+const deleteVotesByParticipant = `-- name: DeleteVotesByParticipant :exec
+DELETE FROM votes WHERE participant_id = $1
+`
+
+func (q *Queries) DeleteVotesByParticipant(ctx context.Context, participantID string) error {
+	_, err := q.db.ExecContext(ctx, deleteVotesByParticipant, participantID)
 	return err
 }
 
@@ -41,6 +84,26 @@ func (q *Queries) FinalizePoll(ctx context.Context, arg FinalizePollParams) erro
 	return err
 }
 
+const getComment = `-- name: GetComment :one
+SELECT id, poll_id, author_name, participant_id, user_id, body, created_at, deleted_at FROM comments WHERE id = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) GetComment(ctx context.Context, id string) (Comment, error) {
+	row := q.db.QueryRowContext(ctx, getComment, id)
+	var i Comment
+	err := row.Scan(
+		&i.ID,
+		&i.PollID,
+		&i.AuthorName,
+		&i.ParticipantID,
+		&i.UserID,
+		&i.Body,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getOrganizationName = `-- name: GetOrganizationName :one
 SELECT name FROM organizations WHERE id = $1
 `
@@ -50,6 +113,55 @@ func (q *Queries) GetOrganizationName(ctx context.Context, id int64) (string, er
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const getParticipant = `-- name: GetParticipant :one
+
+SELECT id, poll_id, name, email, user_id, edit_token_hash, locale, created_at, updated_at FROM participants WHERE id = $1
+`
+
+// Task 3 (participants/votes/comments/claims) queries below.
+func (q *Queries) GetParticipant(ctx context.Context, id string) (Participant, error) {
+	row := q.db.QueryRowContext(ctx, getParticipant, id)
+	var i Participant
+	err := row.Scan(
+		&i.ID,
+		&i.PollID,
+		&i.Name,
+		&i.Email,
+		&i.UserID,
+		&i.EditTokenHash,
+		&i.Locale,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getParticipantByPollAndUser = `-- name: GetParticipantByPollAndUser :one
+SELECT id, poll_id, name, email, user_id, edit_token_hash, locale, created_at, updated_at FROM participants WHERE poll_id = $1 AND user_id = $2
+`
+
+type GetParticipantByPollAndUserParams struct {
+	PollID string
+	UserID sql.NullInt64
+}
+
+func (q *Queries) GetParticipantByPollAndUser(ctx context.Context, arg GetParticipantByPollAndUserParams) (Participant, error) {
+	row := q.db.QueryRowContext(ctx, getParticipantByPollAndUser, arg.PollID, arg.UserID)
+	var i Participant
+	err := row.Scan(
+		&i.ID,
+		&i.PollID,
+		&i.Name,
+		&i.Email,
+		&i.UserID,
+		&i.EditTokenHash,
+		&i.Locale,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getPoll = `-- name: GetPoll :one
@@ -78,6 +190,31 @@ func (q *Queries) GetPoll(ctx context.Context, id string) (Poll, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getPollOptionForUpdate = `-- name: GetPollOptionForUpdate :one
+SELECT id, poll_id, position, kind, start_at, end_at, label, capacity FROM poll_options WHERE id = $1 FOR UPDATE
+`
+
+// Locks the option row for the duration of the enclosing transaction — THE atomicity primitive
+// Claim relies on (see claims.go's doc comment): every concurrent claimant on the same option
+// blocks here until the transaction holding the lock commits or rolls back, so the capacity count
+// taken after this line and the vote inserted before commit can never race with another claimant's
+// count-then-insert on the same option.
+func (q *Queries) GetPollOptionForUpdate(ctx context.Context, id string) (PollOption, error) {
+	row := q.db.QueryRowContext(ctx, getPollOptionForUpdate, id)
+	var i PollOption
+	err := row.Scan(
+		&i.ID,
+		&i.PollID,
+		&i.Position,
+		&i.Kind,
+		&i.StartAt,
+		&i.EndAt,
+		&i.Label,
+		&i.Capacity,
 	)
 	return i, err
 }
@@ -387,6 +524,33 @@ func (q *Queries) ListPollsByOrg(ctx context.Context, organizationID int64) ([]P
 	return items, nil
 }
 
+const listVotesByParticipant = `-- name: ListVotesByParticipant :many
+SELECT participant_id, option_id, answer FROM votes WHERE participant_id = $1
+`
+
+func (q *Queries) ListVotesByParticipant(ctx context.Context, participantID string) ([]Vote, error) {
+	rows, err := q.db.QueryContext(ctx, listVotesByParticipant, participantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Vote
+	for rows.Next() {
+		var i Vote
+		if err := rows.Scan(&i.ParticipantID, &i.OptionID, &i.Answer); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVotesByPoll = `-- name: ListVotesByPoll :many
 SELECT v.participant_id, v.option_id, v.answer FROM votes v
 JOIN participants p ON p.id = v.participant_id
@@ -416,6 +580,29 @@ func (q *Queries) ListVotesByPoll(ctx context.Context, pollID string) ([]Vote, e
 	return items, nil
 }
 
+const memberHasManagingRole = `-- name: MemberHasManagingRole :one
+SELECT EXISTS (
+  SELECT 1 FROM organization_members om
+  JOIN organization_member_roles omr ON omr.member_id = om.id
+  WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role IN ('owner', 'admin')
+) AS has_role
+`
+
+type MemberHasManagingRoleParams struct {
+	OrganizationID int64
+	UserID         int64
+}
+
+// Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
+// in organizationId? (The creator-manages-their-own-content half is checked separately by the
+// caller against polls.created_by — this query only ever answers the role question.)
+func (q *Queries) MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, memberHasManagingRole, arg.OrganizationID, arg.UserID)
+	var has_role bool
+	err := row.Scan(&has_role)
+	return has_role, err
+}
+
 const setPollStatus = `-- name: SetPollStatus :exec
 UPDATE polls SET status = $2, updated_at = $3 WHERE id = $1
 `
@@ -431,6 +618,21 @@ func (q *Queries) SetPollStatus(ctx context.Context, arg SetPollStatusParams) er
 	return err
 }
 
+const softDeleteComment = `-- name: SoftDeleteComment :exec
+UPDATE comments SET deleted_at = $3 WHERE id = $1 AND poll_id = $2
+`
+
+type SoftDeleteCommentParams struct {
+	ID        string
+	PollID    string
+	DeletedAt sql.NullTime
+}
+
+func (q *Queries) SoftDeleteComment(ctx context.Context, arg SoftDeleteCommentParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteComment, arg.ID, arg.PollID, arg.DeletedAt)
+	return err
+}
+
 const softDeletePoll = `-- name: SoftDeletePoll :exec
 UPDATE polls SET deleted_at = $2, updated_at = $2 WHERE id = $1
 `
@@ -442,6 +644,21 @@ type SoftDeletePollParams struct {
 
 func (q *Queries) SoftDeletePoll(ctx context.Context, arg SoftDeletePollParams) error {
 	_, err := q.db.ExecContext(ctx, softDeletePoll, arg.ID, arg.DeletedAt)
+	return err
+}
+
+const updateParticipantName = `-- name: UpdateParticipantName :exec
+UPDATE participants SET name = $2, updated_at = $3 WHERE id = $1
+`
+
+type UpdateParticipantNameParams struct {
+	ID        string
+	Name      string
+	UpdatedAt time.Time
+}
+
+func (q *Queries) UpdateParticipantName(ctx context.Context, arg UpdateParticipantNameParams) error {
+	_, err := q.db.ExecContext(ctx, updateParticipantName, arg.ID, arg.Name, arg.UpdatedAt)
 	return err
 }
 

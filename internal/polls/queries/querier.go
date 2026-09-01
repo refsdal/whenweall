@@ -9,10 +9,24 @@ import (
 )
 
 type Querier interface {
+	CountYesVotesForOption(ctx context.Context, optionID string) (int64, error)
+	DeleteParticipant(ctx context.Context, id string) error
 	DeletePollOption(ctx context.Context, id string) error
+	DeleteVote(ctx context.Context, arg DeleteVoteParams) error
+	DeleteVotesByParticipant(ctx context.Context, participantID string) error
 	FinalizePoll(ctx context.Context, arg FinalizePollParams) error
+	GetComment(ctx context.Context, id string) (Comment, error)
 	GetOrganizationName(ctx context.Context, id int64) (string, error)
+	// Task 3 (participants/votes/comments/claims) queries below.
+	GetParticipant(ctx context.Context, id string) (Participant, error)
+	GetParticipantByPollAndUser(ctx context.Context, arg GetParticipantByPollAndUserParams) (Participant, error)
 	GetPoll(ctx context.Context, id string) (Poll, error)
+	// Locks the option row for the duration of the enclosing transaction — THE atomicity primitive
+	// Claim relies on (see claims.go's doc comment): every concurrent claimant on the same option
+	// blocks here until the transaction holding the lock commits or rolls back, so the capacity count
+	// taken after this line and the vote inserted before commit can never race with another claimant's
+	// count-then-insert on the same option.
+	GetPollOptionForUpdate(ctx context.Context, id string) (PollOption, error)
 	InsertComment(ctx context.Context, arg InsertCommentParams) error
 	InsertParticipant(ctx context.Context, arg InsertParticipantParams) error
 	InsertPoll(ctx context.Context, arg InsertPollParams) error
@@ -21,9 +35,16 @@ type Querier interface {
 	ListOptionsByPoll(ctx context.Context, pollID string) ([]PollOption, error)
 	ListParticipantsByPoll(ctx context.Context, pollID string) ([]Participant, error)
 	ListPollsByOrg(ctx context.Context, organizationID int64) ([]Poll, error)
+	ListVotesByParticipant(ctx context.Context, participantID string) ([]Vote, error)
 	ListVotesByPoll(ctx context.Context, pollID string) ([]Vote, error)
+	// Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
+	// in organizationId? (The creator-manages-their-own-content half is checked separately by the
+	// caller against polls.created_by — this query only ever answers the role question.)
+	MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error)
 	SetPollStatus(ctx context.Context, arg SetPollStatusParams) error
+	SoftDeleteComment(ctx context.Context, arg SoftDeleteCommentParams) error
 	SoftDeletePoll(ctx context.Context, arg SoftDeletePollParams) error
+	UpdateParticipantName(ctx context.Context, arg UpdateParticipantNameParams) error
 	UpdatePollOption(ctx context.Context, arg UpdatePollOptionParams) error
 	UpdatePollScalars(ctx context.Context, arg UpdatePollScalarsParams) error
 	UpsertVote(ctx context.Context, arg UpsertVoteParams) error

@@ -29,10 +29,18 @@ var (
 	// (POLL_FINALIZED, CONFLICT, CAPACITY_BELOW_CLAIMS) into one sentinel — see the doc comment
 	// at each call site in service.go for which TS code a given ErrConflict return corresponds
 	// to; Task 7's handler layer can still distinguish them by message if it ever needs to.
+	//
+	// Task 3 (participants.go/claims.go) extends the same collapse to three more TS codes:
+	// POLL_CLOSED (a participant/comment/claim mutation on a non-open poll), LIMIT_REACHED (the
+	// per-poll participant cap), and CLAIM_LIMIT_REACHED (a participant's signupMaxClaims cap) —
+	// again, every call site's message names which TS code it stands in for. EMAIL_REQUIRED,
+	// TS's other participant-facing code, maps onto *ValidationError (Fields{"email": ...})
+	// instead, since it's a missing-required-field condition, not a state conflict.
 	ErrConflict = errors.New("polls: conflict")
 
 	// ErrCapacityFull is returned by Claim (Task 3) when a sign-up slot's capacity is already
-	// met. Declared here now per the brief so Task 3 doesn't need to touch this file.
+	// met. Declared here now per the brief so Task 3 doesn't need to touch this file. This is
+	// also the sentinel for TS's SLOT_FULL code.
 	ErrCapacityFull = errors.New("polls: capacity full")
 )
 

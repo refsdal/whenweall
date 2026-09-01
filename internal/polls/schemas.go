@@ -6,14 +6,17 @@ import (
 	"strings"
 )
 
-// Limits ported from src/server/polls/schemas.ts's LIMITS (only the ones Task 2's poll-level
-// input needs — participant/comment limits belong to Task 3).
+// Limits ported from src/server/polls/schemas.ts's LIMITS.
 const (
 	LimitTitle       = 200
 	LimitDescription = 2000
 	LimitLocation    = 200
 	LimitOptions     = 100
 	LimitOptionLabel = 100
+
+	// LimitParticipants is LIMITS.participants — the per-poll participant cap enforced by
+	// AddParticipant (participants.go) and prepareNewParticipant (claims.go).
+	LimitParticipants = 500
 )
 
 // PollType mirrors src/server/db/schema's PollType ('datetime' | 'options' | 'signup').
