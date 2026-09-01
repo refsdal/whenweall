@@ -24,3 +24,7 @@ src/paraglide
 
 # local scratch (SDD ledgers, briefs, reports)
 .superpowers/
+
+# Go
+dist-go/
+.limen/
