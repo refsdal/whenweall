@@ -174,6 +174,20 @@ func Load(env map[string]string) (*Config, []string, error) {
 		errs = append(errs, "SMTP_HOST is required — whenweall cannot function without e-mail")
 	}
 
+	// --- SMTP auth: half-configured is not an error (mailer.New already treats it as "no
+	// auth"), but it's surprising enough — a relay silently rejecting unauthenticated mail, say —
+	// to warn about rather than let a typo'd SMTP_PASSWORD go unnoticed. -------------------------
+	if (cfg.SMTPUser != "") != (cfg.SMTPPassword != "") {
+		warnings = append(warnings, "SMTP auth is half-configured — both are required, so mail will be sent without authentication")
+	}
+
+	// --- SMTP_SECURE + port 587 is an unusual combination: implicit TLS (SMTPSecure) normally
+	// pairs with port 465, while 587 is the STARTTLS port almost every provider expects. Neither
+	// value is wrong on its own, so this stays a warning rather than an error. --------------------
+	if cfg.SMTPSecure && cfg.SMTPPort == 587 {
+		warnings = append(warnings, "SMTP_SECURE=true with port 587 is unusual — implicit TLS normally uses port 465; most providers expect STARTTLS on 587")
+	}
+
 	// --- capabilities: half-configured pairs are off, with a warning ----------------------
 	// Mirrors deriveCapabilities() in src/config.ts.
 	pair := func(name, a, b string) bool {

@@ -86,6 +86,79 @@ func TestSetButBlankOptionalIsUnset(t *testing.T) {
 	}
 }
 
+func TestSMTPAuthHalfConfiguredWarns(t *testing.T) {
+	env := valid()
+	env["SMTP_USER"] = "user-only"
+	cfg, warnings, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SMTPUser != "user-only" || cfg.SMTPPassword != "" {
+		t.Errorf("SMTPUser/SMTPPassword = %q/%q, want user-only/empty", cfg.SMTPUser, cfg.SMTPPassword)
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "SMTP auth") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want an SMTP auth warning, got %v", warnings)
+	}
+}
+
+func TestSMTPAuthBothSetDoesNotWarn(t *testing.T) {
+	env := valid()
+	env["SMTP_USER"] = "user"
+	env["SMTP_PASSWORD"] = "pass"
+	_, warnings, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "SMTP auth") {
+			t.Errorf("want no SMTP auth warning when both are set, got %v", warnings)
+		}
+	}
+}
+
+func TestSMTPSecureWithPort587Warns(t *testing.T) {
+	env := valid()
+	env["SMTP_SECURE"] = "true"
+	env["SMTP_PORT"] = "587"
+	cfg, warnings, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SMTPSecure || cfg.SMTPPort != 587 {
+		t.Fatalf("SMTPSecure/SMTPPort = %v/%d, want true/587", cfg.SMTPSecure, cfg.SMTPPort)
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "SMTP_SECURE") && strings.Contains(w, "587") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want an SMTP_SECURE+587 warning, got %v", warnings)
+	}
+}
+
+func TestSMTPSecureWithPort465DoesNotWarn(t *testing.T) {
+	env := valid()
+	env["SMTP_SECURE"] = "true"
+	env["SMTP_PORT"] = "465"
+	_, warnings, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "SMTP_SECURE") {
+			t.Errorf("want no SMTP_SECURE warning for port 465, got %v", warnings)
+		}
+	}
+}
+
 func TestTestRoutesForbiddenInProduction(t *testing.T) {
 	env := valid()
 	env["APP_ENV"] = "production"
