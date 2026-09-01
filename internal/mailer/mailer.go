@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -130,12 +131,39 @@ func (m *Mailer) Send(ctx context.Context, msg Message) error {
 	}
 
 	if err := client.DialAndSendWithContext(ctx, gm); err != nil {
-		// go-mail's SendError can embed the recipient address in its message (e.g. a rejected
-		// RCPT TO) — deliberately not logged anywhere by this package. Whatever calls Send
-		// decides what, if anything, to log from the returned error.
-		return fmt.Errorf("mailer: send: %w", err)
+		return redactSendErr(err)
 	}
 	return nil
+}
+
+// redactSendErr turns an SMTP delivery failure into an error safe to log and to persist in
+// scheduled_jobs.last_error. go-mail's *gomail.SendError.Error() includes the affected
+// recipient address(es) (e.g. "sending SMTP RCPT TO command: 550 5.1.1 ada@example.com:
+// Recipient address rejected, affected recipient(s): ada@example.com") — mail privacy requires
+// this package never let a recipient address reach either destination, matching the guarantee
+// src/server/mailer/mailer.ts's sendMail made (logs subject/code, never the recipient).
+//
+// The redacted message keeps only the failure reason, the server's error code, and whether it
+// looks temporary (worth retrying) — never the rcpt list or the raw SMTP response text (which
+// can itself echo the address back, e.g. in a "Recipient address rejected" line). It deliberately
+// returns a flat errors.New rather than wrapping the original with %w: wrapping would leave the
+// *SendError reachable via errors.As/errors.Unwrap, letting a caller pull the address back out of
+// it despite the message text being clean.
+func redactSendErr(err error) error {
+	var sendErr *gomail.SendError
+	if errors.As(err, &sendErr) {
+		reason := fmt.Sprintf("mailer: send failed: %s", sendErr.Reason.String())
+		if code := sendErr.ErrorCode(); code != 0 {
+			reason = fmt.Sprintf("%s (smtp code %d)", reason, code)
+		}
+		if sendErr.IsTemp() {
+			reason += " (temporary, will retry)"
+		}
+		return errors.New(reason)
+	}
+	// Not a SendError — a dial/connection failure, say — which doesn't carry recipient
+	// addresses, so the original is safe to wrap as-is.
+	return fmt.Errorf("mailer: send: %w", err)
 }
 
 // Enqueue schedules kind "mail:send" with msg as its JSON payload (MaxAttempts 10, run

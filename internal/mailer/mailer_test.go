@@ -1,11 +1,16 @@
 package mailer_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/mailer"
 	"github.com/refsdal/whenweall/internal/testdb"
@@ -98,5 +103,109 @@ func TestEnqueueClaimRoundTrip(t *testing.T) {
 	}
 	if got.Data["Name"] != "Ada" || got.Data["Token"] != "abc123" {
 		t.Errorf("Data = %+v, want %+v", got.Data, msg.Data)
+	}
+}
+
+// rejectedRecipient is the address a rejectingSMTPServer's RCPT TO handler always rejects with a
+// 550 response that echoes the address back — mirroring how a real SMTP server's rejection text
+// usually does — so the test can catch a leak coming from anywhere in the error, not just the
+// SendError.rcpt list.
+const rejectedRecipient = "ada@example.com"
+
+// TestSendRedactsRecipientAddressFromError drives (*Mailer).Send against a fake SMTP server that
+// rejects RCPT TO, producing a genuine *gomail.SendError (Reason: ErrSMTPRcptTo) with the
+// recipient address recorded on it. It asserts the error Send actually returns carries the
+// failure reason but never the recipient address — the Go equivalent of the TS predecessor's
+// "never logs the recipient address" guarantee (src/server/mailer/__tests__/mailer.test.ts).
+func TestSendRedactsRecipientAddressFromError(t *testing.T) {
+	host, port := startRejectingSMTPServer(t)
+
+	cfg := &config.Config{
+		SMTPHost:  host,
+		SMTPPort:  port,
+		EmailFrom: "whenweall <no-reply@whenweall.example>",
+		AppURL:    "https://whenweall.example",
+	}
+	m := mailer.New(cfg)
+
+	msg := mailer.Message{
+		To:       rejectedRecipient,
+		Template: "verify_email",
+		Data: map[string]any{
+			"Name": "Ada",
+			"URL":  "https://whenweall.example/verify/abc123",
+		},
+	}
+
+	err := m.Send(context.Background(), msg)
+	if err == nil {
+		t.Fatal("Send returned nil, want an error from the rejected RCPT TO")
+	}
+
+	got := err.Error()
+	if strings.Contains(got, rejectedRecipient) {
+		t.Errorf("error %q contains the recipient address %q, want it redacted", got, rejectedRecipient)
+	}
+	if !strings.Contains(strings.ToLower(got), "rcpt") {
+		t.Errorf("error %q does not convey the failure reason (expected something mentioning RCPT)", got)
+	}
+}
+
+// startRejectingSMTPServer starts a minimal single-connection fake SMTP server on 127.0.0.1: it
+// completes EHLO/MAIL FROM normally (no STARTTLS/AUTH extensions offered, so go-mail's
+// TLSOpportunistic policy and no-auth default both proceed without negotiating either), then
+// rejects RCPT TO for rejectedRecipient with a 550 response, and handles the RSET/QUIT that
+// follow. Returns the host and port to dial.
+func startRejectingSMTPServer(t *testing.T) (host string, port int) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return // listener closed by t.Cleanup
+		}
+		defer func() { _ = conn.Close() }()
+		handleRejectingSMTPConn(conn)
+	}()
+
+	addr := ln.Addr().(*net.TCPAddr)
+	return "127.0.0.1", addr.Port
+}
+
+func handleRejectingSMTPConn(conn net.Conn) {
+	r := bufio.NewReader(conn)
+	writeLine := func(s string) { _, _ = conn.Write([]byte(s + "\r\n")) }
+
+	writeLine("220 fake.test ESMTP ready")
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		cmd := strings.TrimSpace(line)
+		upper := strings.ToUpper(cmd)
+		switch {
+		case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+			// No extensions advertised: STARTTLS and AUTH are both left off the table, so the
+			// client (TLSOpportunistic, no credentials configured) proceeds without either.
+			writeLine("250 fake.test")
+		case strings.HasPrefix(upper, "MAIL FROM:"):
+			writeLine("250 2.1.0 OK")
+		case strings.HasPrefix(upper, "RCPT TO:"):
+			writeLine(fmt.Sprintf("550 5.1.1 <%s>: Recipient address rejected", rejectedRecipient))
+		case strings.HasPrefix(upper, "RSET"):
+			writeLine("250 2.0.0 OK")
+		case strings.HasPrefix(upper, "QUIT"):
+			writeLine("221 2.0.0 Bye")
+			return
+		default:
+			writeLine("250 2.0.0 OK")
+		}
 	}
 }
