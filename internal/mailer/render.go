@@ -70,8 +70,15 @@ func init() {
 		}
 		htmlTemplates[name] = html
 
+		// The text/template set also parses <name>.html, purely to pick up its "subject" define
+		// block: subjects are plain text (a mail header line), and the brief keeps them in one
+		// obvious place per template — the {{define "subject"}}...{{end}} in <name>.html — so
+		// rather than duplicating that copy into the .txt file, Render executes "subject" through
+		// this text (non-escaping) template set instead of the html one. <name>.html's "content"
+		// define is parsed along for the ride here but never executed from this set — the text
+		// body comes from <name>.txt's top-level content instead.
 		text, err := textTemplate.New(name+".txt").Funcs(funcMap()).
-			ParseFS(templatesFS, "templates/"+name+".txt")
+			ParseFS(templatesFS, "templates/"+name+".txt", "templates/"+name+".html")
 		if err != nil {
 			panic(fmt.Sprintf("mailer: parsing templates/%s.txt: %v", name, err))
 		}
@@ -129,7 +136,12 @@ func Render(name string, data map[string]any) (Rendered, error) {
 
 	var subjectBuf, htmlBuf, textBuf strings.Builder
 
-	if err := html.ExecuteTemplate(&subjectBuf, "subject", data); err != nil {
+	// Subject is executed through the text (non-escaping) template set even though "subject" is
+	// defined inside <name>.html — a subject line is plain text, not an HTML body, and running it
+	// through html/template would HTML-escape interpolated data (e.g. "Smith & Co" -> "Smith
+	// &amp; Co", "David's" -> "David&#39;s"). The HTML body below still needs (and gets) full
+	// escaping, since that output really is embedded in an HTML document.
+	if err := text.ExecuteTemplate(&subjectBuf, "subject", data); err != nil {
 		return Rendered{}, fmt.Errorf("mailer: rendering %q subject: %w", name, err)
 	}
 	if err := html.ExecuteTemplate(&htmlBuf, "layout.html", data); err != nil {

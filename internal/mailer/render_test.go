@@ -238,6 +238,47 @@ func TestRenderEscapesHTML(t *testing.T) {
 	}
 }
 
+// TestRenderSubjectIsNotHTMLEscaped guards against subjects being rendered through the
+// html-escaping template set. `&`, `'`, and `<` are ordinary characters in real org names and
+// poll titles ("Smith & Co", "David's Wedding") — a subject line must carry them verbatim, since
+// it is a mail header, not markup embedded in a document.
+func TestRenderSubjectIsNotHTMLEscaped(t *testing.T) {
+	data := map[string]any{
+		"AppURL":      "https://app.example",
+		"OrgName":     `Smith & Co <ok>`,
+		"InviterName": `O'Brien`,
+		"URL":         "https://app.example/invite/abc123",
+	}
+
+	rendered, err := Render("org_invite", data)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	const wantSubject = `O'Brien invited you to Smith & Co <ok> on whenweall`
+	if rendered.Subject != wantSubject {
+		t.Errorf("Subject = %q, want %q (subjects must not be HTML-escaped)", rendered.Subject, wantSubject)
+	}
+
+	// Text is also non-escaping (text/template), so the same fields should come back verbatim
+	// wherever the body interpolates them.
+	if !strings.Contains(rendered.Text, `Smith & Co <ok>`) {
+		t.Errorf("Text does not contain the org name verbatim:\n%s", rendered.Text)
+	}
+
+	// The HTML body uses the same fields and must still be escaped — this fix must not weaken
+	// that.
+	if !strings.Contains(rendered.HTML, "&amp;") {
+		t.Errorf("HTML body does not escape '&':\n%s", rendered.HTML)
+	}
+	if !strings.Contains(rendered.HTML, "&#39;Brien") {
+		t.Errorf("HTML body does not escape the apostrophe in O'Brien:\n%s", rendered.HTML)
+	}
+	if !strings.Contains(rendered.HTML, "&lt;ok&gt;") {
+		t.Errorf("HTML body does not escape '<ok>':\n%s", rendered.HTML)
+	}
+}
+
 func TestRenderUnknownTemplateErrors(t *testing.T) {
 	_, err := Render("does_not_exist", map[string]any{})
 	if err == nil {
