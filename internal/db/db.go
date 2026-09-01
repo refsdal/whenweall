@@ -15,9 +15,12 @@ import (
 	"github.com/refsdal/whenweall/migrations"
 )
 
-// DBTX is the query surface shared by *sql.DB and *sql.Tx (same shape sqlc generates against).
+// DBTX is the query surface shared by *sql.DB and *sql.Tx — it matches sqlc's generated DBTX
+// interface (internal/polls/queries.DBTX) exactly, so a *sql.DB or *sql.Tx can be passed
+// directly to queries.New.
 type DBTX interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	PrepareContext(context.Context, string) (*sql.Stmt, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
