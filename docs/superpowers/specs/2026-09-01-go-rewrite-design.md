@@ -23,7 +23,7 @@ data to migrate).
 | Decision | Choice |
 | --- | --- |
 | Bun migration | Abandoned; full pivot to Go. Its designs are inputs, not code to keep. |
-| Auth library | [Limen](https://limenauth.dev/) (`github.com/thecodearcher/limen`), **its features only**: email+password, OAuth (Google), generic OIDC, magic links, TOTP 2FA, sessions. **Passkeys are dropped** (Limen has no WebAuthn). Orgs/invitations are our own domain code. |
+| Auth library | [Limen](https://limenauth.dev/) (`github.com/thecodearcher/limen`), **its features only**: email+password, OAuth (Google), generic OIDC, magic links, TOTP 2FA, sessions. **Passkeys are dropped** (Limen has no WebAuthn). *Amended 2026-09-01 after source review:* orgs/invitations use **Limen's `organization` plugin** (the website undersold it — the plugin covers members, roles, invitations with email callback, and active-org-in-session), not our own domain code. |
 | Realtime | Own hub: `coder/websocket` + Postgres LISTEN/NOTIFY + presence table. No Centrifuge. |
 | SSR | Gone entirely. Pure SPA; no prerendering, no OG-tag injection. Accepted trade-off. |
 | Billing | Deleted wholesale, including the entitlements layer. Everything unlimited for everyone. Abuse control = rate limiting only. |
@@ -89,9 +89,22 @@ whatever Limen mounts plus our org/invitation endpoints.
 - **Seam:** all Limen usage goes through `internal/auth`'s own interface (`CurrentUser`,
   `RequireSession`, `RequireStaff`). No handler imports Limen types. Limen is young; it must be
   swappable without touching call sites. Pin its version.
-- **Orgs are ours:** `organizations`, `members` (owner/admin/member), `invitations` tables,
-  ported from `src/server/auth/`. Personal org auto-created on signup (post-signup hook).
-  Invitation flow unchanged: email → accept link → `/accept-invitation/{id}`.
+- **Orgs via Limen's `organization` plugin** (amended after source review): it provides
+  organizations, members, configurable roles (owner/admin/member), invitations with expiring
+  tokens, active-org-in-session, and mounts its own HTTP routes under the auth base path.
+  Invitation emails route through our mail queue via `organization.WithSendInvitationMail`.
+  Personal org auto-created on signup via a Limen `WithHTTPHooks` after-hook on the
+  signup/OAuth-callback routes calling `organization.Use(a).CreateOrganization`. The accept
+  flow keeps `/accept-invitation/{id}` in the SPA, backed by the plugin's
+  `GET /invitations/token/{token}` + `POST /invitations/respond` endpoints.
+- **Limen mechanics pinned by source review:** `Config.Secret` must be exactly 32 bytes — we
+  derive it as `sha256(AUTH_SECRET)`. Verification/reset/magic-link/invitation emails are
+  callbacks (`WithSendEmailVerificationMail`, `WithSendPasswordResetEmail`,
+  `WithSendMagicLink`, `WithSendInvitationMail`) that enqueue into our mail queue. Limen's
+  tables enter the goose baseline via its CLI migration generator
+  (`limen generate migrations --driver postgres`), run once at development time.
+- **Staff flag stays ours:** a `staff_users(user_id)` table rather than extending Limen's user
+  schema; `RequireStaff` consults it.
 - **Staff:** platform role on the user row; `RequireStaff` gates `/api/v1/admin/*`. Bootstrap via
   `whenweall create-staff-user --email ...` subcommand (works via `docker compose exec`).
 - **Guests:** anonymous participant tokens (`claim-auth.ts`/`comment-auth.ts` logic) port as
