@@ -71,15 +71,24 @@ func RateLimit(sqlDB *sql.DB, name string, limit int, window time.Duration, keyF
 	}
 }
 
-// ClientIP returns the request's client IP: the first entry of X-Forwarded-For when trustProxy is
-// true (set from the app's TRUST_PROXY config — true only when a reverse proxy in front of us is
-// trusted to set that header honestly), otherwise the host portion of RemoteAddr.
+// ClientIP returns the request's client IP: the rightmost entry of X-Forwarded-For when
+// trustProxy is true (set from the app's TRUST_PROXY config — true only when a reverse proxy in
+// front of us is trusted to set that header honestly), otherwise the host portion of RemoteAddr.
+//
+// Rightmost, not leftmost: X-Forwarded-For is a client-supplied header up until the first proxy
+// that actually terminates the request touches it, and every hop after that only ever *appends*
+// its own observed peer address to the end of the list — it never rewrites what's already there.
+// So the leftmost entry is whatever the original client claimed for itself (trivially spoofed by
+// sending an X-Forwarded-For header of their own choosing), while the rightmost entry is the
+// address our own trusted proxy saw the connection come from — the only entry in the list this
+// process didn't just take the client's word for.
 func ClientIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first := strings.TrimSpace(strings.Split(xff, ",")[0])
-			if first != "" {
-				return first
+			parts := strings.Split(xff, ",")
+			last := strings.TrimSpace(parts[len(parts)-1])
+			if last != "" {
+				return last
 			}
 		}
 	}

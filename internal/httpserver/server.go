@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/refsdal/whenweall/internal/auth"
@@ -49,6 +51,47 @@ func (s *Server) authRateLimit(name string) func(http.Handler) http.Handler {
 	})
 }
 
+// authRateLimitedRoutes are the hot, unauthenticated auth endpoints that get a 10/min-per-IP
+// budget, keyed by "METHOD canonical-path" (see authRateLimitMiddleware for how the canonical
+// path is derived from a request). Every other path under /api/v1/auth/ passes straight through
+// to Limen unmetered.
+var authRateLimitedRoutes = map[string]string{
+	"POST /api/v1/auth/signin/credential":       "auth.signin",
+	"POST /api/v1/auth/signup/credential":       "auth.signup",
+	"POST /api/v1/auth/passwords/request-reset": "auth.password_reset",
+	"POST /api/v1/auth/magic-link/signin":       "auth.magic_link",
+}
+
+// authRateLimitMiddleware wraps the entire "/api/v1/auth/" mount in one middleware that computes
+// the same canonical path Limen's own router resolves the request to — path.Clean of the path
+// with a trailing slash trimmed first — and, only for the routes listed in
+// authRateLimitedRoutes, applies that route's budget before ever calling authHandler.
+//
+// This replaced four separate exact-pattern ServeMux registrations (one per rate-limited route,
+// each more specific than the "/api/v1/auth/" mount so ServeMux preferred it regardless of
+// registration order) that only ever matched a request path byte-for-byte. Limen's own router
+// cleans the path internally before dispatching, so "POST .../signin/credential/" — or any other
+// spelling ServeMux's exact patterns don't happen to cover — missed those registrations entirely,
+// fell through to this same "/api/v1/auth/" mount, and reached Limen's signin handler completely
+// unmetered. Matching on the same canonicalized path Limen itself will end up using, rather than
+// on the raw request path, closes that gap for every such spelling at once instead of one exact
+// string at a time.
+func (s *Server) authRateLimitMiddleware(authHandler http.Handler) http.Handler {
+	limited := make(map[string]http.Handler, len(authRateLimitedRoutes))
+	for route, name := range authRateLimitedRoutes {
+		limited[route] = s.authRateLimit(name)(authHandler)
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cleaned := path.Clean(strings.TrimSuffix(r.URL.Path, "/"))
+		if h, ok := limited[r.Method+" "+cleaned]; ok {
+			h.ServeHTTP(w, r)
+			return
+		}
+		authHandler.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 
@@ -58,29 +101,12 @@ func (s *Server) routes() {
 	checkOrigin := CheckOrigin(s.cfg.AppURL)
 	authHandler := s.authSvc.Handler()
 
-	// The hot, unauthenticated auth endpoints get their own exact-path patterns, each wrapped
-	// with a 10/min-per-IP limiter before delegating to the same Limen handler. These are more
-	// specific than the "/api/v1/auth/" mount below, so ServeMux prefers them regardless of
-	// registration order (longest-pattern-wins); Limen's own router still sees the full,
-	// unmodified request path either way, so it stays completely unaware a limiter sits in front
-	// of it.
-	for _, route := range []struct {
-		pattern string
-		name    string
-	}{
-		{"POST /api/v1/auth/signin/credential", "auth.signin"},
-		{"POST /api/v1/auth/signup/credential", "auth.signup"},
-		{"POST /api/v1/auth/passwords/request-reset", "auth.password_reset"},
-		{"POST /api/v1/auth/magic-link/signin", "auth.magic_link"},
-	} {
-		s.mux.Handle(route.pattern, checkOrigin(s.authRateLimit(route.name)(authHandler)))
-	}
-
-	// More specific than the "/api/" catch-all below, so ServeMux prefers this regardless of
-	// registration order (longest-pattern-wins). authSvc.Handler() already strips nothing itself
-	// — Limen's own router owns everything under its configured base path (WithHTTPBasePath
-	// "/api/v1/auth" in internal/auth.buildLimenConfig), so this mounts it directly.
-	s.mux.Handle("/api/v1/auth/", checkOrigin(authHandler))
+	// The whole mount goes through one middleware that applies the hot, unauthenticated auth
+	// routes' 10/min-per-IP budget (see authRateLimitMiddleware for why this replaced a set of
+	// ServeMux exact-pattern registrations) before ever reaching Limen's own handler, which owns
+	// everything under its configured base path (WithHTTPBasePath "/api/v1/auth" in
+	// internal/auth.buildLimenConfig) unmodified either way.
+	s.mux.Handle("/api/v1/auth/", checkOrigin(s.authRateLimitMiddleware(authHandler)))
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.
@@ -103,17 +129,37 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
+// APIOnly wraps mw so it only runs for requests whose path starts with "/api/" — every other
+// path calls next directly, skipping mw (and whatever work it does) entirely. Used to scope
+// session resolution to the API surface: static assets and the SPA shell need no identity, and
+// everything that does need one (including plan 4's websockets) lives under /api/, so there is no
+// reason for the auth database lookup resolveSession does to run on every single asset request a
+// browser makes.
+func APIOnly(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		wrapped := mw(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				wrapped.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // Handler returns the middleware-wrapped mux — SecurityHeaders outermost (so headers land on
 // every response, including panics), then RequestLogger, then Recover, then authSvc.Middleware
-// innermost around the mux. Recover must sit inside RequestLogger, not outside it: Recover
-// swallows the panic and returns normally, so RequestLogger's post-call log line always runs — a
-// panicking request still produces both a panic log and a request log, not just the former.
-// authSvc.Middleware sits inside Recover so a panic resolving the session (e.g. a database error)
-// is caught the same as a panic in any other handler, and outside the mux so every handler —
-// not just those under /api/v1/auth/ — can read the caller's Session via auth.FromContext.
+// (scoped to /api/ by APIOnly) innermost around the mux. Recover must sit inside RequestLogger,
+// not outside it: Recover swallows the panic and returns normally, so RequestLogger's post-call
+// log line always runs — a panicking request still produces both a panic log and a request log,
+// not just the former. authSvc.Middleware sits inside Recover so a panic resolving the session
+// (e.g. a database error) is caught the same as a panic in any other handler, and outside the mux
+// so every /api/ handler — not just those under /api/v1/auth/ — can read the caller's Session via
+// auth.FromContext.
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
-	h = s.authSvc.Middleware(h)
+	h = APIOnly(s.authSvc.Middleware)(h)
 	h = Recover(s.logger)(h)
 	h = RequestLogger(s.logger)(h)
 	h = SecurityHeaders(h)
