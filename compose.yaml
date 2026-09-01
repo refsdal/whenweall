@@ -11,15 +11,17 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: whenweall
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whenweall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD - generate with `openssl rand -base64 24`}
       POSTGRES_DB: whenweall
     volumes:
       # Postgres 18+ images store data in a major-version subdirectory and reject a volume mounted
       # directly at .../data. The mount goes one level up, at /var/lib/postgresql.
       - db-data:/var/lib/postgresql
     ports:
-      # Host port 5433 so this never collides with a Postgres already running on the host.
-      - '${POSTGRES_PORT:-5433}:5432'
+      # Host port 5433 so this never collides with a Postgres already running on the host. Bound
+      # to loopback only: this is a database with a generated password, not something that should
+      # be reachable from other machines on the network by default.
+      - '127.0.0.1:${POSTGRES_PORT:-5433}:5432'
     healthcheck:
       # `-d` matters: without it pg_isready probes the default database and reports ready before
       # POSTGRES_DB exists, so the app would start against a database that is not there yet.
@@ -40,7 +42,8 @@ services:
       APP_URL: ${APP_URL:-http://localhost:3000}
       APP_ENV: ${APP_ENV:-production}
       PORT: 3000
-      DATABASE_URL: postgres://whenweall:${POSTGRES_PASSWORD:-whenweall}@db:5432/whenweall
+      DATABASE_URL: postgres://whenweall:${POSTGRES_PASSWORD}@db:5432/whenweall
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET - generate with `openssl rand -base64 32`}
       # Mail is required: whenweall's confirmations, .ics attachments and digests are the product.
       SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST - whenweall cannot function without e-mail}
@@ -57,6 +60,10 @@ services:
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_NAME: ${OIDC_NAME:-sso}
+      # Escape hatch (spec §6): set false to run `whenweall migrate` yourself instead.
+      MIGRATE_ON_BOOT: ${MIGRATE_ON_BOOT:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
     ports:
       - '${APP_PORT:-3000}:3000'
     read_only: true
