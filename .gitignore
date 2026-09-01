@@ -28,3 +28,7 @@ src/paraglide
 # Go
 dist-go/
 .limen/
+
+# The embedded SPA build output overwrites this dir; only the placeholder index.html and its
+# own .gitignore (which ignores everything else here) are committed.
+!internal/httpserver/dist/

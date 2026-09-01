@@ -21,8 +21,8 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// New builds the full mux. Later plans add route registration params; for now it wires only
-// the health check.
+// New builds the full mux: health check, API 404 fallback, and the embedded SPA. Later plans
+// add route registration params for the real API surface.
 func New(cfg *config.Config, sqlDB *sql.DB) *Server {
 	s := &Server{
 		cfg:    cfg,
@@ -36,6 +36,14 @@ func New(cfg *config.Config, sqlDB *sql.DB) *Server {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+
+	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
+	// route is a real 404, not a client-side route the SPA should render.
+	s.mux.HandleFunc("/api/", apiNotFound)
+
+	// Everything else — including / — falls to the embedded SPA, which serves the exact file
+	// if one exists (e.g. /assets/*.js) or index.html otherwise (client-side routing).
+	s.mux.Handle("/", spaHandler())
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
