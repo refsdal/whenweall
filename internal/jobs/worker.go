@@ -15,6 +15,17 @@ const claimBatchSize = 20
 // defaultPollInterval is how often Run polls when PollInterval is left unset.
 const defaultPollInterval = 5 * time.Second
 
+// jobTimeout bounds a single handler invocation, well under lockTimeout (5 minutes, jobs.go).
+// RunOnce claims a whole batch (claimBatchSize, 20 jobs) and runs their handlers serially in one
+// goroutine before any of them is marked complete, so a single slow or stuck handler holds up
+// every job claimed after it too. Without a per-job bound, one hung handler (a stalled SMTP dial,
+// say) can keep its row locked past lockTimeout; once that happens, another replica's poll sees
+// the row as abandoned (locked_at < now() - lockTimeout) and claims and runs it again while the
+// first invocation is still in flight — a self-inflicted duplicate mail:send. jobTimeout keeps
+// each handler well inside that budget so a stuck one fails fast (ctx.Done) and the batch moves
+// on, instead of the lock aging out from under it.
+const jobTimeout = 2 * time.Minute
+
 // Handler processes one claimed job. Returning nil completes the job; returning an error fails
 // it (Fail records the error and either schedules a backoff retry or, once the attempt budget is
 // spent, leaves it dead-lettered).
@@ -31,6 +42,12 @@ type Worker struct {
 	handlers     map[string]Handler
 	log          *slog.Logger
 	PollInterval time.Duration
+
+	// JobTimeout bounds a single handler invocation; see jobTimeout's doc comment for why. It's
+	// exported, like PollInterval, purely so a test can shrink it instead of waiting out the real
+	// 2-minute default to exercise the timeout path; NewWorker seeds it to jobTimeout and nothing
+	// outside tests should need to touch it.
+	JobTimeout time.Duration
 }
 
 // NewWorker builds a Worker with no handlers registered and a 5s PollInterval. An empty worker
@@ -45,6 +62,7 @@ func NewWorker(sqlDB *sql.DB, replicaID string, log *slog.Logger) *Worker {
 		handlers:     make(map[string]Handler),
 		log:          log,
 		PollInterval: defaultPollInterval,
+		JobTimeout:   jobTimeout,
 	}
 }
 
@@ -72,16 +90,33 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 // process runs one claimed job's handler and reconciles the outcome against the table. A
 // handler error (including a recovered panic, or an unknown kind) fails the job; the dead-letter
 // moment — willRetry == false — is logged at ERROR because that's when a human needs to look.
+//
+// The handler runs under a per-job jobTimeout, not the bare ctx RunOnce was called with — see
+// jobTimeout's doc comment for why an unbounded handler is a duplicate-send hazard, not just a
+// slow one.
 func (w *Worker) process(ctx context.Context, job Job) {
-	if err := w.invoke(ctx, job); err != nil {
-		willRetry, ferr := Fail(ctx, w.db, job.ID, err.Error())
+	timeout := w.JobTimeout
+	if timeout <= 0 {
+		timeout = jobTimeout
+	}
+	jobCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if err := w.invoke(jobCtx, job); err != nil {
+		willRetry, rowFound, ferr := fail(ctx, w.db, job.ID, err.Error())
 		if ferr != nil {
 			w.log.Error("jobs: failed to record job failure", "kind", job.Kind, "id", job.ID, "error", ferr)
 			return
 		}
-		if willRetry {
+		switch {
+		case willRetry:
 			w.log.Warn("job failed, will retry", "kind", job.Kind, "id", job.ID, "attempts", job.Attempts, "error", err)
-		} else {
+		case !rowFound:
+			// The row is gone, not exhausted: the handler errored after already completing or
+			// rescheduling itself under a fresh id (see fail's doc comment). Routine, not a
+			// dead-letter — no human needs to look, so this stays well below ERROR.
+			w.log.Debug("jobs: job row gone (completed or rescheduled elsewhere)", "kind", job.Kind, "id", job.ID, "error", err)
+		default:
 			w.log.Error("job dead-lettered: attempt budget exhausted", "kind", job.Kind, "id", job.ID, "attempts", job.Attempts, "error", err)
 		}
 		return

@@ -1,6 +1,7 @@
 package jobs_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -162,6 +163,122 @@ func TestWorkerUnknownKindDeadLettersEventually(t *testing.T) {
 	}
 	if !strings.Contains(lastError, "no handler registered") {
 		t.Errorf("last_error = %q, want to contain %q", lastError, "no handler registered")
+	}
+}
+
+// TestHandlerRespectsJobTimeout is the regression test for IMPORTANT 3 (a serial 20-job batch
+// crossing lockTimeout self-inflicts duplicate sends): Worker.process must run each handler under
+// a per-job timeout well under lockTimeout, not the caller's bare ctx, so one stuck handler can't
+// silently hold its row's lock past lockTimeout. JobTimeout is shrunk here (rather than waiting
+// out the real 2-minute default) purely to keep the test fast; production leaves it at the
+// package default.
+func TestHandlerRespectsJobTimeout(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+
+	w := jobs.NewWorker(d, "w1", slog.Default())
+	w.JobTimeout = 20 * time.Millisecond
+
+	handlerCtxDone := make(chan error, 1)
+	w.Register("t:slow", func(handlerCtx context.Context, _ jobs.Job) error {
+		<-handlerCtx.Done()
+		handlerCtxDone <- handlerCtx.Err()
+		return handlerCtx.Err()
+	})
+
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "t:slow", RunAt: time.Now().Add(-time.Second), MaxAttempts: 5,
+	}); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	processed, err := w.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	select {
+	case ctxErr := <-handlerCtxDone:
+		if !errors.Is(ctxErr, context.DeadlineExceeded) {
+			t.Errorf("handler ctx.Err() = %v, want context.DeadlineExceeded", ctxErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler was never cancelled by JobTimeout")
+	}
+
+	var lastError string
+	if err := d.QueryRowContext(ctx, "SELECT last_error FROM scheduled_jobs").Scan(&lastError); err != nil {
+		t.Fatalf("select last_error: %v", err)
+	}
+	if !strings.Contains(lastError, "deadline exceeded") {
+		t.Errorf("last_error = %q, want to contain %q", lastError, "deadline exceeded")
+	}
+}
+
+// TestJobRowGoneLogsBelowError is the regression test for the MINOR "row gone" finding: when a
+// handler both reschedules itself (upserting the very row it was claimed on, taking a fresh id —
+// see Schedule's EXCLUDED.id doc comment) and then returns an error, Fail's UPDATE ... WHERE id =
+// <the old, now-gone id> matches nothing. That's a routine race, not a dead-letter (the job did
+// not exhaust its attempt budget), so Worker.process must not log it at the same ERROR level as a
+// genuine "attempt budget exhausted" dead-letter.
+func TestJobRowGoneLogsBelowError(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	room := "room-fail-after-reschedule"
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	w := jobs.NewWorker(d, "w1", log)
+	w.Register("t:fail-after-reschedule", func(ctx context.Context, _ jobs.Job) error {
+		if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+			Kind:    "t:fail-after-reschedule",
+			RoomKey: &room,
+			RunAt:   time.Now().Add(time.Hour),
+		}); err != nil {
+			return err
+		}
+		return errors.New("boom after reschedule")
+	})
+
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "t:fail-after-reschedule", RoomKey: &room, RunAt: time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	processed, err := w.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	logged := buf.String()
+	if strings.Contains(logged, "dead-lettered") {
+		t.Errorf("log contains a dead-letter ERROR line, want the row-gone case instead:\n%s", logged)
+	}
+	if !strings.Contains(logged, "row gone") {
+		t.Errorf("log does not contain the row-gone message:\n%s", logged)
+	}
+	if !strings.Contains(logged, "level=DEBUG") {
+		t.Errorf("row-gone line was not logged at DEBUG:\n%s", logged)
+	}
+
+	// The rescheduled row (fresh id, future run_at) must still be there — process's Complete
+	// call must not have deleted it.
+	var count int
+	if err := d.QueryRowContext(ctx,
+		"SELECT count(*) FROM scheduled_jobs WHERE kind = $1 AND room_key = $2", "t:fail-after-reschedule", room,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (the rescheduled row must survive)", count)
 	}
 }
 
