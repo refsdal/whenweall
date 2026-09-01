@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -10,6 +12,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/thecodearcher/limen"
+	"github.com/thecodearcher/limen/plugins/organization"
 
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
@@ -313,6 +318,62 @@ func TestStaffFlagAndRequireStaff(t *testing.T) {
 	}
 }
 
+// TestSessionCookieSecureMatchesAppURLScheme is I6's regression test: the session cookie's
+// Secure attribute must track cfg.AppURL's scheme, not be hardcoded true. An http-served
+// deployment (local/dev, or behind a proxy that terminates TLS and hands us plain http) that
+// still got Secure would have the browser silently refuse to ever send the cookie back — an
+// always-broken login, not just a weakened one — so this asserts both directions explicitly
+// rather than only the https one.
+func TestSessionCookieSecureMatchesAppURLScheme(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		appURL     string
+		wantSecure bool
+	}{
+		{"http AppURL", "http://app.example", false},
+		{"https AppURL", "https://app.example", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServiceWithConfig(t, &config.Config{
+				AppURL:      tc.appURL,
+				LimenSecret: make([]byte, 32),
+			})
+			email := "cookie-secure@example.com"
+
+			requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+				"email":    email,
+				"password": signupPassword,
+			}), "signup")
+
+			resp := ts.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{
+				"credential": email,
+				"password":   signupPassword,
+			})
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode/100 != 2 {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("signin: status %d: %s", resp.StatusCode, body)
+			}
+
+			var sessionCookie string
+			for _, c := range resp.Header.Values("Set-Cookie") {
+				if strings.Contains(c, "limen_session=") {
+					sessionCookie = c
+					break
+				}
+			}
+			if sessionCookie == "" {
+				t.Fatalf("no limen_session Set-Cookie header found; got %v", resp.Header.Values("Set-Cookie"))
+			}
+
+			if gotSecure := strings.Contains(sessionCookie, "Secure"); gotSecure != tc.wantSecure {
+				t.Errorf("Set-Cookie = %q\nSecure present = %v, want %v (AppURL %q)",
+					sessionCookie, gotSecure, tc.wantSecure, tc.appURL)
+			}
+		})
+	}
+}
+
 func TestOAuthRoutesAbsentWithoutConfig(t *testing.T) {
 	ts := newTestService(t)
 
@@ -333,6 +394,86 @@ func TestRequireOrgMemberRejectsAnonymous(t *testing.T) {
 
 	if _, err := ts.svc.RequireOrgMember(ctx, "1"); err != ErrUnauthenticated {
 		t.Errorf("RequireOrgMember(anonymous) error = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// TestRequireOrgMemberForbiddenForNonMember is I8's regression test for the "genuinely not a
+// member" path: a real membership-check failure (organization.ErrMemberNotInOrganization) must
+// still map to ErrForbidden, distinct from TestRequireOrgMemberInternalErrorOnDBFailure below
+// (any other error, which must NOT map to ErrForbidden).
+func TestRequireOrgMemberForbiddenForNonMember(t *testing.T) {
+	ts := newTestService(t)
+
+	ownerEmail := "org-owner-b@example.com"
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    ownerEmail,
+		"password": signupPassword,
+	}), "signup owner")
+	triggerSessionResolution(t, ts)
+
+	ownerID := lookupUserID(t, ts, ownerEmail)
+	owner := &limen.User{ID: ownerID, Email: ownerEmail}
+	page, err := ts.svc.orgs.ListOrganizations(context.Background(), owner, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListOrganizations: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("len(page.Items) = %d, want 1", len(page.Items))
+	}
+	orgID := fmt.Sprint(page.Items[0].ID)
+
+	// A second, unrelated user (their own personal org, not this one) tries to access the first
+	// user's org — same client/jar is fine since RequireOrgMember is called directly here, not
+	// through an HTTP round trip that would depend on which of the two is currently signed in.
+	outsiderEmail := "org-outsider@example.com"
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    outsiderEmail,
+		"password": signupPassword,
+	}), "signup outsider")
+	triggerSessionResolution(t, ts)
+	outsiderID := lookupUserID(t, ts, outsiderEmail)
+
+	sess := &Session{UserID: fmt.Sprint(outsiderID)}
+	ctx := context.WithValue(context.Background(), sessionCtxKey{}, sess)
+
+	_, err = ts.svc.RequireOrgMember(ctx, orgID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("RequireOrgMember(non-member, someone else's org) error = %v, want ErrForbidden", err)
+	}
+	if errors.Is(err, ErrInternal) {
+		t.Errorf("RequireOrgMember(non-member) error = %v, should not also be ErrInternal", err)
+	}
+}
+
+// TestRequireOrgMemberInternalErrorOnDBFailure is I8's regression test for the other path: when
+// the membership check itself fails for a reason that has nothing to do with membership (here, a
+// closed database), RequireOrgMember must return ErrInternal, not ErrForbidden — the caller was
+// never actually determined to be unauthorized, so a handler mapping ErrForbidden straight to 403
+// would misreport a backend failure as an authorization decision.
+func TestRequireOrgMemberInternalErrorOnDBFailure(t *testing.T) {
+	ts := newTestService(t)
+	email := "internal-error-check@example.com"
+
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    email,
+		"password": signupPassword,
+	}), "signup")
+	triggerSessionResolution(t, ts)
+	userID := lookupUserID(t, ts, email)
+
+	sess := &Session{UserID: fmt.Sprint(userID)}
+	ctx := context.WithValue(context.Background(), sessionCtxKey{}, sess)
+
+	if err := ts.svc.db.Close(); err != nil {
+		t.Fatalf("closing db: %v", err)
+	}
+
+	_, err := ts.svc.RequireOrgMember(ctx, "1")
+	if !errors.Is(err, ErrInternal) {
+		t.Errorf("RequireOrgMember with closed DB: error = %v, want ErrInternal", err)
+	}
+	if errors.Is(err, ErrForbidden) {
+		t.Errorf("RequireOrgMember with closed DB: error = %v, should not also be ErrForbidden", err)
 	}
 }
 

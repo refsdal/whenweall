@@ -8,12 +8,18 @@
 -- introspect that database and emit the CREATE TABLEs below. Do not hand-edit the generated
 -- section — regenerate it instead, and diff.
 --
+-- One deliberate hand-edit to the generated CREATE TABLEs: `IF NOT EXISTS` has been dropped from
+-- all of them (Limen's CLI emits it on every one, but none of the CREATE INDEX statements below
+-- get the same treatment) so this file is internally consistent — goose runs each migration
+-- exactly once, so neither needs it. If you regenerate this section, drop `IF NOT EXISTS` from
+-- the CREATE TABLEs again rather than adding it to every index.
+--
 -- users.id (and every other table's *_id column below) is BIGSERIAL/BIGINT: Limen's default
 -- schema config uses an auto-increment id generator when Config.Schema.IDGenerator is left unset
 -- (see limen's schema_config.go GetIDColumnType), and internal/auth.buildLimenConfig doesn't
 -- override it. The internal/auth seam normalizes every id to a Go string regardless
 -- (fmt.Sprint(user.ID)), so nothing outside this migration and internal/auth needs to know that.
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE users (
   id BIGSERIAL,
   email VARCHAR(255) NOT NULL,
   password VARCHAR(255),
@@ -27,7 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE UNIQUE INDEX idx_users_email ON users (email);
 
-CREATE TABLE IF NOT EXISTS accounts (
+CREATE TABLE accounts (
   id BIGSERIAL,
   user_id BIGINT NOT NULL,
   provider VARCHAR(255) NOT NULL,
@@ -45,7 +51,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 CREATE INDEX idx_accounts_user_id_provider ON accounts (user_id);
 CREATE UNIQUE INDEX idx_accounts_provider_provider_account_id ON accounts (provider, provider_account_id);
 
-CREATE TABLE IF NOT EXISTS organizations (
+CREATE TABLE organizations (
   id BIGSERIAL,
   name VARCHAR(255) NOT NULL,
   slug VARCHAR(255) NOT NULL,
@@ -57,7 +63,7 @@ CREATE TABLE IF NOT EXISTS organizations (
 );
 CREATE UNIQUE INDEX idx_organizations_slug ON organizations (slug);
 
-CREATE TABLE IF NOT EXISTS organization_invitations (
+CREATE TABLE organization_invitations (
   id BIGSERIAL,
   organization_id BIGINT NOT NULL,
   inviter_id BIGINT,
@@ -76,7 +82,7 @@ CREATE UNIQUE INDEX idx_organization_invitations_token ON organization_invitatio
 CREATE INDEX idx_organization_invitations_org ON organization_invitations (organization_id);
 CREATE INDEX idx_organization_invitations_email ON organization_invitations (email);
 
-CREATE TABLE IF NOT EXISTS organization_members (
+CREATE TABLE organization_members (
   id BIGSERIAL,
   organization_id BIGINT NOT NULL,
   user_id BIGINT NOT NULL,
@@ -88,7 +94,7 @@ CREATE TABLE IF NOT EXISTS organization_members (
 );
 CREATE UNIQUE INDEX idx_organization_members_org_user ON organization_members (organization_id, user_id);
 
-CREATE TABLE IF NOT EXISTS organization_member_roles (
+CREATE TABLE organization_member_roles (
   id BIGSERIAL,
   member_id BIGINT NOT NULL,
   organization_id BIGINT NOT NULL,
@@ -108,7 +114,7 @@ CREATE UNIQUE INDEX idx_organization_member_roles_member_role ON organization_me
 -- so this table is currently unused at runtime; it exists only because Limen's schema discovery
 -- includes it unconditionally). Renamed via limen.WithRateLimitTableName rather than left to
 -- collide.
-CREATE TABLE IF NOT EXISTS limen_rate_limits (
+CREATE TABLE limen_rate_limits (
   id BIGSERIAL,
   key VARCHAR(255) NOT NULL,
   count INTEGER NOT NULL,
@@ -117,7 +123,7 @@ CREATE TABLE IF NOT EXISTS limen_rate_limits (
 );
 CREATE UNIQUE INDEX idx_rate_limits_key ON limen_rate_limits (key);
 
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE sessions (
   id BIGSERIAL,
   token VARCHAR(255) NOT NULL,
   user_id BIGINT NOT NULL,
@@ -133,7 +139,7 @@ CREATE UNIQUE INDEX idx_sessions_token ON sessions (token);
 CREATE INDEX idx_sessions_user_id ON sessions (user_id);
 CREATE INDEX idx_sessions_active_organization ON sessions (active_organization_id);
 
-CREATE TABLE IF NOT EXISTS two_factors (
+CREATE TABLE two_factors (
   id BIGSERIAL,
   user_id BIGINT NOT NULL,
   secret VARCHAR(255),
@@ -143,7 +149,7 @@ CREATE TABLE IF NOT EXISTS two_factors (
 );
 CREATE UNIQUE INDEX idx_two_factors_user_id ON two_factors (user_id);
 
-CREATE TABLE IF NOT EXISTS verifications (
+CREATE TABLE verifications (
   id BIGSERIAL,
   subject VARCHAR(255) NOT NULL,
   value TEXT NOT NULL,
@@ -164,7 +170,7 @@ CREATE TABLE staff_users (
 );
 
 -- +goose Down
-DROP TABLE staff_users;
+DROP TABLE IF EXISTS staff_users;
 DROP TABLE IF EXISTS verifications;
 DROP TABLE IF EXISTS two_factors;
 DROP TABLE IF EXISTS sessions;

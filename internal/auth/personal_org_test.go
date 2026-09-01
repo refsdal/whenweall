@@ -216,6 +216,81 @@ func TestPersonalOrgConcurrentFirstRequestsCreateExactlyOne(t *testing.T) {
 	}
 }
 
+// TestPersonalOrgSlugCollisionAcrossDomainsBothSucceed is C2's regression test: two users who
+// share an email local part but differ in domain (ada@foo.com, ada@bar.com) both derive the same
+// organization *name* ("ada"), which used to also mean the same Limen-generated *slug* (slugs are
+// globally unique) — so the second signup's CreateOrganization would fail with
+// ErrOrganizationSlugAlreadyExists on literally every request from then on, permanently leaving
+// that user without a personal org. Passing an explicitly per-user slug
+// (createPersonalOrgIfMissing / personalOrgSlug) fixes this: each user gets exactly one
+// organization regardless of local-part collisions.
+func TestPersonalOrgSlugCollisionAcrossDomainsBothSucceed(t *testing.T) {
+	ts := newTestService(t)
+
+	emails := []string{"ada@foo.example", "ada@bar.example"}
+	for _, email := range emails {
+		requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+			"email":    email,
+			"password": signupPassword,
+		}), "signup "+email)
+	}
+
+	for _, email := range emails {
+		// Sign in as this user specifically (the shared jar client's session is currently
+		// whichever of the two signed up last) so triggerSessionResolution/countOrganizations
+		// checks the right user's invariant.
+		requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{
+			"credential": email,
+			"password":   signupPassword,
+		}), "signin "+email)
+		triggerSessionResolution(t, ts)
+
+		userID := lookupUserID(t, ts, email)
+		user := &limen.User{ID: userID, Email: email}
+		if got := countOrganizations(t, ts, user); got != 1 {
+			t.Errorf("organizations for %s = %d, want exactly 1", email, got)
+		}
+	}
+}
+
+// TestActiveOrgIDDefaultsToPersonalOrgOnFirstProbe is I5's regression test: a freshly signed-up
+// user's very first authenticated request must see a non-empty Session.ActiveOrgID — equal to
+// their personal org's id — rather than "" until they happen to call organizations/switch, which
+// nothing in a fresh signup flow ever does on their behalf.
+func TestActiveOrgIDDefaultsToPersonalOrgOnFirstProbe(t *testing.T) {
+	ts := newTestService(t)
+	email := "fresh-signup@example.com"
+
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    email,
+		"password": signupPassword,
+	}), "signup")
+
+	probeResp := ts.get(t, "/probe")
+	probeBody := decodeJSON(t, probeResp)
+	if anon, _ := probeBody["anonymous"].(bool); anon {
+		t.Fatalf("probe reported anonymous after signup: %+v", probeBody)
+	}
+	activeOrgID, _ := probeBody["ActiveOrgID"].(string)
+	if activeOrgID == "" {
+		t.Fatal("probe Session.ActiveOrgID is empty on the very first authenticated request, want the personal org's id")
+	}
+
+	userID := lookupUserID(t, ts, email)
+	user := &limen.User{ID: userID, Email: email}
+	page, err := ts.svc.orgs.ListOrganizations(context.Background(), user, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListOrganizations: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("len(page.Items) = %d, want 1", len(page.Items))
+	}
+	wantOrgID := fmt.Sprint(page.Items[0].ID)
+	if activeOrgID != wantOrgID {
+		t.Errorf("probe Session.ActiveOrgID = %q, want the personal org's id %q", activeOrgID, wantOrgID)
+	}
+}
+
 // TestRequireOrgMemberSucceedsForPersonalOrg is the happy-path RequireOrgMember test deferred from
 // the previous plan's review: after signup and the first authenticated request creates the
 // personal org, RequireOrgMember succeeds for that user against that org's id.

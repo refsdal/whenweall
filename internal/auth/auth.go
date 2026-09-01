@@ -21,8 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/thecodearcher/limen"
 	sqladapter "github.com/thecodearcher/limen/adapters/sql"
 	credentialpassword "github.com/thecodearcher/limen/plugins/credential-password"
@@ -45,6 +45,13 @@ var ErrUnauthenticated = errors.New("auth: unauthenticated")
 // ErrForbidden is returned by RequireOrgMember when the caller is not a member of orgID.
 // Handlers translate this into a 403.
 var ErrForbidden = errors.New("auth: forbidden")
+
+// ErrInternal is returned by RequireOrgMember when the membership check itself fails for a
+// reason other than "not a member" (e.g. a database error underneath
+// CheckMemberExistsInOrganization) — the underlying error is wrapped with %v, not %w, so it never
+// leaks a Limen type out of this package; errors.Is(err, ErrInternal) is still true. Handlers
+// translate this into a 500, distinct from the 403 ErrForbidden gets.
+var ErrInternal = errors.New("auth: internal error")
 
 // Enqueuer matches mailer.Enqueue's signature exactly, so tests can substitute a stub that
 // captures mail instead of writing to scheduled_jobs.
@@ -189,6 +196,11 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 		)),
 		HTTP: limen.NewDefaultHTTPConfig(
 			limen.WithHTTPBasePath("/api/v1/auth"),
+			// Secure only when the app itself is served over https: an http-served local/dev
+			// deployment (cfg.AppURL "http://...") would otherwise get a cookie the browser
+			// silently refuses to send back over that same http connection, breaking sessions
+			// entirely rather than just weakening them.
+			limen.WithHTTPCookieSecure(strings.HasPrefix(cfg.AppURL, "https://")),
 			// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
 			// (this package's first attempt at the personal-org invariant) turns out to miss most
 			// real signups. ctx.GetAuthResult() is only populated when the route handler itself
@@ -242,8 +254,8 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 // why: GetAuthResult() misses both redirect-mode OAuth and magic-link signins). This runs on
 // literally every authenticated request until it succeeds once for a given user, at which point
 // personalOrgEnsured short-circuits every later request for that user in this process — so the
-// one-time cost (an advisory-lock round trip plus a ListOrganizations call) is paid at most once
-// per user per process, not per request.
+// one-time cost (a ListOrganizations call, plus a CreateOrganization on a brand-new user's very
+// first request) is paid at most once per user per process, not per request.
 //
 // Never fails the request: any error is logged and swallowed. The user is deliberately NOT cached
 // on error, so the very next request from them retries rather than silently giving up on the
@@ -262,84 +274,36 @@ func (s *Service) ensurePersonalOrgOnce(ctx context.Context, user *limen.User) {
 	s.personalOrgEnsured.Store(key, struct{}{})
 }
 
-// personalOrgLockRetryInterval is how long ensurePersonalOrganizationForUser waits between
-// attempts to acquire the per-user advisory lock when it's currently held by someone else.
-const personalOrgLockRetryInterval = 20 * time.Millisecond
-
-// ensurePersonalOrganizationForUser is the reusable core: check-then-create, made safe against two
-// concurrent first-requests for the same brand-new user (across goroutines in this process, or
-// across replicas) via a Postgres advisory lock scoped to the user.
-//
-// The lock is acquired with pg_try_advisory_xact_lock in a poll loop — deliberately NOT a
-// blocking pg_advisory_xact_lock, despite that being the more obvious way to write this. A
-// blocking acquire holds its database/sql connection checked out of the pool for the entire wait.
-// With several concurrent callers contending for the same key, every "loser" then sits blocked
-// with a connection pinned; meanwhile the "winner" (the one actually holding the lock) needs a
-// *second*, independent connection to run ListOrganizations/CreateOrganization on (those go
-// through the organization plugin's own connection acquisition, not this function's transaction —
-// there is no supported way to make them share it). Once the pool is smaller than
-// (contending callers + 1), that second connection can never become free — the callers are all
-// parked waiting on a lock only the goroutine that can't get its second connection will ever
-// release. Self-deadlock. This is exactly what
-// TestPersonalOrgConcurrentFirstRequestsCreateExactlyOne hit (hard hang) against testdb's
-// 5-connection pool with a plain blocking pg_advisory_xact_lock, which is what caught this.
-// Polling with a non-blocking try-lock and releasing the connection between attempts means no
-// caller ever blocks while pinning a connection, so the winner's second connection is always
-// eventually available regardless of pool size.
+// ensurePersonalOrganizationForUser is the reusable core: check-then-create. This used to be
+// guarded by a Postgres advisory lock (poll loop around pg_try_advisory_xact_lock) to make two
+// concurrent first-requests for the same brand-new user race-safe; that machinery is gone now
+// that createPersonalOrgIfMissing passes an explicitly unique slug and treats a slug collision as
+// "someone else already won" (see its doc comment) — the create itself is the race-safe point, so
+// no lock is needed around the check-then-create at all. The lock was also a standing
+// pool-deadlock hazard: a blocking acquire would hold a connection for the entire wait while the
+// eventual winner needed a *second*, independent connection (through the organization plugin's
+// own connection acquisition) to run ListOrganizations/CreateOrganization on, and
+// TestPersonalOrgConcurrentFirstRequestsCreateExactlyOne could hang testdb's 5-connection pool
+// solid if that second connection was never free. Conflict-tolerant create sidesteps the hazard
+// entirely rather than working around it.
 func (s *Service) ensurePersonalOrganizationForUser(ctx context.Context, user *limen.User) error {
-	for {
-		acquired, err := s.withPersonalOrgTryLock(ctx, fmt.Sprint(user.ID), func() error {
-			return s.createPersonalOrgIfMissing(ctx, user)
-		})
-		if err != nil {
-			return err
-		}
-		if acquired {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(personalOrgLockRetryInterval):
-		}
-	}
+	return s.createPersonalOrgIfMissing(ctx, user)
 }
 
-// withPersonalOrgTryLock makes a single, non-blocking attempt to take the advisory lock scoped to
-// key. If acquired, it runs fn and commits (releasing the xact-scoped lock) only after fn
-// succeeds; if the lock is currently held by someone else, it returns acquired == false, err ==
-// nil so the caller can back off and retry.
-func (s *Service) withPersonalOrgTryLock(ctx context.Context, key string, fn func() error) (acquired bool, err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin personal-org lock tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }() // no-op once Commit has run
-
-	var gotLock bool
-	if err := tx.QueryRowContext(ctx,
-		"SELECT pg_try_advisory_xact_lock(hashtext('personal-org:' || $1))", key,
-	).Scan(&gotLock); err != nil {
-		return false, fmt.Errorf("try personal-org advisory lock: %w", err)
-	}
-	if !gotLock {
-		return false, nil
-	}
-
-	if err := fn(); err != nil {
-		return false, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit personal-org lock tx: %w", err)
-	}
-	return true, nil
-}
-
-// createPersonalOrgIfMissing re-checks organization membership — necessary because another caller
-// may have created the org and released the lock while this one was retrying to acquire it — and
-// creates the personal organization (named from the user's email local part, plugin-generated
-// slug) only if the user still has none.
+// createPersonalOrgIfMissing creates the personal organization (named from the user's email local
+// part) only if the user still has none, using a slug unique per user
+// (normalized-local-part + "-" + user ID) rather than Limen's default name-derived slug — the
+// bug this replaced: two users sharing an email local part on different domains (ada@foo.com,
+// ada@bar.com) would both generate the same slug from the name alone, so the second one's
+// CreateOrganization would fail with ErrOrganizationSlugAlreadyExists on every single request
+// forever, permanently leaving that user without a personal org.
+//
+// A slug collision is now expected and benign, not an error: it means either this exact user's
+// slug already exists (another goroutine or replica's concurrent first-request for them won the
+// race between this function's own ListOrganizations check and its CreateOrganization call) or,
+// vanishingly unlikely, a hash-style collision — either way the invariant this function exists to
+// enforce (at least one organization) is already satisfied, so it's treated as success rather
+// than surfaced as an error that would just make the very next request retry the same failure.
 func (s *Service) createPersonalOrgIfMissing(ctx context.Context, user *limen.User) error {
 	page, err := s.orgs.ListOrganizations(ctx, user, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 1})
 	if err != nil {
@@ -350,10 +314,65 @@ func (s *Service) createPersonalOrgIfMissing(ctx context.Context, user *limen.Us
 	}
 
 	name := nameFromEmail(user.Email)
-	if _, err := s.orgs.CreateOrganization(ctx, user, &organization.CreateOrganizationRequest{Name: name, Slug: ""}); err != nil {
+	slug := personalOrgSlug(user.Email, fmt.Sprint(user.ID))
+	if _, err := s.orgs.CreateOrganization(ctx, user, &organization.CreateOrganizationRequest{Name: name, Slug: slug}); err != nil {
+		if errors.Is(err, organization.ErrOrganizationSlugAlreadyExists) || isOrganizationSlugConflict(err) {
+			return nil
+		}
 		return fmt.Errorf("create personal organization: %w", err)
 	}
 	return nil
+}
+
+// isOrganizationSlugConflict reports whether err is a raw Postgres unique-violation on
+// organizations.slug that slipped past CreateOrganization's own pre-check (a SELECT for the slug
+// followed, non-atomically, by the INSERT) — exactly what happens when two callers race for the
+// very same personal-org slug (same user, same deterministic slug) between that check and the
+// insert, which TestPersonalOrgConcurrentFirstRequestsCreateExactlyOne can trigger. A loser of
+// *that* race gets pgconn's own error type straight from the driver, not Limen's
+// ErrOrganizationSlugAlreadyExists (Limen only ever returns that sentinel from its own pre-check
+// losing, never by classifying a lower-level constraint violation), so it has to be recognized
+// separately. Scoped to the specific slug index by name, not just SQLSTATE 23505, so an unrelated
+// unique-constraint violation elsewhere in the same CreateOrganization transaction (e.g. on the
+// owner membership row) is never mistaken for "the org already exists."
+func isOrganizationSlugConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_organizations_slug"
+}
+
+// personalOrgSlug derives a per-user-unique slug from email's local part and userID: lowercased,
+// every run of non-alphanumeric characters collapsed to a single '-'. Uniqueness comes from
+// userID, not the local part alone — see createPersonalOrgIfMissing's doc comment for why that
+// matters. Limen's own slug generator would additionally normalize this the same way if
+// normalizeSlugs is left at its default (true), but this doesn't rely on that: the slug handed to
+// CreateOrganization is already exactly what ends up stored.
+func personalOrgSlug(email, userID string) string {
+	local := nameFromEmail(email)
+	var b strings.Builder
+	for _, r := range strings.ToLower(local) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	normalized := b.String()
+	if normalized == "" {
+		normalized = "org"
+	}
+	return normalized + "-" + userID
+}
+
+// firstOrganization returns user's first organization by Limen's default ordering, used by
+// resolveSession (session.go) to pick a default active organization for a session that doesn't
+// have one yet. ensurePersonalOrgOnce (called just before this in resolveSession) guarantees at
+// least one organization exists by the time this runs.
+func (s *Service) firstOrganization(ctx context.Context, user *limen.User) (*organization.Organization, bool) {
+	page, err := s.orgs.ListOrganizations(ctx, user, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 1})
+	if err != nil || len(page.Items) == 0 {
+		return nil, false
+	}
+	return page.Items[0], true
 }
 
 // parseLimenID converts a Session's stringified id (UserID/ActiveOrgID, both fmt.Sprint of
