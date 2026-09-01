@@ -77,6 +77,12 @@ func New(cfg *config.Config) *Mailer {
 	}
 }
 
+// AppURL returns the application base URL this Mailer was configured with — the same value Send
+// injects into every rendered template's .AppURL. Entity-mail job handlers (internal/polls) need
+// it themselves, to build the body links (PollURL, URL, ...) that are template-specific data
+// rather than part of the shared layout.
+func (m *Mailer) AppURL() string { return m.appURL }
+
 // Send renders msg (via Render) and delivers it immediately over SMTP. Only the "mail:send" job
 // handler and tests call this directly — request handlers must go through Enqueue instead, so a
 // slow or failing SMTP relay never blocks the request that triggered the mail.

@@ -141,3 +141,39 @@ SELECT EXISTS (
   JOIN organization_member_roles omr ON omr.member_id = om.id
   WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role IN ('owner', 'admin')
 ) AS has_role;
+
+-- Task 4 (notifications/finalize+claim mail/deadline+digest timers) queries below.
+
+-- name: GetUser :one
+SELECT * FROM users WHERE id = $1;
+
+-- name: IsOrgMember :one
+-- Ports the membership-is-the-authority rule (recipients.ts): does userId still belong to
+-- organizationId at all, regardless of role? A subscription row surviving past someone leaving
+-- the org must not keep mailing them.
+SELECT EXISTS (
+  SELECT 1 FROM organization_members WHERE organization_id = $1 AND user_id = $2
+) AS is_member;
+
+-- name: GetNotificationPref :one
+SELECT * FROM notification_prefs WHERE user_id = $1;
+
+-- name: ListSubscriptionsByScope :many
+SELECT * FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2;
+
+-- name: UpsertNotificationSubscription :exec
+-- Ports subscriptions.ts's upsert (ensureCreatorSubscription/followScope): a conflict on the
+-- (scope_type, scope_id, user_id) PK is a no-op, so re-following never resets an override the
+-- user already tuned.
+INSERT INTO notification_subscriptions (scope_type, scope_id, user_id, source, channels, created_at, updated_at)
+VALUES ($1, $2, $3, $4, NULL, $5, $5)
+ON CONFLICT (scope_type, scope_id, user_id) DO NOTHING;
+
+-- name: DeleteNotificationSubscription :exec
+DELETE FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3;
+
+-- name: SetNotificationSubscriptionChannels :exec
+-- $4 is NULL to clear an override back to the user's defaults (setScopeChannels's own doc
+-- comment in subscriptions.ts).
+UPDATE notification_subscriptions SET channels = $4::jsonb, updated_at = $5
+WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3;

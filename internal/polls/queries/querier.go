@@ -10,12 +10,14 @@ import (
 
 type Querier interface {
 	CountYesVotesForOption(ctx context.Context, optionID string) (int64, error)
+	DeleteNotificationSubscription(ctx context.Context, arg DeleteNotificationSubscriptionParams) error
 	DeleteParticipant(ctx context.Context, id string) error
 	DeletePollOption(ctx context.Context, id string) error
 	DeleteVote(ctx context.Context, arg DeleteVoteParams) error
 	DeleteVotesByParticipant(ctx context.Context, participantID string) error
 	FinalizePoll(ctx context.Context, arg FinalizePollParams) error
 	GetComment(ctx context.Context, id string) (Comment, error)
+	GetNotificationPref(ctx context.Context, userID int64) (NotificationPref, error)
 	GetOrganizationName(ctx context.Context, id int64) (string, error)
 	// Task 3 (participants/votes/comments/claims) queries below.
 	GetParticipant(ctx context.Context, id string) (Participant, error)
@@ -27,26 +29,40 @@ type Querier interface {
 	// taken after this line and the vote inserted before commit can never race with another claimant's
 	// count-then-insert on the same option.
 	GetPollOptionForUpdate(ctx context.Context, id string) (PollOption, error)
+	// Task 4 (notifications/finalize+claim mail/deadline+digest timers) queries below.
+	GetUser(ctx context.Context, id int64) (User, error)
 	InsertComment(ctx context.Context, arg InsertCommentParams) error
 	InsertParticipant(ctx context.Context, arg InsertParticipantParams) error
 	InsertPoll(ctx context.Context, arg InsertPollParams) error
 	InsertPollOption(ctx context.Context, arg InsertPollOptionParams) error
+	// Ports the membership-is-the-authority rule (recipients.ts): does userId still belong to
+	// organizationId at all, regardless of role? A subscription row surviving past someone leaving
+	// the org must not keep mailing them.
+	IsOrgMember(ctx context.Context, arg IsOrgMemberParams) (bool, error)
 	ListCommentsByPoll(ctx context.Context, pollID string) ([]Comment, error)
 	ListOptionsByPoll(ctx context.Context, pollID string) ([]PollOption, error)
 	ListParticipantsByPoll(ctx context.Context, pollID string) ([]Participant, error)
 	ListPollsByOrg(ctx context.Context, organizationID int64) ([]Poll, error)
+	ListSubscriptionsByScope(ctx context.Context, arg ListSubscriptionsByScopeParams) ([]NotificationSubscription, error)
 	ListVotesByParticipant(ctx context.Context, participantID string) ([]Vote, error)
 	ListVotesByPoll(ctx context.Context, pollID string) ([]Vote, error)
 	// Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
 	// in organizationId? (The creator-manages-their-own-content half is checked separately by the
 	// caller against polls.created_by — this query only ever answers the role question.)
 	MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error)
+	// $4 is NULL to clear an override back to the user's defaults (setScopeChannels's own doc
+	// comment in subscriptions.ts).
+	SetNotificationSubscriptionChannels(ctx context.Context, arg SetNotificationSubscriptionChannelsParams) error
 	SetPollStatus(ctx context.Context, arg SetPollStatusParams) error
 	SoftDeleteComment(ctx context.Context, arg SoftDeleteCommentParams) error
 	SoftDeletePoll(ctx context.Context, arg SoftDeletePollParams) error
 	UpdateParticipantName(ctx context.Context, arg UpdateParticipantNameParams) error
 	UpdatePollOption(ctx context.Context, arg UpdatePollOptionParams) error
 	UpdatePollScalars(ctx context.Context, arg UpdatePollScalarsParams) error
+	// Ports subscriptions.ts's upsert (ensureCreatorSubscription/followScope): a conflict on the
+	// (scope_type, scope_id, user_id) PK is a no-op, so re-following never resets an override the
+	// user already tuned.
+	UpsertNotificationSubscription(ctx context.Context, arg UpsertNotificationSubscriptionParams) error
 	UpsertVote(ctx context.Context, arg UpsertVoteParams) error
 }
 

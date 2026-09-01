@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/refsdal/whenweall/internal/db"
+	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/polls/queries"
 	"github.com/refsdal/whenweall/internal/rooms"
 )
@@ -187,8 +188,14 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreatePol
 		}
 	}
 
-	// Notification follow-on-create (ensureCreatorSubscription in the TS source) is Task 4's
-	// table to write to; not ported here — see the task report.
+	// Port of createPoll's own syncDeadline call (polls.functions.ts): arm the deadline job now,
+	// in-tx, when the poll was created with one.
+	if deadlineAt.Valid {
+		t := deadlineAt.Time
+		if err := armDeadline(ctx, tx, pollID, &t); err != nil {
+			return nil, err
+		}
+	}
 
 	view, err := s.buildView(ctx, q, poll, userID)
 	if err != nil {
@@ -197,6 +204,13 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreatePol
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+
+	// ensureCreatorSubscription (subscriptions.ts) — deliberately outside the transaction/after
+	// commit: the creator's subscription is a notification convenience, not part of the poll's
+	// integrity, so a failure here must never roll back the poll itself (see the TS source's own
+	// comment at this call site).
+	s.ensureCreatorSubscriptionBestEffort(ctx, pollID, poll.CreatedBy)
+
 	return view, nil
 }
 
@@ -292,6 +306,20 @@ func (s *Service) Update(ctx context.Context, pollID, orgID string, in UpdatePol
 
 	if in.Options != nil {
 		if err := replaceOptions(ctx, q, pollID, PollType(poll.Type), in.Options); err != nil {
+			return nil, err
+		}
+	}
+
+	// Port of updatePoll's own conditional syncDeadline call (polls.functions.ts): the DO's alarm
+	// (here, the "poll.deadline" job) is only re-synced when the caller actually provided a
+	// deadlineAt value — otherwise an update that doesn't touch the deadline would wrongly clear
+	// a still-active one. DeadlineAtSet is exactly that "the field was provided" signal.
+	if in.DeadlineAtSet {
+		var deadlineAtPtr *time.Time
+		if merged.DeadlineAt.Valid {
+			deadlineAtPtr = &merged.DeadlineAt.Time
+		}
+		if err := armDeadline(ctx, tx, pollID, deadlineAtPtr); err != nil {
 			return nil, err
 		}
 	}
@@ -487,6 +515,54 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID string) 
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
 		return err
 	}
+
+	// Port of finalizePoll's own syncDeadline(id, null) call (polls.functions.ts): a finalized
+	// poll no longer needs its deadline reminder.
+	if err := jobs.Cancel(ctx, tx, jobKindDeadline, "poll:"+pollID); err != nil {
+		return err
+	}
+
+	// Port of finalizePoll's recipient computation (service.ts) + sendFinalizedEmails: every
+	// participant with an email, plus the poll's creator if one exists — deduped by email (lower-
+	// cased), owner added only if not already present. One "mail:poll"/"finalized" job per unique
+	// recipient, ids-only (participantId or userId — never an address).
+	seenEmail := make(map[string]bool)
+	participantRows, err := q.ListParticipantsByPoll(ctx, pollID)
+	if err != nil {
+		return err
+	}
+	for _, p := range participantRows {
+		if !p.Email.Valid {
+			continue
+		}
+		key := strings.ToLower(p.Email.String)
+		if seenEmail[key] {
+			continue
+		}
+		seenEmail[key] = true
+		if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "finalized", ParticipantID: p.ID}); err != nil {
+			return err
+		}
+	}
+	if poll.CreatedBy.Valid {
+		owner, oerr := q.GetUser(ctx, poll.CreatedBy.Int64)
+		switch {
+		case errors.Is(oerr, sql.ErrNoRows):
+			// Account gone — same graceful skip as the TS source (finalizePoll's own comment).
+		case oerr != nil:
+			return oerr
+		default:
+			key := strings.ToLower(owner.Email)
+			if !seenEmail[key] {
+				if err := enqueueMailPoll(ctx, tx, mailPollPayload{
+					PollID: pollID, Event: "finalized", UserID: strconv.FormatInt(owner.ID, 10),
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -516,6 +592,13 @@ func (s *Service) Delete(ctx context.Context, pollID, orgID string) error {
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
 		return err
 	}
+
+	// Port of deletePoll's own syncDeadline(id, null) call (polls.functions.ts): a deleted poll
+	// no longer needs its deadline reminder.
+	if err := jobs.Cancel(ctx, tx, jobKindDeadline, "poll:"+pollID); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -594,9 +677,6 @@ func (s *Service) Duplicate(ctx context.Context, pollID, orgID, userID string) (
 		}
 	}
 
-	// Carrying the duplicator's own notification override on the original across to the copy
-	// (originalOverride handling in the TS source) is Task 4's table to read; not ported here.
-
 	view, err := s.buildView(ctx, q, copyPoll, userID)
 	if err != nil {
 		return nil, err
@@ -604,6 +684,13 @@ func (s *Service) Duplicate(ctx context.Context, pollID, orgID, userID string) (
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+
+	// ensureCreatorSubscription + carrying the duplicator's own notification override on the
+	// original across to the copy (duplicatePoll's own post-batch calls, service.ts) —
+	// deliberately outside the transaction/after commit, same reasoning as Create's.
+	s.ensureCreatorSubscriptionBestEffort(ctx, newID, copyPoll.CreatedBy)
+	s.copyNotificationOverrideBestEffort(ctx, pollID, newID, userIDInt)
+
 	return view, nil
 }
 

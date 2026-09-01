@@ -244,6 +244,12 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 	}
 
 	if alreadyClaimed {
+		// claimSlot resends the claim confirmation unconditionally, even for a no-op re-claim of a
+		// slot already held (participants.functions.ts's own comment on this call site) — ported
+		// the same way here, before the early return.
+		if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "claim_confirmation", ParticipantID: participantID}); err != nil {
+			return nil, err
+		}
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
@@ -271,6 +277,12 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 		return nil, err
 	}
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "vote"}); err != nil {
+		return nil, err
+	}
+	// Ports claimSlot's call into sendClaimConfirmation (participants.functions.ts) — the mail:poll
+	// handler re-reads the participant's current claims at send time and no-ops if there's nothing
+	// to send (no email on file, no claims left).
+	if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "claim_confirmation", ParticipantID: participantID}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

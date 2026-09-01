@@ -8,6 +8,7 @@ package queries
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -20,6 +21,21 @@ func (q *Queries) CountYesVotesForOption(ctx context.Context, optionID string) (
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const deleteNotificationSubscription = `-- name: DeleteNotificationSubscription :exec
+DELETE FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3
+`
+
+type DeleteNotificationSubscriptionParams struct {
+	ScopeType string
+	ScopeID   string
+	UserID    int64
+}
+
+func (q *Queries) DeleteNotificationSubscription(ctx context.Context, arg DeleteNotificationSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, deleteNotificationSubscription, arg.ScopeType, arg.ScopeID, arg.UserID)
+	return err
 }
 
 const deleteParticipant = `-- name: DeleteParticipant :exec
@@ -100,6 +116,22 @@ func (q *Queries) GetComment(ctx context.Context, id string) (Comment, error) {
 		&i.Body,
 		&i.CreatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getNotificationPref = `-- name: GetNotificationPref :one
+SELECT user_id, channels, created_at, updated_at FROM notification_prefs WHERE user_id = $1
+`
+
+func (q *Queries) GetNotificationPref(ctx context.Context, userID int64) (NotificationPref, error) {
+	row := q.db.QueryRowContext(ctx, getNotificationPref, userID)
+	var i NotificationPref
+	err := row.Scan(
+		&i.UserID,
+		&i.Channels,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -215,6 +247,29 @@ func (q *Queries) GetPollOptionForUpdate(ctx context.Context, id string) (PollOp
 		&i.EndAt,
 		&i.Label,
 		&i.Capacity,
+	)
+	return i, err
+}
+
+const getUser = `-- name: GetUser :one
+
+SELECT id, email, password, email_verified_at, first_name, last_name, created_at, updated_at, two_factor_enabled FROM users WHERE id = $1
+`
+
+// Task 4 (notifications/finalize+claim mail/deadline+digest timers) queries below.
+func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Password,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TwoFactorEnabled,
 	)
 	return i, err
 }
@@ -367,6 +422,27 @@ func (q *Queries) InsertPollOption(ctx context.Context, arg InsertPollOptionPara
 		arg.Capacity,
 	)
 	return err
+}
+
+const isOrgMember = `-- name: IsOrgMember :one
+SELECT EXISTS (
+  SELECT 1 FROM organization_members WHERE organization_id = $1 AND user_id = $2
+) AS is_member
+`
+
+type IsOrgMemberParams struct {
+	OrganizationID int64
+	UserID         int64
+}
+
+// Ports the membership-is-the-authority rule (recipients.ts): does userId still belong to
+// organizationId at all, regardless of role? A subscription row surviving past someone leaving
+// the org must not keep mailing them.
+func (q *Queries) IsOrgMember(ctx context.Context, arg IsOrgMemberParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isOrgMember, arg.OrganizationID, arg.UserID)
+	var is_member bool
+	err := row.Scan(&is_member)
+	return is_member, err
 }
 
 const listCommentsByPoll = `-- name: ListCommentsByPoll :many
@@ -524,6 +600,46 @@ func (q *Queries) ListPollsByOrg(ctx context.Context, organizationID int64) ([]P
 	return items, nil
 }
 
+const listSubscriptionsByScope = `-- name: ListSubscriptionsByScope :many
+SELECT scope_type, scope_id, user_id, source, channels, created_at, updated_at FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2
+`
+
+type ListSubscriptionsByScopeParams struct {
+	ScopeType string
+	ScopeID   string
+}
+
+func (q *Queries) ListSubscriptionsByScope(ctx context.Context, arg ListSubscriptionsByScopeParams) ([]NotificationSubscription, error) {
+	rows, err := q.db.QueryContext(ctx, listSubscriptionsByScope, arg.ScopeType, arg.ScopeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationSubscription
+	for rows.Next() {
+		var i NotificationSubscription
+		if err := rows.Scan(
+			&i.ScopeType,
+			&i.ScopeID,
+			&i.UserID,
+			&i.Source,
+			&i.Channels,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVotesByParticipant = `-- name: ListVotesByParticipant :many
 SELECT participant_id, option_id, answer FROM votes WHERE participant_id = $1
 `
@@ -601,6 +717,32 @@ func (q *Queries) MemberHasManagingRole(ctx context.Context, arg MemberHasManagi
 	var has_role bool
 	err := row.Scan(&has_role)
 	return has_role, err
+}
+
+const setNotificationSubscriptionChannels = `-- name: SetNotificationSubscriptionChannels :exec
+UPDATE notification_subscriptions SET channels = $4::jsonb, updated_at = $5
+WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3
+`
+
+type SetNotificationSubscriptionChannelsParams struct {
+	ScopeType string
+	ScopeID   string
+	UserID    int64
+	Column4   json.RawMessage
+	UpdatedAt time.Time
+}
+
+// $4 is NULL to clear an override back to the user's defaults (setScopeChannels's own doc
+// comment in subscriptions.ts).
+func (q *Queries) SetNotificationSubscriptionChannels(ctx context.Context, arg SetNotificationSubscriptionChannelsParams) error {
+	_, err := q.db.ExecContext(ctx, setNotificationSubscriptionChannels,
+		arg.ScopeType,
+		arg.ScopeID,
+		arg.UserID,
+		arg.Column4,
+		arg.UpdatedAt,
+	)
+	return err
 }
 
 const setPollStatus = `-- name: SetPollStatus :exec
@@ -738,6 +880,34 @@ func (q *Queries) UpdatePollScalars(ctx context.Context, arg UpdatePollScalarsPa
 		arg.AllowIfNeedBe,
 		arg.SignupMaxClaims,
 		arg.UpdatedAt,
+	)
+	return err
+}
+
+const upsertNotificationSubscription = `-- name: UpsertNotificationSubscription :exec
+INSERT INTO notification_subscriptions (scope_type, scope_id, user_id, source, channels, created_at, updated_at)
+VALUES ($1, $2, $3, $4, NULL, $5, $5)
+ON CONFLICT (scope_type, scope_id, user_id) DO NOTHING
+`
+
+type UpsertNotificationSubscriptionParams struct {
+	ScopeType string
+	ScopeID   string
+	UserID    int64
+	Source    string
+	CreatedAt time.Time
+}
+
+// Ports subscriptions.ts's upsert (ensureCreatorSubscription/followScope): a conflict on the
+// (scope_type, scope_id, user_id) PK is a no-op, so re-following never resets an override the
+// user already tuned.
+func (q *Queries) UpsertNotificationSubscription(ctx context.Context, arg UpsertNotificationSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertNotificationSubscription,
+		arg.ScopeType,
+		arg.ScopeID,
+		arg.UserID,
+		arg.Source,
+		arg.CreatedAt,
 	)
 	return err
 }
