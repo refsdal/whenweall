@@ -25,6 +25,12 @@ func Open(ctx context.Context, databaseURL string, poolSize int) (*sql.DB, error
 	if err != nil {
 		return nil, err
 	}
+	// Migrate holds the advisory lock on one connection while goose executes migrations on
+	// another; a pool capped at 1 would have goose wait forever for a connection Migrate is
+	// holding. Floor it at 2 so Migrate can never starve itself.
+	if poolSize < 2 {
+		poolSize = 2
+	}
 	d.SetMaxOpenConns(poolSize)
 	d.SetMaxIdleConns(poolSize)
 	if err := d.PingContext(ctx); err != nil {

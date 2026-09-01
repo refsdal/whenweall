@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
 
@@ -40,5 +41,27 @@ func TestClonesAreIsolated(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("clone b sees %d rows from clone a", n)
+	}
+}
+
+// TestMigrateNeverStarvesOnMinimalPool guards against a deadlock: Migrate holds the advisory
+// lock on one connection while goose runs migrations over the same *sql.DB, which needs a
+// second connection. A pool floored below 2 would have goose wait forever for a connection
+// Migrate is holding. Regression test for that bug.
+func TestMigrateNeverStarvesOnMinimalPool(t *testing.T) {
+	url, _ := testdb.URL(t)
+	ctx := context.Background()
+
+	d, err := db.Open(ctx, url, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	if err := db.Migrate(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Stats().MaxOpenConnections; got != 2 {
+		t.Errorf("MaxOpenConnections = %d, want 2 (floored)", got)
 	}
 }
