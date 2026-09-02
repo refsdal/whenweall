@@ -210,7 +210,6 @@ func TestReplicaFanOut_VotePresenceAndBookingCrossReplicas(t *testing.T) {
 	_ = awaitFrameOfType(t, watcher, "page.changed", 5*time.Second)
 }
 
-
 // futureUTCTime formats a whole-hour UTC instant daysAhead from now as the ISO datetime string
 // polls' OptionInput.StartAt expects.
 func futureUTCTime(daysAhead, hour, minute int) string {
