@@ -362,10 +362,10 @@ func TestClaimAuth(t *testing.T) {
 	// claimed slot (a harmless idempotent re-claim) purely to exercise participantAuthorized.
 
 	t.Run("allows the poll owner (manager)", func(t *testing.T) {
-		_, s, orgID, ownerID, pollID, guestParticipantID, _, _ := setup(t)
+		d, s, orgID, ownerID, pollID, guestParticipantID, _, _ := setup(t)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		view, _ := s.GetView(ctx, pollID, polls.Viewer{UserID: ownerID})
 		slot1 := view.Options[0]
-		_ = orgID
 
 		_, err := s.Claim(ctx, pollID, slot1.ID, polls.ClaimInput{ParticipantID: guestParticipantID}, polls.Viewer{UserID: ownerID})
 		if err != nil {
@@ -533,6 +533,7 @@ func TestUnclaim(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 0)
 		slot := created.Options[0]
 		// The owner is also a claimant on their own poll — the closest form of TS's "owner

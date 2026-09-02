@@ -704,7 +704,19 @@ func (s *Service) handleAddComment(a Auth, cfg *config.Config) http.HandlerFunc 
 			return
 		}
 		viewer := viewerFromRequest(a, r)
-		comment, err := s.AddComment(ctx, pollID, CommentInput(req), viewer)
+		// resolveAuthorName (participants.functions.ts): a signed-in author's display name always
+		// comes from their own account, never the client-supplied value — otherwise anyone
+		// signed in could impersonate another name in their own comments. Guests (no session)
+		// keep the name they typed.
+		authorName := req.AuthorName
+		if viewer.UserID != "" {
+			if uid, uerr := strconv.ParseInt(viewer.UserID, 10, 64); uerr == nil {
+				if u, gerr := s.q.GetUser(ctx, uid); gerr == nil {
+					authorName = displayName(u)
+				}
+			}
+		}
+		comment, err := s.AddComment(ctx, pollID, CommentInput{AuthorName: authorName, Body: req.Body}, viewer)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -712,7 +724,7 @@ func (s *Service) handleAddComment(a Auth, cfg *config.Config) http.HandlerFunc 
 
 		// Task 7 (d): comment.created, ported from addComment's own emitPollEvent call site.
 		s.enqueueDigestBestEffort(ctx, pollID, DigestItem{
-			Event: EventCommentCreated, Name: req.AuthorName, ActorUserID: viewer.UserID,
+			Event: EventCommentCreated, Name: authorName, ActorUserID: viewer.UserID,
 		})
 
 		httpserver.JSON(w, http.StatusCreated, toCommentResponse(comment))

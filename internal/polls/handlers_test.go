@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -366,6 +367,7 @@ func TestHandlerParticipantAndCommentDigestWiring(t *testing.T) {
 	h, a, s := newTestHandler(d, cfg)
 	ctx := context.Background()
 	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
 	created := createTestPoll(t, ctx, s, orgID, ownerID)
 	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID})
 
@@ -555,6 +557,7 @@ func TestHandlerRosterCSV(t *testing.T) {
 	h, a, s := newTestHandler(d, cfg)
 	ctx := context.Background()
 	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
 	created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{intPtr(1)}, 0)
 	if _, err := s.Claim(ctx, created.ID, created.Options[0].ID,
 		polls.ClaimInput{Name: "Ada", Email: strPtr("ada@example.com")}, polls.Viewer{}); err != nil {
@@ -658,6 +661,7 @@ func TestHandlerAuthzRetrofitAcrossManagingEndpoints(t *testing.T) {
 	h, a, s := newTestHandler(d, cfg)
 	ctx := context.Background()
 	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
 	_, memberID := seedOrgAndUser(t, d)
 	addOrgMember(t, d, orgID, memberID, "member")
 	_, adminID := seedOrgAndUser(t, d)
@@ -715,6 +719,7 @@ func TestHandlerManagerForceUnclaim(t *testing.T) {
 	h, a, s := newTestHandler(d, cfg)
 	ctx := context.Background()
 	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
 	created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 0)
 	slot := created.Options[0].ID
 
@@ -868,6 +873,59 @@ func TestHandlerCaptchaGatesAnonymousParticipant(t *testing.T) {
 		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/participants", body, sessHeader(memberID))
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201 (captcha must not be checked for a signed-in caller); body=%s", rec.Code, rec.Body)
+		}
+	})
+}
+
+// TestHandlerAddCommentAuthorName is requirement C3(a)'s evidence — resolveAuthorName
+// (participants.functions.ts): a signed-in commenter's display name always comes from their own
+// account (GetUser + displayName), never the client-supplied authorName, so nobody signed in can
+// impersonate another name in their own comments; a guest (no session) keeps whatever name they
+// typed.
+func TestHandlerAddCommentAuthorName(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, a, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+	commenterID := seedUser(t, d)
+	addOrgMember(t, d, orgID, commenterID, "member")
+	commenterIDInt, perr := strconv.ParseInt(commenterID, 10, 64)
+	if perr != nil {
+		t.Fatalf("parse commenterID: %v", perr)
+	}
+	if _, err := d.ExecContext(ctx,
+		`UPDATE users SET first_name = $2, last_name = $3 WHERE id = $1`,
+		commenterIDInt, "Real", "Name",
+	); err != nil {
+		t.Fatalf("seed user name: %v", err)
+	}
+	a.login(&auth.Session{UserID: commenterID, ActiveOrgID: orgID})
+
+	t.Run("a signed-in caller's spoofed client authorName is ignored in favor of their session name", func(t *testing.T) {
+		body := map[string]any{"authorName": "Totally Someone Else", "body": "hi"}
+		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/comments", body, sessHeader(commenterID))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		comment := decodeBody[map[string]any](t, rec)
+		if comment["authorName"] != "Real Name" {
+			t.Errorf("authorName = %v, want %q (session name, not the spoofed client value)", comment["authorName"], "Real Name")
+		}
+	})
+
+	t.Run("a guest's client-supplied authorName is kept as-is", func(t *testing.T) {
+		body := map[string]any{"authorName": "Casual Guest", "body": "hi"}
+		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/comments", body, nil)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		comment := decodeBody[map[string]any](t, rec)
+		if comment["authorName"] != "Casual Guest" {
+			t.Errorf("authorName = %v, want %q (guest-supplied name kept)", comment["authorName"], "Casual Guest")
 		}
 	})
 }

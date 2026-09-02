@@ -325,6 +325,7 @@ func TestUpdateParticipant(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1, opt2 := created.Options[0], created.Options[1]
 		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Alice", Answers: map[string]string{opt1.ID: "yes"}}, polls.Viewer{})
@@ -478,6 +479,7 @@ func TestUpdateParticipant(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1 := created.Options[0]
 		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Bob", Answers: map[string]string{opt1.ID: "yes"}}, polls.Viewer{})
@@ -497,6 +499,7 @@ func TestUpdateParticipant(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		view, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
 			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
 			Options:           basicOptions(),
@@ -527,6 +530,7 @@ func TestRemoveParticipant(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1 := created.Options[0]
 		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Bob", Answers: map[string]string{opt1.ID: "yes"}}, polls.Viewer{})
@@ -541,6 +545,41 @@ func TestRemoveParticipant(t *testing.T) {
 		view, _ := s.GetView(ctx, created.ID, polls.Viewer{UserID: ownerID})
 		if findParticipant(view, result.ParticipantID) != nil {
 			t.Error("participant still present")
+		}
+	})
+
+	t.Run("ErrForbidden for the poll's creator once they've left the org (canManagePoll is membership-first)", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+		opt1 := created.Options[0]
+		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Bob", Answers: map[string]string{opt1.ID: "yes"}}, polls.Viewer{})
+		if err != nil {
+			t.Fatalf("AddParticipant: %v", err)
+		}
+
+		// The creator leaves (or is removed from) the org — being the poll's own creator is not
+		// itself membership, so canManagePoll must stop granting manage access once the
+		// organization_members row is gone, even though poll.created_by still names them.
+		ownerIDInt, perr := strconv.ParseInt(ownerID, 10, 64)
+		if perr != nil {
+			t.Fatalf("parse ownerID: %v", perr)
+		}
+		orgIDInt, perr := strconv.ParseInt(orgID, 10, 64)
+		if perr != nil {
+			t.Fatalf("parse orgID: %v", perr)
+		}
+		if _, err := d.ExecContext(ctx,
+			`DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2`,
+			orgIDInt, ownerIDInt,
+		); err != nil {
+			t.Fatalf("remove membership: %v", err)
+		}
+
+		if err := s.RemoveParticipant(ctx, created.ID, result.ParticipantID, polls.Viewer{UserID: ownerID}); !errors.Is(err, polls.ErrForbidden) {
+			t.Errorf("err = %v, want ErrForbidden", err)
 		}
 	})
 
@@ -605,6 +644,7 @@ func TestRemoveParticipant(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1 := created.Options[0]
 		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Bob", Answers: map[string]string{opt1.ID: "yes"}}, polls.Viewer{})
@@ -624,6 +664,7 @@ func TestRemoveParticipant(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		opt1 := created.Options[0]
 		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Bob", Answers: map[string]string{opt1.ID: "yes"}}, polls.Viewer{})
@@ -795,6 +836,7 @@ func TestDeleteComment(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		comment, err := s.AddComment(ctx, created.ID, polls.CommentInput{AuthorName: "Alice", Body: "x"}, polls.Viewer{})
 		if err != nil {
@@ -866,6 +908,7 @@ func TestDeleteComment(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 		comment, err := s.AddComment(ctx, created.ID, polls.CommentInput{AuthorName: "Alice", Body: "x"}, polls.Viewer{})
 		if err != nil {

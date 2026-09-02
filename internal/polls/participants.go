@@ -134,16 +134,33 @@ func validateAnswersTx(ctx context.Context, q *queries.Queries, pollID string, a
 	return nil
 }
 
-// canManagePoll ports claim-auth.ts's canManagePoll: can viewerUserID manage this poll (an
-// 'owner'/'admin' role in organizationID, or the poll's own creator)? viewerUserID == "" (no
-// signed-in identity at all) is always false, matching canManagePoll's `userId === null` early
-// return.
+// canManagePoll ports claim-auth.ts's canManagePoll: does viewerUserID belong to organizationID
+// AT ALL (any role) first — no membership is an unconditional false, checked before anything
+// else, exactly like the TS source's own `if (!membership) return false` — and, only for an
+// actual member, either the poll's own creator or holding an 'owner'/'admin' role in
+// organizationID (canManageContent's predicate). viewerUserID == "" (no signed-in identity at
+// all) is always false, matching canManagePoll's `userId === null` early return.
+//
+// The membership-first ordering matters: someone who created a poll and later left the org (or
+// was removed) must lose the ability to manage it — being its creator is not itself membership,
+// and the TS source never treats it as such. Checking createdBy before membership (as an earlier
+// version of this port did) would let an ex-member's stale creator-match keep granting manage
+// access forever.
 func (s *Service) canManagePoll(ctx context.Context, q *queries.Queries, organizationID int64, createdBy sql.NullInt64, viewerUserID string) (bool, error) {
 	if viewerUserID == "" {
 		return false, nil
 	}
 	userIDInt, err := strconv.ParseInt(viewerUserID, 10, 64)
 	if err != nil {
+		return false, nil
+	}
+	isMember, err := q.IsOrgMember(ctx, queries.IsOrgMemberParams{
+		OrganizationID: organizationID, UserID: userIDInt,
+	})
+	if err != nil {
+		return false, err
+	}
+	if !isMember {
 		return false, nil
 	}
 	if createdBy.Valid && createdBy.Int64 == userIDInt {
