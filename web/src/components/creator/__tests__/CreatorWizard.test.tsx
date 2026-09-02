@@ -4,16 +4,16 @@ import userEvent from '@testing-library/user-event'
 import { CreatorWizard } from '#/components/creator/CreatorWizard'
 import { m } from '#/lib/i18n'
 
-// `useServerFn` calls `useRouter()`, which throws outside a `<RouterProvider>` — stood in with an
-// identity function, same as ManageBooking.test.tsx.
-vi.mock('@tanstack/react-start', () => ({ useServerFn: (fn: unknown) => fn }))
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }))
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
 
 const createPoll = vi.hoisted(() => vi.fn())
-vi.mock('#/server/polls/polls.functions', () => ({ createPoll }))
+vi.mock('#/api/polls', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('#/api/polls')>()),
+  createPoll,
+}))
 
 afterEach(() => {
   cleanup()

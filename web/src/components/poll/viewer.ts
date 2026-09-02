@@ -1,4 +1,4 @@
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 import type { AppLocale } from '#/app.config'
 
 /**

@@ -1,7 +1,6 @@
 import { localToUtcIso, utcIsoToLocalParts } from '#/lib/time'
-import { LIMITS, type CreatePollInput, type OptionInput } from '#/server/polls/schemas'
-import type { PollType } from '#/server/db/schema'
-import type { PollView } from '#/server/polls/viewmodel'
+import { LIMITS, type CreatePollInput, type OptionInput } from '#/api/polls'
+import type { PollType, PollView } from '#/api/types'
 
 /**
  * A single time window on a day. `end` is optional — "18:00" alone means "at 18:00". `id` is set

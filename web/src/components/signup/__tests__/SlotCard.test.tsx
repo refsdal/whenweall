@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SlotCard, type SlotClaimant } from '#/components/signup/SlotCard'
-import type { PollOptionView } from '#/server/polls/viewmodel'
+import type { PollOptionView } from '#/api/types'
 
 afterEach(() => cleanup())
 

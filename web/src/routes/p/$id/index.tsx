@@ -7,7 +7,7 @@ import { PollPage } from '#/components/poll/PollPage'
 import type { PollEvent } from '#/do/protocol'
 import { m } from '#/lib/i18n'
 import { useLivePoll } from '#/lib/use-live-poll'
-import { getPoll } from '#/server/polls/polls.functions'
+import { getPoll } from '#/api/polls'
 
 /** `?created` is set by the creator right after a poll is made; it opens the share sheet once. */
 const searchSchema = z.object({
@@ -16,7 +16,7 @@ const searchSchema = z.object({
 
 export const Route = createFileRoute('/p/$id/')({
   validateSearch: searchSchema,
-  loader: ({ params }) => getPoll({ data: { pollId: params.id } }),
+  loader: ({ params }) => getPoll(params.id),
   head: ({ loaderData }) => ({
     meta: [
       { title: `${loaderData?.title ?? m.poll_not_found_title()} — ${appConfig.name}` },

@@ -14,7 +14,7 @@ import {
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
 import { cn } from '#/lib/utils'
-import type { ParticipantView, PollOptionView } from '#/server/polls/viewmodel'
+import type { ParticipantView, PollOptionView } from '#/api/types'
 
 /** Initials for the little avatar chip in the name column. */
 function initial(name: string): string {

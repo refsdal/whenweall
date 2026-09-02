@@ -7,7 +7,7 @@ import { CapacityField } from '#/components/creator/CapacityField'
 import type { DraftTextOption } from '#/components/creator/creator-state'
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
-import { LIMITS } from '#/server/polls/schemas'
+import { LIMITS } from '#/api/polls'
 
 /**
  * A list of free-text options that behaves like a document rather than a form: Enter opens the

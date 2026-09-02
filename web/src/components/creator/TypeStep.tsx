@@ -5,8 +5,8 @@ import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { LIMITS } from '#/server/polls/schemas'
-import type { PollType } from '#/server/db/schema'
+import { LIMITS } from '#/api/polls'
+import type { PollType } from '#/api/types'
 import type { CreatorAction, CreatorDraft } from '#/components/creator/creator-state'
 
 /** The zones most whenweall organisers live in; the browser's own zone is added when it's missing. */

@@ -1,6 +1,5 @@
 import { useReducer, useState } from 'react'
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
 import { Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { appConfig } from '#/app.config'
@@ -19,9 +18,14 @@ import {
 } from '#/components/ui/dialog'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
-import { getPoll, updatePoll } from '#/server/polls/polls.functions'
-import { updatePollSchema, type OptionInput, type UpdatePollInput } from '#/server/polls/schemas'
-import type { PollView } from '#/server/polls/viewmodel'
+import {
+  getPoll,
+  updatePoll,
+  updatePollSchema,
+  type OptionInput,
+  type UpdatePollInput,
+} from '#/api/polls'
+import type { PollView } from '#/api/types'
 
 export const Route = createFileRoute('/p/$id/edit')({
   beforeLoad: ({ context, params }) => {
@@ -30,7 +34,7 @@ export const Route = createFileRoute('/p/$id/edit')({
     }
   },
   loader: async ({ params }) => {
-    const poll = await getPoll({ data: { pollId: params.id } })
+    const poll = await getPoll(params.id)
     if (!poll.isOwner) throw redirect({ to: '/p/$id', params: { id: params.id } })
     return poll
   },
@@ -60,7 +64,6 @@ function countLostVotes(poll: PollView, options: OptionInput[]): number {
 function EditPollRoute() {
   const poll = Route.useLoaderData()
   const navigate = Route.useNavigate()
-  const updateFn = useServerFn(updatePoll)
 
   const [draft, dispatch] = useReducer(creatorReducer, poll, draftFromPoll)
   const [submitting, setSubmitting] = useState(false)
@@ -94,12 +97,12 @@ function EditPollRoute() {
   async function submit(payload: UpdatePollInput) {
     setSubmitting(true)
     try {
-      await updateFn({ data: payload })
+      await updatePoll(payload)
       toast.success(m.editor_updated())
       await navigate({ to: '/p/$id', params: { id: poll.id } })
     } catch (error) {
       toast.error(
-        errorCode(error) === 'CAPACITY_BELOW_CLAIMS'
+        errorCode(error) === 'capacity_below_claims'
           ? m.editor_capacity_below_claims()
           : m.poll_error_generic(),
       )

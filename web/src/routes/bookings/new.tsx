@@ -22,7 +22,7 @@ function NewBookingPageRoute() {
     <PageEditor
       page={null}
       handle={session?.org?.slug ?? null}
-      appUrl={publicConfig.appUrl}
+      appUrl={window.location.origin}
       googleEnabled={publicConfig.googleEnabled}
     />
   )

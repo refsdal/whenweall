@@ -1,13 +1,12 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import { celebrate } from '#/lib/confetti'
 import { saveEditToken, useEditToken } from '#/lib/edit-tokens'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
-import type { ClientSession } from '#/server/auth/session.functions'
-import { claimSlot, unclaimSlot } from '#/server/polls/participants.functions'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { Session } from '#/lib/use-session'
+import { claimSlot, unclaimSlot } from '#/api/polls'
+import type { PollView } from '#/api/types'
 
 /** What a first-time claimer types into the identity sheet. */
 export type ClaimIdentity = {
@@ -35,22 +34,22 @@ export type UseClaims = {
 /** The sentence that actually helps someone whose claim just bounced. */
 export function messageForClaimError(error: unknown): string {
   switch (errorCode(error)) {
-    case 'SLOT_FULL':
+    case 'capacity_full':
       return m.signup_error_slot_full()
-    case 'CLAIM_LIMIT_REACHED':
+    case 'claim_limit_reached':
       return m.signup_error_limit()
-    case 'POLL_CLOSED':
+    case 'poll_closed':
       return m.poll_error_closed()
-    case 'EMAIL_REQUIRED':
+    case 'email_required':
       return m.poll_error_email_required()
-    case 'CAPTCHA_FAILED':
+    case 'captcha_failed':
       return m.poll_error_captcha()
-    case 'RATE_LIMITED':
+    case 'rate_limited':
       return m.error_rate_limited()
-    case 'LIMIT_REACHED':
+    case 'limit_reached':
       return m.poll_error_limit()
-    case 'FORBIDDEN':
-    case 'UNAUTHORIZED':
+    case 'forbidden':
+    case 'unauthenticated':
       return m.poll_error_forbidden()
     default:
       return m.poll_error_generic()
@@ -61,10 +60,12 @@ export function messageForClaimError(error: unknown): string {
  * Claiming and releasing slots on a sign-up sheet, plus everything the board needs to know about
  * who is looking at it.
  *
- * Identity comes from the session (a signed-in participant's row) or from the edit token this
- * browser stored the first time it claimed something. Neither exists during SSR — `useEditToken`
- * is an external store that reads `null` on the server — so `needsIdentity` starts true and the
- * board only asks for a name once someone actually presses a button.
+ * Identity comes from the session (a signed-in participant's row) or from the guest token this
+ * browser stored the first time it claimed something (the Go backend's `X-Guest-Token` header —
+ * the same `{participantId, token}` shape/storage `edit-tokens.ts` already had, just reinterpreted:
+ * there is no separate "edit token" concept server-side anymore, only this one guest credential —
+ * see the task report's code-mapping note). `needsIdentity` starts true and the board only asks
+ * for a name once someone actually presses a button.
  *
  * Every mutation is optimistic in exactly one way: the slot it touches goes `pending` so its
  * button can't be double-fired. The real state comes back from `onChanged` (a route invalidation)
@@ -72,11 +73,9 @@ export function messageForClaimError(error: unknown): string {
  */
 export function useClaims(
   poll: PollView,
-  session: ClientSession,
+  session: Session,
   onChanged: () => void | Promise<void>,
 ): UseClaims {
-  const claimFn = useServerFn(claimSlot)
-  const unclaimFn = useServerFn(unclaimSlot)
   const storedToken = useEditToken(poll.id)
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set())
 
@@ -127,24 +126,14 @@ export function useClaims(
       markPending(optionId, true)
       try {
         const firstClaim = claimedOptionIds.length === 0
-        const result = await claimFn({
-          data:
-            you !== undefined
-              ? {
-                  pollId: poll.id,
-                  optionId,
-                  participantId: you.id,
-                  editToken: storedToken?.token ?? undefined,
-                }
-              : {
-                  pollId: poll.id,
-                  optionId,
-                  name: identity?.name,
-                  email: identity?.email,
-                  turnstileToken: identity?.turnstileToken,
-                },
-        })
-        if (result.editToken) saveEditToken(poll.id, result.participantId, result.editToken)
+        const result = await claimSlot(
+          poll.id,
+          you !== undefined
+            ? { optionId, participantId: you.id }
+            : { optionId, name: identity?.name, email: identity?.email },
+          { guestToken: storedToken?.token, captchaToken: identity?.turnstileToken },
+        )
+        if (result.guestToken) saveEditToken(poll.id, result.participantId, result.guestToken)
         if (firstClaim) celebrate('vote')
         toast.success(m.signup_claimed_toast())
         await onChanged()
@@ -156,7 +145,7 @@ export function useClaims(
         markPending(optionId, false)
       }
     },
-    [claimFn, claimedOptionIds, markPending, onChanged, pending, poll.id, storedToken, you],
+    [claimedOptionIds, markPending, onChanged, pending, poll.id, storedToken, you],
   )
 
   const unclaim = useCallback(
@@ -166,16 +155,11 @@ export function useClaims(
 
       markPending(optionId, true)
       try {
-        await unclaimFn({
-          data: {
-            pollId: poll.id,
-            optionId,
-            participantId: target,
-            // The stored token only proves who *this* browser is; an owner freeing someone else's
-            // spot is authorized by their session instead.
-            editToken:
-              target === storedToken?.participantId ? (storedToken?.token ?? undefined) : undefined,
-          },
+        await unclaimSlot(poll.id, optionId, {
+          // The stored token only proves who *this* browser is; an owner freeing someone else's
+          // spot is authorized by their session instead.
+          guestToken: target === storedToken?.participantId ? storedToken?.token : undefined,
+          forceParticipantId: target !== you?.id ? target : undefined,
         })
         toast.success(target === you?.id ? m.signup_left_toast() : m.signup_removed_toast())
         await onChanged()
@@ -187,7 +171,7 @@ export function useClaims(
         markPending(optionId, false)
       }
     },
-    [markPending, onChanged, pending, poll.id, storedToken, unclaimFn, you],
+    [markPending, onChanged, pending, poll.id, storedToken, you],
   )
 
   return { viewer, claim, unclaim, pending, needsIdentity: you === undefined }

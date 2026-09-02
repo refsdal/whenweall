@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { Check, MapPin, Minus, Pencil, Share2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { AddYourselfRow } from '#/components/poll/AddYourselfRow'
@@ -31,9 +30,9 @@ import { celebrate } from '#/lib/confetti'
 import { clearEditToken, useEditToken } from '#/lib/edit-tokens'
 import { getLocale, m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import type { ClientSession } from '#/server/auth/session.functions'
-import { removeParticipant } from '#/server/polls/participants.functions'
-import type { ParticipantView, PollView } from '#/server/polls/viewmodel'
+import type { Session } from '#/lib/use-session'
+import { removeParticipant } from '#/api/polls'
+import type { ParticipantView, PollView } from '#/api/types'
 
 function Legend() {
   const items = [
@@ -116,7 +115,7 @@ export function PollPage({
   onChanged,
 }: {
   poll: PollView
-  session: ClientSession
+  session: Session
   presence: number
   shareUrl: string
   autoOpenShare?: boolean
@@ -124,7 +123,6 @@ export function PollPage({
   onChanged: () => void | Promise<void>
 }) {
   const locale = getLocale()
-  const removeFn = useServerFn(removeParticipant)
 
   const storedToken = useEditToken(poll.id)
   const storedZone = useViewerTimeZone(poll.timezone)
@@ -202,19 +200,15 @@ export function PollPage({
     poll,
     session,
     existingParticipant: editingParticipant,
-    editToken: storedToken?.token ?? null,
+    guestToken: storedToken?.token ?? null,
     onSaved: handleSaved,
   })
 
   const handleRemove = useCallback(
     async (participantId: string) => {
       try {
-        await removeFn({
-          data: {
-            pollId: poll.id,
-            participantId,
-            editToken: storedToken?.token ?? undefined,
-          },
+        await removeParticipant(poll.id, participantId, {
+          guestToken: storedToken?.token ?? undefined,
         })
         if (participantId === storedToken?.participantId) clearEditToken(poll.id)
         if (participantId === editingId) setEditingId(null)
@@ -224,7 +218,7 @@ export function PollPage({
         toast.error(m.poll_error_generic())
       }
     },
-    [editingId, onChanged, poll.id, removeFn, storedToken],
+    [editingId, onChanged, poll.id, storedToken],
   )
 
   const finalizedOption = poll.finalizedOptionId
@@ -282,7 +276,10 @@ export function PollPage({
           onShare={() => setShareOpen(true)}
           locale={locale}
           timeZone={timeZone}
-          pushAvailable={session?.entitlements.push ?? false}
+          // Billing/entitlements are gone from this rewrite (no more Premium-gated push column) —
+          // push notifications are a separate, not-yet-built feature (see spike/web-push-crypto),
+          // so this is unconditionally false rather than reading a tier that no longer exists.
+          pushAvailable={false}
         />
       )}
 

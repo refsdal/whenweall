@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import * as z from 'zod'
-import { fetchAdminUsers } from '#/server/admin/admin.functions'
+import { fetchAdminUsers } from '#/api/admin'
 import { Badge } from '#/components/ui/badge'
 import { Input } from '#/components/ui/input'
 import { m } from '#/lib/i18n'
@@ -9,17 +9,14 @@ import { m } from '#/lib/i18n'
 const PAGE_SIZE = 50
 
 export const Route = createFileRoute('/admin/users')({
-  validateSearch: z.object({ q: z.string().optional(), page: z.number().int().min(0).optional() }),
-  loaderDeps: ({ search }) => ({ q: search.q, page: search.page ?? 0 }),
-  loader: ({ deps }) =>
-    fetchAdminUsers({
-      data: { search: deps.q, limit: PAGE_SIZE, offset: deps.page * PAGE_SIZE },
-    }),
+  validateSearch: z.object({ q: z.string().optional(), cursor: z.string().optional() }),
+  loaderDeps: ({ search }) => ({ q: search.q, cursor: search.cursor }),
+  loader: ({ deps }) => fetchAdminUsers({ query: deps.q, cursor: deps.cursor, limit: PAGE_SIZE }),
   component: AdminUsers,
 })
 
 function AdminUsers() {
-  const { users, total } = Route.useLoaderData()
+  const { users, total, nextCursor } = Route.useLoaderData()
   const { q } = Route.useSearch()
   const navigate = Route.useNavigate()
   const [draft, setDraft] = useState(q ?? '')
@@ -30,7 +27,7 @@ function AdminUsers() {
         className="flex items-center gap-2"
         onSubmit={(event) => {
           event.preventDefault()
-          void navigate({ search: { q: draft || undefined, page: 0 } })
+          void navigate({ search: { q: draft || undefined } })
         }}
       >
         <Input
@@ -70,8 +67,8 @@ function AdminUsers() {
                   </td>
                   <td className="p-3 text-muted-foreground">{u.email}</td>
                   <td className="flex flex-wrap gap-1 p-3">
-                    {u.role === 'staff' && <Badge>{m.admin_badge_staff()}</Badge>}
-                    {u.banned && <Badge variant="destructive">{m.admin_badge_banned()}</Badge>}
+                    {u.staff && <Badge>{m.admin_badge_staff()}</Badge>}
+                    {u.locked && <Badge variant="destructive">{m.admin_badge_locked()}</Badge>}
                     {!u.emailVerified && (
                       <Badge variant="outline">{m.admin_badge_unverified()}</Badge>
                     )}
@@ -84,6 +81,16 @@ function AdminUsers() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {nextCursor && (
+        <Link
+          to="/admin/users"
+          search={{ q, cursor: nextCursor }}
+          className="text-sm underline underline-offset-2"
+        >
+          {m.admin_users_load_more()}
+        </Link>
       )}
     </div>
   )

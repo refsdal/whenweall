@@ -10,7 +10,7 @@ import { spring, useReducedMotion } from '#/lib/motion'
 import { formatOptionLabel } from '#/lib/time'
 import { nextAnswer, type Answer } from '#/lib/scoring'
 import { cn } from '#/lib/utils'
-import type { ParticipantView, PollOptionView, PollView } from '#/server/polls/viewmodel'
+import type { ParticipantView, PollOptionView, PollView } from '#/api/types'
 
 /** Initials for the little avatar chip, as in the grid's name column. */
 function initial(name: string): string {

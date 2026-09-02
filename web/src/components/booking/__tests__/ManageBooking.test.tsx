@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { ManageBooking } from '#/components/booking/ManageBooking'
-import type { BookingForManage } from '#/server/bookings/viewmodel'
+import type { BookingForManage } from '#/api/types'
 
-// `useServerFn` calls `useRouter()`, which throws outside a `<RouterProvider>`; the booking
-// actions themselves aren't exercised here, so the hook is stood in with an identity function.
-vi.mock('@tanstack/react-start', () => ({ useServerFn: (fn: unknown) => fn }))
-vi.mock('#/server/bookings/bookings.functions', () => ({
+vi.mock('#/api/bookings', () => ({
   cancelBooking: vi.fn(),
   rescheduleBooking: vi.fn(),
   getPublicAvailability: vi.fn(),

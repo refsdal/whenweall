@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { fetchAdminStats } from '#/server/admin/admin.functions'
+import { fetchAdminStats } from '#/api/admin'
 import { m } from '#/lib/i18n'
 
 export const Route = createFileRoute('/admin/')({
@@ -21,60 +21,52 @@ function StatCard({ label, value, recent }: { label: string; value: number; rece
   )
 }
 
-/** Amounts are stored in minor units, as Stripe reports them. */
-function formatMinor(minor: number): string {
-  return `${(minor / 100).toLocaleString()} NOK`
-}
-
+/**
+ * `internal/admin/stats.go`'s `DashboardStats` is flat (no `growth`/`revenue` nesting) and has no
+ * `revenue` block at all — billing is gone from this rewrite, so subscriptions/MRR/premium-org
+ * counts have no source of truth left to read from. It adds `mailQueueDepth`/`failedJobs`
+ * (scheduled_jobs-backed, no TS equivalent existed).
+ */
 function AdminDashboard() {
-  const { growth, revenue } = Route.useLoaderData()
+  const stats = Route.useLoaderData()
 
   return (
     <div className="flex flex-col gap-8">
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label={m.admin_stat_users()}
-          value={growth.users.total}
-          recent={growth.users.last7}
+          value={stats.users.total}
+          recent={stats.users.last7}
         />
-        <StatCard
-          label={m.admin_stat_orgs()}
-          value={growth.orgs.total}
-          recent={growth.orgs.last7}
-        />
+        <StatCard label={m.admin_stat_orgs()} value={stats.orgs.total} recent={stats.orgs.last7} />
         <StatCard
           label={m.admin_stat_polls()}
-          value={growth.polls.total}
-          recent={growth.polls.last7}
+          value={stats.polls.total}
+          recent={stats.polls.last7}
         />
-        <StatCard label={m.admin_stat_polls_finalized()} value={growth.pollsFinalized} />
+        <StatCard label={m.admin_stat_polls_finalized()} value={stats.pollsFinalized} />
         <StatCard
           label={m.admin_stat_signups()}
-          value={growth.signupSheets.total}
-          recent={growth.signupSheets.last7}
+          value={stats.signupSheets.total}
+          recent={stats.signupSheets.last7}
         />
         <StatCard
           label={m.admin_stat_booking_pages()}
-          value={growth.bookingPages.total}
-          recent={growth.bookingPages.last7}
+          value={stats.bookingPages.total}
+          recent={stats.bookingPages.last7}
         />
         <StatCard
           label={m.admin_stat_bookings()}
-          value={growth.bookings.total}
-          recent={growth.bookings.last7}
+          value={stats.bookings.total}
+          recent={stats.bookings.last7}
         />
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold">{m.admin_revenue_title()}</h2>
+        <h2 className="text-sm font-semibold">{m.admin_mail_title()}</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label={m.admin_revenue_premium_orgs()} value={revenue.premiumOrgs} />
-          <StatCard label={m.admin_revenue_active_subs()} value={revenue.activeSubscriptions} />
-          <div className="flex flex-col gap-1 rounded-lg border p-4">
-            <span className="text-sm text-muted-foreground">{m.admin_revenue_mrr()}</span>
-            <span className="text-2xl tabular-nums">{formatMinor(revenue.mrrMinor)}</span>
-          </div>
-          <StatCard label={m.admin_revenue_cancelling()} value={revenue.cancellingAtPeriodEnd} />
+          <StatCard label={m.admin_mail_queue_depth()} value={stats.mailQueueDepth} />
+          <StatCard label={m.admin_mail_failed_jobs()} value={stats.failedJobs} />
         </div>
       </section>
     </div>

@@ -3,7 +3,8 @@ import { Button } from '#/components/ui/button'
 import type { AppLocale } from '#/app.config'
 import { m } from '#/lib/i18n'
 import { formatOptionLabel } from '#/lib/time'
-import type { PollOptionView, PollView } from '#/server/polls/viewmodel'
+import { calendarIcsUrl } from '#/api/polls'
+import type { PollOptionView, PollView } from '#/api/types'
 
 function pad(value: number): string {
   return String(value).padStart(2, '0')
@@ -84,7 +85,7 @@ export function FinalizedBanner({
       {google && (
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button asChild variant="outline" size="sm">
-            <a href={`/p/${poll.id}/calendar.ics`} download>
+            <a href={calendarIcsUrl(poll.id)} download>
               <CalendarPlus aria-hidden="true" />
               {m.poll_add_to_calendar()}
             </a>

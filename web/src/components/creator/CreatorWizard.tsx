@@ -1,6 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowLeft, ArrowRight, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
@@ -19,8 +18,7 @@ import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
 import { cn } from '#/lib/utils'
-import { createPollSchema } from '#/server/polls/schemas'
-import { createPoll } from '#/server/polls/polls.functions'
+import { createPoll, createPollSchema } from '#/api/polls'
 
 const STEP_LABELS = [m.creator_step_basics, m.creator_step_options, m.creator_step_settings]
 
@@ -35,7 +33,6 @@ const STEP_LABELS = [m.creator_step_basics, m.creator_step_options, m.creator_st
 export function CreatorWizard() {
   const navigate = useNavigate()
   const reduceMotion = useReducedMotion()
-  const createPollFn = useServerFn(createPoll)
 
   const [draft, dispatch] = useReducer(creatorReducer, 'UTC', initialDraft)
   const [direction, setDirection] = useState(1)
@@ -66,14 +63,14 @@ export function CreatorWizard() {
 
     setSubmitting(true)
     try {
-      const { id } = await createPollFn({ data: input })
+      const { id } = await createPoll(input)
       toast.success(m.creator_created())
       await navigate({ to: '/p/$id', params: { id }, search: { created: true } })
     } catch (error) {
       const code = errorCode(error)
-      if (code === 'RATE_LIMITED') {
+      if (code === 'rate_limited') {
         toast.error(m.error_rate_limited())
-      } else if (code === 'UNAUTHORIZED') {
+      } else if (code === 'unauthenticated') {
         await navigate({ to: '/login', search: { next: '/new' } })
       } else {
         // A genuine server-side failure (validation errors are already caught above, before the

@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { Crown } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
@@ -16,8 +15,8 @@ import { celebrate } from '#/lib/confetti'
 import { m } from '#/lib/i18n'
 import { formatOptionLabel } from '#/lib/time'
 import { cn } from '#/lib/utils'
-import { finalizePoll } from '#/server/polls/polls.functions'
-import type { PollView } from '#/server/polls/viewmodel'
+import { finalizePoll } from '#/api/polls'
+import type { PollView } from '#/api/types'
 
 /** The organiser's last click: pick the winning option and tell everyone who left an email. */
 export function FinalizeDialog({
@@ -35,7 +34,6 @@ export function FinalizeDialog({
   locale: AppLocale
   timeZone: string
 }) {
-  const finalizeFn = useServerFn(finalizePoll)
   const preselected = poll.finalizedOptionId ?? poll.bestOptionId ?? poll.options[0]?.id ?? ''
   const [selected, setSelected] = useState(preselected)
   const [wasOpen, setWasOpen] = useState(open)
@@ -53,7 +51,7 @@ export function FinalizeDialog({
     if (!selected) return
     setSubmitting(true)
     try {
-      const { sent } = await finalizeFn({ data: { pollId: poll.id, optionId: selected } })
+      const { sent } = await finalizePoll(poll.id, selected)
       celebrate('finalize')
       toast.success(m.poll_finalized_emails({ count: sent }))
       onOpenChange(false)

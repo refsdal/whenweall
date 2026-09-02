@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
-vi.mock('@tanstack/react-start', () => ({ useServerFn: () => vi.fn() }))
-vi.mock('#/server/polls/participants.functions', () => ({
+vi.mock('#/api/polls', () => ({
   addParticipant: vi.fn(),
   updateParticipant: vi.fn(),
 }))

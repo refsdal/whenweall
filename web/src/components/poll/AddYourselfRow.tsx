@@ -5,7 +5,7 @@ import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 import { nextAnswer, type Answer } from '#/lib/scoring'
 import type { AnswerDraft } from '#/components/poll/use-answer-draft'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
 /**
  * The row you fill in yourself: your name, and a cell per option. It lives inside the grid's

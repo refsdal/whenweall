@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { VoteGrid } from '#/components/poll/VoteGrid'
 import type { ViewerState } from '#/components/poll/viewer'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
 afterEach(() => cleanup())
 

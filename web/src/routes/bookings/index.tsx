@@ -8,7 +8,7 @@ import { Button, buttonVariants } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
 import { staggerContainer, staggerItem } from '#/lib/motion'
 import { cn } from '#/lib/utils'
-import { listMyBookingPages } from '#/server/bookings/pages.functions'
+import { listMyBookingPages } from '#/api/bookings'
 
 export const Route = createFileRoute('/bookings/')({
   beforeLoad: ({ context }) => {
@@ -65,7 +65,7 @@ function EmptyState() {
 
 function BookingPagesRoute() {
   const pages = Route.useLoaderData()
-  const { session, publicConfig } = Route.useRouteContext()
+  const { session } = Route.useRouteContext()
   const handle = session?.org?.slug ?? null
 
   return (
@@ -86,7 +86,7 @@ function BookingPagesRoute() {
         </Button>
       </header>
 
-      {handle === null && <HandleNudge appUrl={publicConfig.appUrl} />}
+      {handle === null && <HandleNudge appUrl={window.location.origin} />}
 
       {pages.length === 0 ? (
         <EmptyState />
@@ -99,7 +99,7 @@ function BookingPagesRoute() {
         >
           {pages.map((page) => (
             <motion.li key={page.id} variants={staggerItem}>
-              <PageCard page={page} handle={handle} appUrl={publicConfig.appUrl} />
+              <PageCard page={page} handle={handle} appUrl={window.location.origin} />
             </motion.li>
           ))}
         </motion.ul>

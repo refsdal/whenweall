@@ -1,14 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { fetchAdminAuditLog } from '#/server/admin/admin.functions'
+import { fetchAuditLog } from '#/api/admin'
 import { m } from '#/lib/i18n'
 
 export const Route = createFileRoute('/admin/audit')({
-  loader: () => fetchAdminAuditLog({ data: { limit: 100 } }),
+  loader: () => fetchAuditLog({ limit: 100 }),
   component: AdminAudit,
 })
 
 function AdminAudit() {
-  const entries = Route.useLoaderData()
+  const { entries } = Route.useLoaderData()
 
   if (entries.length === 0) {
     return <p className="text-sm text-muted-foreground">{m.admin_audit_empty()}</p>

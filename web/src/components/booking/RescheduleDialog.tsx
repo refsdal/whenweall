@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { Loader2 } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import {
@@ -14,8 +13,8 @@ import { SlotPicker } from '#/components/booking/SlotPicker'
 import { slotSummary } from '#/components/booking/BookingForm'
 import type { Interval } from '#/lib/availability'
 import { getLocale, m } from '#/lib/i18n'
-import { getPublicAvailability } from '#/server/bookings/bookings.functions'
-import type { PublicPageView } from '#/server/bookings/viewmodel'
+import { getPublicAvailability } from '#/api/bookings'
+import type { PublicPageView } from '#/api/types'
 
 /** `YYYY-MM` for an instant, read in the viewer's zone. */
 function monthKeyIn(iso: string, timeZone: string): string {
@@ -57,7 +56,6 @@ export function RescheduleDialog({
   onConfirm: (startAt: string) => void | Promise<void>
 }) {
   const locale = getLocale()
-  const availability = useServerFn(getPublicAvailability)
   const [month, setMonth] = useState(() => monthKeyIn(now, timeZone))
   const [picked, setPicked] = useState<Interval | null>(null)
   // One piece of state, stamped with the month it describes: "loading" is then simply "what we
@@ -72,7 +70,7 @@ export function RescheduleDialog({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void availability({ data: { handle, slug, ...monthWindow(month) } })
+    void getPublicAvailability({ handle, slug, ...monthWindow(month) })
       .then((result) => {
         if (cancelled) return
         setLoaded({ month, page: result?.page ?? null, slots: result?.slots ?? [] })
@@ -83,7 +81,7 @@ export function RescheduleDialog({
     return () => {
       cancelled = true
     }
-  }, [availability, handle, month, open, slug, timeZone])
+  }, [handle, month, open, slug, timeZone])
 
   const slots = loaded && loaded.month === month ? loaded.slots : null
   const page = loaded?.page ?? null

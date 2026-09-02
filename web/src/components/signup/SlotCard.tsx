@@ -6,7 +6,7 @@ import type { AppLocale } from '#/app.config'
 import { formatOptionLabel } from '#/lib/time'
 import { listItem, useReducedMotion } from '#/lib/motion'
 import { cn } from '#/lib/utils'
-import type { PollOptionView } from '#/server/polls/viewmodel'
+import type { PollOptionView } from '#/api/types'
 
 export type { SlotClaimant }
 

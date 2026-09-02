@@ -8,7 +8,7 @@ import {
   initialDraft,
   type CreatorDraft,
 } from '#/components/creator/creator-state'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
 const OSLO = 'Europe/Oslo'
 

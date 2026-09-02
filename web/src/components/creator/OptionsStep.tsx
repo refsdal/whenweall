@@ -10,7 +10,7 @@ import {
 } from '#/components/creator/creator-state'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { LIMITS } from '#/server/polls/schemas'
+import { LIMITS } from '#/api/polls'
 
 export function optionCountLabel(count: number): string {
   return count === 1 ? m.creator_option_count_one() : m.creator_option_count_other({ count })

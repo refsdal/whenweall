@@ -1,10 +1,19 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { fetchAdminUserDetail } from '#/server/admin/admin.functions'
+import { fetchAdminUserDetail, fetchAuditLog } from '#/api/admin'
 import { Badge } from '#/components/ui/badge'
 import { m } from '#/lib/i18n'
 
 export const Route = createFileRoute('/admin/users/$id')({
-  loader: ({ params }) => fetchAdminUserDetail({ data: { userId: params.id } }),
+  loader: async ({ params }) => {
+    const detail = await fetchAdminUserDetail(params.id)
+    // `AdminUserDetail` (internal/admin/users.go) no longer carries `recentActions` — the console
+    // reads that off the shared audit endpoint instead, filtered to this user (see
+    // `internal/admin/handlers.go`'s own package doc comment).
+    const audit = detail
+      ? await fetchAuditLog({ targetType: 'user', targetId: params.id, limit: 20 })
+      : null
+    return { detail, recentActions: audit?.entries ?? [] }
+  },
   component: AdminUserDetailPage,
 })
 
@@ -18,7 +27,7 @@ function Field({ label, value }: { label: string; value: string | number }) {
 }
 
 function AdminUserDetailPage() {
-  const detail = Route.useLoaderData()
+  const { detail, recentActions } = Route.useLoaderData()
 
   if (!detail) {
     return <p className="text-sm text-muted-foreground">{m.admin_user_not_found()}</p>
@@ -29,8 +38,8 @@ function AdminUserDetailPage() {
       <section className="flex flex-col gap-4 rounded-lg border p-4">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg">{detail.name}</h2>
-          {detail.role === 'staff' && <Badge>{m.admin_badge_staff()}</Badge>}
-          {detail.banned && <Badge variant="destructive">{m.admin_badge_banned()}</Badge>}
+          {detail.staff && <Badge>{m.admin_badge_staff()}</Badge>}
+          {detail.locked && <Badge variant="destructive">{m.admin_badge_locked()}</Badge>}
           {!detail.emailVerified && <Badge variant="outline">{m.admin_badge_unverified()}</Badge>}
         </div>
         <div className="grid gap-4 sm:grid-cols-3">
@@ -39,7 +48,7 @@ function AdminUserDetailPage() {
             label={m.admin_col_created()}
             value={new Date(detail.createdAt).toLocaleDateString()}
           />
-          {detail.banReason && <Field label={m.admin_badge_banned()} value={detail.banReason} />}
+          {detail.lockReason && <Field label={m.admin_badge_locked()} value={detail.lockReason} />}
         </div>
       </section>
 
@@ -50,9 +59,13 @@ function AdminUserDetailPage() {
         ) : (
           <ul className="flex flex-col gap-1 text-sm">
             {detail.orgs.map((org) => (
-              <li key={org.id} className="flex items-center gap-2">
+              <li key={org.id} className="flex flex-wrap items-center gap-2">
                 <span>{org.name}</span>
-                <Badge variant="outline">{org.role}</Badge>
+                {org.roles.map((role) => (
+                  <Badge key={role} variant="outline">
+                    {role}
+                  </Badge>
+                ))}
               </li>
             ))}
           </ul>
@@ -70,11 +83,11 @@ function AdminUserDetailPage() {
 
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold">{m.admin_user_history()}</h3>
-        {detail.recentActions.length === 0 ? (
+        {recentActions.length === 0 ? (
           <p className="text-sm text-muted-foreground">{m.admin_audit_empty()}</p>
         ) : (
           <ul className="flex flex-col gap-1 text-sm">
-            {detail.recentActions.map((entry) => (
+            {recentActions.map((entry) => (
               <li key={entry.id} className="flex flex-wrap items-center gap-2">
                 <span className="text-muted-foreground">
                   {new Date(entry.createdAt).toLocaleString()}

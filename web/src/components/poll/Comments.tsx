@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { AnimatePresence, motion } from 'motion/react'
 import { MessageSquare, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -11,10 +10,9 @@ import { Textarea } from '#/components/ui/textarea'
 import { errorCode } from '#/lib/errors'
 import { intlLocale, m } from '#/lib/i18n'
 import { listItem, useReducedMotion } from '#/lib/motion'
-import type { ClientSession } from '#/server/auth/session.functions'
-import { addComment, deleteComment } from '#/server/polls/participants.functions'
-import { LIMITS } from '#/server/polls/schemas'
-import type { CommentView, PollView } from '#/server/polls/viewmodel'
+import type { Session } from '#/lib/use-session'
+import { addComment, deleteComment, LIMITS } from '#/api/polls'
+import type { CommentView, PollView } from '#/api/types'
 
 function initial(name: string): string {
   return name.trim().slice(0, 1).toUpperCase() || '?'
@@ -33,14 +31,12 @@ export function Comments({
   onChanged,
 }: {
   poll: PollView
-  session: ClientSession
+  session: Session
   viewer: ViewerState
   canComment: boolean
   viewerName: string
   onChanged: () => void | Promise<void>
 }) {
-  const addFn = useServerFn(addComment)
-  const deleteFn = useServerFn(deleteComment)
   const reduceMotion = useReducedMotion()
 
   const [name, setName] = useState(viewerName)
@@ -81,22 +77,17 @@ export function Comments({
 
     setSubmitting(true)
     try {
-      await addFn({
-        data: {
-          pollId: poll.id,
-          authorName: trimmedName,
-          body: trimmedBody,
-          turnstileToken: captchaToken ?? undefined,
-          participantId: viewer.participantId ?? undefined,
-          editToken: viewer.editToken ?? undefined,
-        },
-      })
+      await addComment(
+        poll.id,
+        { authorName: trimmedName, body: trimmedBody },
+        { captchaToken: captchaToken ?? undefined, guestToken: viewer.editToken ?? undefined },
+      )
       setBody('')
       toast.success(m.poll_comment_posted())
       await onChanged()
     } catch (error) {
       toast.error(
-        errorCode(error) === 'RATE_LIMITED' ? m.error_rate_limited() : m.poll_comment_error(),
+        errorCode(error) === 'rate_limited' ? m.error_rate_limited() : m.poll_comment_error(),
       )
     } finally {
       setSubmitting(false)
@@ -105,7 +96,7 @@ export function Comments({
 
   async function remove(commentId: string) {
     try {
-      await deleteFn({ data: { pollId: poll.id, commentId } })
+      await deleteComment(poll.id, commentId)
       toast.success(m.poll_comment_deleted())
       await onChanged()
     } catch {

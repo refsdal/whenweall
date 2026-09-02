@@ -22,8 +22,8 @@ import {
 } from '#/components/ui/dialog'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import type { PollStatus, PollType } from '#/server/db/schema'
-import type { PollSummary } from '#/server/polls/viewmodel'
+import type { PollStatus, PollType } from '#/api/types'
+import type { PollSummary } from '#/api/types'
 
 const TYPE_ICON: Record<PollType, LucideIcon> = {
   datetime: CalendarDays,

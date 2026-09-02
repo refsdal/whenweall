@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { VoteList } from '#/components/poll/VoteList'
 import type { ViewerState } from '#/components/poll/viewer'
 import type { Answer } from '#/lib/scoring'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
 afterEach(() => cleanup())
 

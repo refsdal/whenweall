@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { CalendarClock, Clock, MapPin, PauseCircle, User } from 'lucide-react'
 import { toast } from 'sonner'
 import { BookingConfirmed } from '#/components/booking/BookingConfirmed'
@@ -11,8 +10,8 @@ import { saveBookingToken } from '#/lib/booking-tokens'
 import { celebrate } from '#/lib/confetti'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
-import { bookSlot } from '#/server/bookings/bookings.functions'
-import type { PublicPageView } from '#/server/bookings/viewmodel'
+import { bookSlot } from '#/api/bookings'
+import type { PublicPageView } from '#/api/types'
 
 /** `YYYY-MM` for an instant, read in the visitor's zone. */
 function monthKeyIn(iso: string, timeZone: string): string {
@@ -24,15 +23,15 @@ function monthKeyIn(iso: string, timeZone: string): string {
 /** Maps a booking failure to the sentence that actually helps the visitor. */
 function messageForError(error: unknown): string {
   switch (errorCode(error)) {
-    case 'SLOT_UNAVAILABLE':
+    case 'slot_taken':
       return m.book_error_slot_unavailable()
-    case 'PAGE_PAUSED':
+    case 'page_paused':
       return m.book_error_paused()
-    case 'BOOKING_PAST':
+    case 'booking_past':
       return m.book_error_past()
-    case 'CAPTCHA_FAILED':
+    case 'captcha_failed':
       return m.poll_error_captcha()
-    case 'RATE_LIMITED':
+    case 'rate_limited':
       return m.error_rate_limited()
     default:
       return m.book_error_generic()
@@ -68,7 +67,6 @@ export function PublicBookingPage({
   onTimeZoneChange: (zone: string) => void
   onBooked: () => void | Promise<void>
 }) {
-  const book = useServerFn(bookSlot)
   // The chosen slot outlives the dialog: closing it and picking another time keeps whatever the
   // visitor already typed, because the form stays mounted.
   const [picked, setPicked] = useState<Interval | null>(null)
@@ -90,17 +88,18 @@ export function PublicBookingPage({
     async (values: BookingFormValues) => {
       setSubmitting(true)
       try {
-        const result = await book({
-          data: {
-            pageId: page.id,
+        const result = await bookSlot(
+          page.handle,
+          page.slug,
+          {
             startAt: values.startAt,
             name: values.name,
             email: values.email,
             note: values.note,
             timezone: timeZone,
-            turnstileToken: values.turnstileToken,
           },
-        })
+          { captchaToken: values.turnstileToken },
+        )
         saveBookingToken(result.bookingId, result.manageToken)
         celebrate('booking')
         const endAt = new Date(
@@ -120,7 +119,7 @@ export function PublicBookingPage({
         // These three all mean "this particular time is no longer bookable": close the form so
         // the visitor is looking at the list again rather than at a slot that is already gone.
         const code = errorCode(error)
-        if (code === 'SLOT_UNAVAILABLE' || code === 'BOOKING_PAST' || code === 'PAGE_PAUSED') {
+        if (code === 'slot_taken' || code === 'booking_past' || code === 'page_paused') {
           setFormOpen(false)
         }
         // Whatever went wrong, the slot list is the thing that may be stale — refetch it so the
@@ -130,7 +129,7 @@ export function PublicBookingPage({
         setSubmitting(false)
       }
     },
-    [book, onBooked, page.id, page.slotDurationMin, timeZone],
+    [onBooked, page.handle, page.slug, page.slotDurationMin, timeZone],
   )
 
   const paused = page.status === 'paused'

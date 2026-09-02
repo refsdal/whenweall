@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { CalendarCheck, CalendarSync } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
 import { Label } from '#/components/ui/label'
 import { Switch } from '#/components/ui/switch'
 import { m } from '#/lib/i18n'
-import { authClient } from '#/server/auth/client'
-import {
-  disconnectGoogleCalendar,
-  getGoogleCalendarStatus,
-} from '#/server/bookings/pages.functions'
+import { oauthLinkUrl } from '#/api/auth'
+import { disconnectGoogleCalendar, getGoogleCalendarStatus } from '#/api/bookings'
 
 /**
  * Read-only busy times plus the ability to write the booking back as an event — the two scopes
@@ -23,24 +19,28 @@ const CALENDAR_SCOPES = [
 
 /**
  * The Google Calendar section of the page editor: whether this account has a usable calendar
- * connection, a button to grant one (incremental consent via Better-Auth's `linkSocial`), and the
+ * connection, a button to grant one (incremental consent via `GET /oauth/google/link`), and the
  * per-page sync switch — which can only be on while a connection exists.
+ *
+ * `pageId` is required (unlike the old TS `getGoogleCalendarStatus`, which was account-level, no
+ * page involved) — `GET /booking-pages/{id}/google-status` (internal/bookings/handlers.go) checks
+ * per PAGE, not per account, so this only ever renders once a page has an id to ask about (see
+ * `PageEditor`, which mounts it only in edit mode).
  */
 export function GoogleCalendarCard({
+  pageId,
   googleSync,
   googleEnabled,
   callbackURL,
   onSyncChange,
 }: {
+  pageId: string
   googleSync: boolean
   googleEnabled: boolean
   /** Where Google sends the organiser back to — the editor they started from. */
   callbackURL: string
   onSyncChange: (next: boolean) => void
 }) {
-  const statusFn = useServerFn(getGoogleCalendarStatus)
-  const disconnectFn = useServerFn(disconnectGoogleCalendar)
-
   // `null` while the status is still being probed: the button and the switch both depend on it,
   // and guessing "not connected" would flash the wrong state on every load.
   const [connected, setConnected] = useState<boolean | null>(null)
@@ -48,7 +48,7 @@ export function GoogleCalendarCard({
 
   useEffect(() => {
     let cancelled = false
-    void statusFn()
+    void getGoogleCalendarStatus(pageId)
       .then((status) => {
         if (!cancelled) setConnected(status.connected)
       })
@@ -58,18 +58,16 @@ export function GoogleCalendarCard({
     return () => {
       cancelled = true
     }
-  }, [statusFn])
+  }, [pageId])
 
   async function connect() {
     setBusy(true)
     try {
-      // Resolves into a redirect to Google; the Better-Auth client follows `data.url` itself.
-      const { error } = await authClient.linkSocial({
-        provider: 'google',
+      const url = await oauthLinkUrl('google', {
         scopes: CALENDAR_SCOPES,
-        callbackURL,
+        redirectUri: new URL(callbackURL, window.location.origin).toString(),
       })
-      if (error) toast.error(m.booking_google_error())
+      window.location.href = url
     } catch {
       toast.error(m.booking_google_error())
     } finally {
@@ -80,7 +78,7 @@ export function GoogleCalendarCard({
   async function disconnect() {
     setBusy(true)
     try {
-      await disconnectFn()
+      await disconnectGoogleCalendar()
       onSyncChange(false)
       toast.success(m.booking_google_disconnected_toast())
     } catch {

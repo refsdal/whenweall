@@ -1,6 +1,6 @@
 import { useRouter } from '@tanstack/react-router'
 import { Turnstile } from '@marsidev/react-turnstile'
-import type { PublicConfig } from '#/server/config.functions'
+import type { PublicConfig } from '#/api/config'
 
 /**
  * Reads `publicConfig.turnstileSiteKey` from the root route's `beforeLoad` context.

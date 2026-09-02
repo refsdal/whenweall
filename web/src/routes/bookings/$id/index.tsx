@@ -1,5 +1,4 @@
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
 import { ArrowLeft, MapPin, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { appConfig } from '#/app.config'
@@ -13,8 +12,7 @@ import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
 import { useCopy } from '#/lib/use-copy'
 import { cn } from '#/lib/utils'
-import { cancelBooking, listPageBookings } from '#/server/bookings/bookings.functions'
-import { getBookingPage } from '#/server/bookings/pages.functions'
+import { cancelBooking, getBookingPage, listPageBookings } from '#/api/bookings'
 
 /** A year either side: enough to hold every booking an organiser still cares to look at. */
 const WINDOW_MS = 365 * 86_400_000
@@ -28,13 +26,10 @@ export const Route = createFileRoute('/bookings/$id/')({
   loader: async ({ params }) => {
     const now = new Date()
     const [page, bookings] = await Promise.all([
-      getBookingPage({ data: { pageId: params.id } }),
-      listPageBookings({
-        data: {
-          pageId: params.id,
-          from: new Date(now.getTime() - WINDOW_MS).toISOString(),
-          to: new Date(now.getTime() + WINDOW_MS).toISOString(),
-        },
+      getBookingPage(params.id),
+      listPageBookings(params.id, {
+        from: new Date(now.getTime() - WINDOW_MS).toISOString(),
+        to: new Date(now.getTime() + WINDOW_MS).toISOString(),
       }),
     ])
     // Sent down with the data so the upcoming/past split renders identically on both sides.
@@ -83,17 +78,17 @@ function PublicLink({ url, disabled }: { url: string; disabled: boolean }) {
 
 function BookingPageRoute() {
   const { page, bookings, now } = Route.useLoaderData()
-  const { session, publicConfig } = Route.useRouteContext()
+  const { session } = Route.useRouteContext()
   const router = useRouter()
-  const cancelFn = useServerFn(cancelBooking)
 
   const handle = session?.org?.slug ?? null
-  const publicUrl = `${publicConfig.appUrl}/book/${handle ?? ''}/${page.slug}`
-  const display = `${bookingPrefix(publicConfig.appUrl)}${handle ?? ''}/${page.slug}`
+  const appUrl = window.location.origin
+  const publicUrl = `${appUrl}/book/${handle ?? ''}/${page.slug}`
+  const display = `${bookingPrefix(appUrl)}${handle ?? ''}/${page.slug}`
 
   async function handleCancel(bookingId: string) {
     try {
-      await cancelFn({ data: { bookingId } })
+      await cancelBooking(bookingId)
       toast.success(m.bookings_cancelled_toast())
       await router.invalidate()
     } catch {

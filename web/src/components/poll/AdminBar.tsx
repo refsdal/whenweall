@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
 import {
   Bell,
   Copy,
@@ -49,11 +48,12 @@ import { m } from '#/lib/i18n'
 import {
   deletePoll,
   duplicatePoll,
+  rosterCsvUrl,
   setPollFollowing,
   setPollStatus,
   updateNotificationPrefs,
-} from '#/server/polls/polls.functions'
-import type { PollView } from '#/server/polls/viewmodel'
+} from '#/api/polls'
+import type { PollView } from '#/api/types'
 
 /**
  * The organiser's toolbar. A sticky bar at the bottom of the viewport on a phone (where it sits
@@ -73,15 +73,12 @@ export function AdminBar({
   onShare: () => void
   locale: AppLocale
   timeZone: string
-  /** From the viewer's entitlements — the push column is Premium-only. */
+  /** Always `false` for now — billing/entitlements are gone from this rewrite, so there is no
+   * more Premium-gated push tier to read; kept as a prop (rather than deleted outright) so a
+   * later push-notification feature only needs to change what the caller passes in. */
   pushAvailable?: boolean
 }) {
   const navigate = useNavigate()
-  const statusFn = useServerFn(setPollStatus)
-  const duplicateFn = useServerFn(duplicatePoll)
-  const deleteFn = useServerFn(deletePoll)
-  const prefsFn = useServerFn(updateNotificationPrefs)
-  const followFn = useServerFn(setPollFollowing)
   const defaultChannels = poll.notifications?.defaults ?? null
 
   const [finalizeOpen, setFinalizeOpen] = useState(false)
@@ -111,7 +108,7 @@ export function AdminBar({
   async function toggleStatus() {
     await run(async () => {
       const status = poll.status === 'open' ? 'closed' : 'open'
-      await statusFn({ data: { pollId: poll.id, status } })
+      await setPollStatus(poll.id, status)
       toast.success(status === 'closed' ? m.poll_closed_toast() : m.poll_reopened_toast())
       await onChanged()
     })
@@ -119,7 +116,7 @@ export function AdminBar({
 
   async function duplicate() {
     await run(async () => {
-      const { id } = await duplicateFn({ data: { pollId: poll.id } })
+      const { id } = await duplicatePoll(poll.id)
       toast.success(m.poll_duplicated())
       await navigate({ href: `/p/${id}` })
     })
@@ -127,7 +124,7 @@ export function AdminBar({
 
   async function remove() {
     await run(async () => {
-      await deleteFn({ data: { pollId: poll.id } })
+      await deletePoll(poll.id)
       setDeleteOpen(false)
       toast.success(m.poll_deleted())
       await navigate({ to: '/' })
@@ -141,7 +138,7 @@ export function AdminBar({
     // so the toggle does not appear to disagree with the checkboxes.
     setFollowing(true)
     try {
-      await prefsFn({ data: { pollId: poll.id, channels: next } })
+      await updateNotificationPrefs(poll.id, next)
       toast.success(m.poll_notify_saved())
     } catch {
       setChannels(previous)
@@ -153,7 +150,7 @@ export function AdminBar({
     const previous = following
     setFollowing(next)
     try {
-      await followFn({ data: { pollId: poll.id, following: next } })
+      await setPollFollowing(poll.id, next)
     } catch {
       setFollowing(previous)
       toast.error(m.poll_error_generic())
@@ -176,7 +173,7 @@ export function AdminBar({
           <Button asChild type="button" size="sm" variant="outline">
             {/* A plain link, not a server function: the CSV comes straight from an owner-only
                 route, so the browser can stream it to disk. */}
-            <a href={`/p/${poll.id}/roster.csv`} download>
+            <a href={rosterCsvUrl(poll.id)} download>
               <Download aria-hidden="true" />
               {m.admin_download_roster()}
             </a>

@@ -2,7 +2,7 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import { appConfig } from '#/app.config'
 import { PageEditor } from '#/components/booking/PageEditor'
 import { m } from '#/lib/i18n'
-import { getBookingPage } from '#/server/bookings/pages.functions'
+import { getBookingPage } from '#/api/bookings'
 
 export const Route = createFileRoute('/bookings/$id/edit')({
   beforeLoad: ({ context, params }) => {
@@ -10,7 +10,7 @@ export const Route = createFileRoute('/bookings/$id/edit')({
       throw redirect({ to: '/login', search: { next: `/bookings/${params.id}/edit` } })
     }
   },
-  loader: ({ params }) => getBookingPage({ data: { pageId: params.id } }),
+  loader: ({ params }) => getBookingPage(params.id),
   head: ({ loaderData }) => ({
     meta: [{ title: `${loaderData?.title ?? m.booking_editor_edit_title()} — ${appConfig.name}` }],
   }),
@@ -27,7 +27,7 @@ function EditBookingPageRoute() {
       key={page.id}
       page={page}
       handle={session?.org?.slug ?? null}
-      appUrl={publicConfig.appUrl}
+      appUrl={window.location.origin}
       googleEnabled={publicConfig.googleEnabled}
     />
   )

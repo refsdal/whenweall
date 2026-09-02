@@ -8,7 +8,7 @@ import { useReducedMotion } from '#/lib/motion'
 import { useCountUp } from '#/lib/use-count-up'
 import { useNewlyArrived } from '#/lib/use-newly-arrived'
 import { cn } from '#/lib/utils'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
 /**
  * A tally in the footer. Its own component because the count-up is a hook and the footer renders

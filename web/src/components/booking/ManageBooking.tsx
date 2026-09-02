@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
-import { CalendarPlus, Clock, MapPin, StickyNote, User } from 'lucide-react'
+import { Clock, MapPin, StickyNote, User } from 'lucide-react'
 import { toast } from 'sonner'
 import { slotSummary } from '#/components/booking/BookingForm'
 import { googleCalendarUrl } from '#/components/booking/BookingConfirmed'
@@ -19,18 +18,18 @@ import {
 } from '#/components/ui/dialog'
 import { errorCode } from '#/lib/errors'
 import { getLocale, m } from '#/lib/i18n'
-import { cancelBooking, rescheduleBooking } from '#/server/bookings/bookings.functions'
-import type { BookingForManage } from '#/server/bookings/viewmodel'
+import { cancelBooking, rescheduleBooking } from '#/api/bookings'
+import type { BookingForManage } from '#/api/types'
 
 function messageForError(error: unknown): string {
   switch (errorCode(error)) {
-    case 'SLOT_UNAVAILABLE':
+    case 'slot_taken':
       return m.book_error_slot_unavailable()
-    case 'BOOKING_PAST':
+    case 'booking_past':
       return m.book_error_past()
-    case 'PAGE_PAUSED':
+    case 'page_paused':
       return m.book_error_paused()
-    case 'RATE_LIMITED':
+    case 'rate_limited':
       return m.error_rate_limited()
     default:
       return m.booking_manage_error_generic()
@@ -76,8 +75,6 @@ export function ManageBooking({
   onChanged: () => void | Promise<void>
 }) {
   const locale = getLocale()
-  const cancelFn = useServerFn(cancelBooking)
-  const rescheduleFn = useServerFn(rescheduleBooking)
 
   const storedZone = useViewerTimeZone(booking.visitorTimezone)
   const [chosenZone, setChosenZone] = useState<string | null>(null)
@@ -98,9 +95,6 @@ export function ManageBooking({
   const bookAgainTo = booking.page.handle
     ? { handle: booking.page.handle, slug: booking.page.slug }
     : null
-  const icsHref = token
-    ? `/booking/${booking.id}/calendar.ics?t=${encodeURIComponent(token)}`
-    : `/booking/${booking.id}/calendar.ics`
 
   function handleTimeZone(zone: string) {
     setChosenZone(zone)
@@ -110,7 +104,7 @@ export function ManageBooking({
   async function handleCancel() {
     setBusy(true)
     try {
-      await cancelFn({ data: { bookingId: booking.id, token } })
+      await cancelBooking(booking.id, token)
       setConfirmOpen(false)
       toast.success(m.booking_manage_cancelled_toast())
       await onChanged()
@@ -124,7 +118,7 @@ export function ManageBooking({
   async function handleReschedule(startAt: string) {
     setBusy(true)
     try {
-      await rescheduleFn({ data: { bookingId: booking.id, token, startAt } })
+      await rescheduleBooking(booking.id, startAt, token)
       setRescheduleOpen(false)
       toast.success(m.booking_manage_rescheduled())
       await onChanged()
@@ -222,12 +216,9 @@ export function ManageBooking({
               {m.booking_manage_cancel()}
             </Button>
           )}
-          <Button asChild variant="ghost">
-            <a href={icsHref} download>
-              <CalendarPlus aria-hidden="true" />
-              {m.poll_add_to_calendar()}
-            </a>
-          </Button>
+          {/* No `.ics` download here: internal/bookings/handlers.go has no calendar.ics route at
+              all (unlike internal/polls) — a known gap in this rewrite, flagged in the task
+              report rather than worked around. */}
           <Button asChild variant="ghost">
             <a
               href={googleCalendarUrl({

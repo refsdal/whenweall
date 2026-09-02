@@ -11,7 +11,7 @@ import {
 } from '#/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs'
 import { getLocale, intlLocale, m } from '#/lib/i18n'
-import type { BookingView } from '#/server/bookings/viewmodel'
+import type { BookingView } from '#/api/types'
 
 type Formatters = { when: Intl.DateTimeFormat; end: Intl.DateTimeFormat }
 

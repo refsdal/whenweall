@@ -5,9 +5,8 @@ import {
   updateBookingPageSchema,
   type CreateBookingPageInput,
   type UpdateBookingPageInput,
-} from '#/server/bookings/schemas'
-import type { PageView } from '#/server/bookings/viewmodel'
-import type { BookingPageStatus } from '#/server/db/schema'
+} from '#/api/bookings'
+import type { BookingPageStatus, PageView } from '#/api/types'
 
 /** One window of the day, in the page's own timezone. Mirrors `timeRangeSchema`. */
 export type DraftRange = { start: string; end: string }

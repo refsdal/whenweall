@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { AppError, errorCode } from '#/lib/errors'
+import { ApiError } from '#/api/client'
+import { errorCode } from '#/lib/errors'
+
 describe('errors', () => {
-  it('round-trips codes through Error messages', () => {
-    expect(errorCode(new AppError('FORBIDDEN'))).toBe('FORBIDDEN')
-    expect(errorCode(new Error('POLL_CLOSED'))).toBe('POLL_CLOSED')
+  it('reads the code off an ApiError', () => {
+    expect(errorCode(new ApiError('forbidden', 'forbidden', 403))).toBe('forbidden')
+    expect(errorCode(new ApiError('poll_closed', 'this poll is closed', 409))).toBe('poll_closed')
+  })
+
+  it('is null for anything that is not an ApiError', () => {
     expect(errorCode(new Error('boom'))).toBeNull()
     expect(errorCode('x')).toBeNull()
+    expect(errorCode(null)).toBeNull()
   })
 })

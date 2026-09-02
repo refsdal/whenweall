@@ -6,7 +6,7 @@ import { Label } from '#/components/ui/label'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { LIMITS, handleSchema } from '#/server/bookings/schemas'
+import { LIMITS, handleSchema } from '#/api/bookings'
 
 /** `https://whenweall.com` → `whenweall.com/book/` — the bit that is fixed, whatever the deployment. */
 export function bookingPrefix(appUrl: string): string {
@@ -50,7 +50,7 @@ export function HandleField({
       await onSave(value)
       toast.success(m.settings_handle_saved())
     } catch (error) {
-      if (errorCode(error) === 'HANDLE_TAKEN') setServerError(m.settings_handle_taken())
+      if (errorCode(error) === 'handle_taken') setServerError(m.settings_handle_taken())
       else toast.error(m.booking_editor_error_generic())
     } finally {
       setSaving(false)

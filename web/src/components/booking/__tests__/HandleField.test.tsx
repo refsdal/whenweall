@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HandleField } from '#/components/booking/HandleField'
+import { ApiError } from '#/api/client'
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock('sonner', () => ({ toast }))
@@ -90,7 +91,7 @@ describe('HandleField', () => {
 
   it('surfaces a taken handle as an inline error', async () => {
     const user = userEvent.setup()
-    const onSave = vi.fn().mockRejectedValue(new Error('HANDLE_TAKEN'))
+    const onSave = vi.fn().mockRejectedValue(new ApiError('handle_taken', 'taken', 409))
     render(<HandleField currentHandle={null} appUrl="https://whenweall.com" onSave={onSave} />)
 
     await user.type(handleInput(), 'taken-one')

@@ -8,7 +8,7 @@ import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { useBookingToken } from '#/lib/booking-tokens'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
-import { getManagedBooking } from '#/server/bookings/bookings.functions'
+import { getManagedBooking } from '#/api/bookings'
 
 /** `?t=` is the manage token from the confirmation email — the visitor's whole credential. */
 const searchSchema = z.object({ t: z.string().optional() })
@@ -23,14 +23,14 @@ export const Route = createFileRoute('/booking/$id/')({
     if (!deps.t && !context.session) return { booking: null, now }
 
     try {
-      const booking = await getManagedBooking({ data: { bookingId: params.id, token: deps.t } })
+      const booking = await getManagedBooking(params.id, deps.t)
       return { booking, now }
     } catch (error) {
       const code = errorCode(error)
-      if (code === 'NOT_FOUND') throw notFound()
+      if (code === 'not_found') throw notFound()
       // A wrong or expired token, or a signed-in visitor who isn't the organiser: same friendly
       // "open your link" state rather than an accusing error — the right link fixes it.
-      if (code === 'INVALID_TOKEN' || code === 'FORBIDDEN' || code === 'UNAUTHORIZED') {
+      if (code === 'invalid_token' || code === 'forbidden' || code === 'unauthenticated') {
         return { booking: null, now }
       }
       throw error

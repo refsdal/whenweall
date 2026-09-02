@@ -2,7 +2,7 @@ import { BestBadge } from '#/components/poll/BestBadge'
 import type { AppLocale } from '#/app.config'
 import { formatOptionLabel } from '#/lib/time'
 import { cn } from '#/lib/utils'
-import type { PollOptionView } from '#/server/polls/viewmodel'
+import type { PollOptionView } from '#/api/types'
 
 /** The label a screen reader reads for a cell in this column, and the tooltip on the header. */
 export function optionPlainLabel(

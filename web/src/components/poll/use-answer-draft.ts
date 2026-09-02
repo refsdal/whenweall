@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useServerFn } from '@tanstack/react-start'
 import { toast } from 'sonner'
 import * as z from 'zod'
 import { celebrate } from '#/lib/confetti'
@@ -7,25 +6,25 @@ import { saveEditToken } from '#/lib/edit-tokens'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import type { Answer } from '#/lib/scoring'
-import type { ClientSession } from '#/server/auth/session.functions'
-import { addParticipant, updateParticipant } from '#/server/polls/participants.functions'
-import type { ParticipantView, PollView } from '#/server/polls/viewmodel'
+import type { Session } from '#/lib/use-session'
+import { addParticipant, updateParticipant } from '#/api/polls'
+import type { ParticipantView, PollView } from '#/api/types'
 
 /** Maps a server error to the sentence that actually helps the person in front of the grid. */
 function messageForError(error: unknown): string {
   switch (errorCode(error)) {
-    case 'POLL_CLOSED':
+    case 'poll_closed':
       return m.poll_error_closed()
-    case 'EMAIL_REQUIRED':
+    case 'email_required':
       return m.poll_error_email_required()
-    case 'CAPTCHA_FAILED':
+    case 'captcha_failed':
       return m.poll_error_captcha()
-    case 'RATE_LIMITED':
+    case 'rate_limited':
       return m.error_rate_limited()
-    case 'LIMIT_REACHED':
+    case 'limit_reached':
       return m.poll_error_limit()
-    case 'FORBIDDEN':
-    case 'UNAUTHORIZED':
+    case 'forbidden':
+    case 'unauthenticated':
       return m.poll_error_forbidden()
     default:
       return m.poll_error_generic()
@@ -62,18 +61,15 @@ export function useAnswerDraft({
   poll,
   session,
   existingParticipant,
-  editToken,
+  guestToken,
   onSaved,
 }: {
   poll: PollView
-  session: ClientSession
+  session: Session
   existingParticipant?: ParticipantView
-  editToken?: string | null
+  guestToken?: string | null
   onSaved: () => void | Promise<void>
 }): AnswerDraft {
-  const addFn = useServerFn(addParticipant)
-  const updateFn = useServerFn(updateParticipant)
-
   const [name, setName] = useState(existingParticipant?.name ?? session?.user.name ?? '')
   const [email, setEmail] = useState('')
   const [answers, setAnswers] = useState<Record<string, Answer>>(
@@ -136,28 +132,21 @@ export function useAnswerDraft({
     setSubmitting(true)
     try {
       if (existingParticipant) {
-        await updateFn({
-          data: {
-            pollId: poll.id,
-            participantId: existingParticipant.id,
-            editToken: editToken ?? undefined,
-            name: trimmedName,
-            answers,
-          },
-        })
+        await updateParticipant(
+          poll.id,
+          existingParticipant.id,
+          { name: trimmedName, answers },
+          { guestToken: guestToken ?? undefined },
+        )
         toast.success(m.poll_vote_updated())
       } else {
-        const result = await addFn({
-          data: {
-            pollId: poll.id,
-            name: trimmedName,
-            email: trimmedEmail || undefined,
-            answers,
-            turnstileToken: captchaToken ?? undefined,
-          },
-        })
-        if (result.editToken) {
-          saveEditToken(poll.id, result.participantId, result.editToken)
+        const result = await addParticipant(
+          poll.id,
+          { name: trimmedName, email: trimmedEmail || undefined, answers },
+          { captchaToken: captchaToken ?? undefined },
+        )
+        if (result.guestToken) {
+          saveEditToken(poll.id, result.participantId, result.guestToken)
         }
         celebrate('vote')
         toast.success(m.poll_vote_saved())
@@ -172,19 +161,17 @@ export function useAnswerDraft({
       setSubmitting(false)
     }
   }, [
-    addFn,
     answers,
     captchaToken,
-    editToken,
     email,
     existingParticipant,
+    guestToken,
     name,
     needsCaptcha,
     onSaved,
     poll.id,
     requireEmail,
     session,
-    updateFn,
   ])
 
   return {

@@ -10,7 +10,7 @@ import {
   initialDraft,
   type EditorDraft,
 } from '#/components/booking/editor-state'
-import type { PageView } from '#/server/bookings/viewmodel'
+import type { PageView } from '#/api/types'
 
 function draftWith(overrides: Partial<EditorDraft> = {}): EditorDraft {
   return { ...initialDraft('Europe/Oslo'), title: 'Intro call', slug: 'intro-call', ...overrides }

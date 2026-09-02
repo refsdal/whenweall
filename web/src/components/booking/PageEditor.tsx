@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useReducer, useState, type ChangeEvent } from 'react'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
 import { Save, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AvailabilityEditor } from '#/components/booking/AvailabilityEditor'
@@ -34,13 +33,8 @@ import { Textarea } from '#/components/ui/textarea'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import {
-  createBookingPage,
-  deleteBookingPage,
-  updateBookingPage,
-} from '#/server/bookings/pages.functions'
-import { LIMITS } from '#/server/bookings/schemas'
-import type { PageView } from '#/server/bookings/viewmodel'
+import { createBookingPage, deleteBookingPage, LIMITS, updateBookingPage } from '#/api/bookings'
+import type { PageView } from '#/api/types'
 
 const DURATION_PRESETS = [15, 30, 45, 60, 90, 120]
 
@@ -147,9 +141,6 @@ export function PageEditor({
 }) {
   const navigate = useNavigate()
   const router = useRouter()
-  const createFn = useServerFn(createBookingPage)
-  const updateFn = useServerFn(updateBookingPage)
-  const deleteFn = useServerFn(deleteBookingPage)
 
   const isCreate = page === null
   const [draft, dispatch] = useReducer(editorReducer, page, (initial): EditorDraft =>
@@ -192,7 +183,7 @@ export function PageEditor({
       if (isCreate) {
         const input = draftToInput(draft)
         if (!input) return
-        const { id } = await createFn({ data: input })
+        const { id } = await createBookingPage(input)
         toast.success(m.booking_editor_created())
         await navigate({ to: '/bookings/$id', params: { id } })
         return
@@ -200,11 +191,11 @@ export function PageEditor({
 
       const payload = draftToUpdate(draft, page.id)
       if (!payload) return
-      await updateFn({ data: payload })
+      await updateBookingPage(payload)
       toast.success(m.booking_editor_updated())
       await router.invalidate()
     } catch (error) {
-      if (errorCode(error) === 'SLUG_TAKEN') setSlugError(m.booking_editor_slug_taken())
+      if (errorCode(error) === 'slug_taken') setSlugError(m.booking_editor_slug_taken())
       else toast.error(m.booking_editor_error_generic())
     } finally {
       setSubmitting(false)
@@ -215,7 +206,7 @@ export function PageEditor({
     if (isCreate) return
     setSubmitting(true)
     try {
-      await deleteFn({ data: { pageId: page.id } })
+      await deleteBookingPage(page.id)
       setDeleteOpen(false)
       toast.success(m.booking_editor_deleted())
       await navigate({ to: '/bookings' })
@@ -402,14 +393,20 @@ export function PageEditor({
         <DateOverridesEditor overrides={draft.dateOverrides} issues={issues} dispatch={dispatch} />
       </Section>
 
-      <Section title={m.booking_editor_section_integrations()}>
-        <GoogleCalendarCard
-          googleSync={draft.googleSync}
-          googleEnabled={googleEnabled}
-          callbackURL={isCreate ? '/bookings/new' : `/bookings/${page.id}/edit`}
-          onSyncChange={(next) => setField('googleSync', next)}
-        />
-      </Section>
+      {!isCreate && (
+        <Section title={m.booking_editor_section_integrations()}>
+          {/* Google Calendar status is per-PAGE now (GET /booking-pages/{id}/google-status), not
+              per-account — there is no page id to ask about until the page exists, so this section
+              (and the connect/sync toggle) only appears once editing an already-saved page. */}
+          <GoogleCalendarCard
+            pageId={page.id}
+            googleSync={draft.googleSync}
+            googleEnabled={googleEnabled}
+            callbackURL={`/bookings/${page.id}/edit`}
+            onSyncChange={(next) => setField('googleSync', next)}
+          />
+        </Section>
+      )}
 
       <Section title={m.booking_editor_section_notifications()}>
         <div className="flex items-start gap-3">

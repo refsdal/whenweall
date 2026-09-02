@@ -1,5 +1,4 @@
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
-import { useServerFn } from '@tanstack/react-start'
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, CalendarClock } from 'lucide-react'
 import { toast } from 'sonner'
@@ -10,7 +9,7 @@ import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 import { staggerContainer, staggerItem, useReducedMotion } from '#/lib/motion'
 import { buttonVariants } from '#/components/ui/button'
-import { deletePoll, duplicatePoll, listMyPolls } from '#/server/polls/polls.functions'
+import { deletePoll, duplicatePoll, listMyPolls } from '#/api/polls'
 
 export const Route = createFileRoute('/dashboard')({
   beforeLoad: ({ context }) => {
@@ -30,12 +29,10 @@ function DashboardPage() {
   const reduceMotion = useReducedMotion()
   const router = useRouter()
   const navigate = Route.useNavigate()
-  const duplicateFn = useServerFn(duplicatePoll)
-  const deleteFn = useServerFn(deletePoll)
 
   async function handleDuplicate(pollId: string) {
     try {
-      const { id } = await duplicateFn({ data: { pollId } })
+      const { id } = await duplicatePoll(pollId)
       toast.success(m.poll_duplicated())
       await navigate({ to: '/p/$id', params: { id } })
     } catch {
@@ -45,7 +42,7 @@ function DashboardPage() {
 
   async function handleDelete(pollId: string) {
     try {
-      await deleteFn({ data: { pollId } })
+      await deletePoll(pollId)
       toast.success(m.poll_deleted())
       await router.invalidate()
     } catch {

@@ -7,7 +7,7 @@ import { CopyIcon } from '#/components/ui/copy-icon'
 import { m } from '#/lib/i18n'
 import { useCopy } from '#/lib/use-copy'
 import { cn } from '#/lib/utils'
-import type { PageSummary } from '#/server/bookings/viewmodel'
+import type { PageSummary } from '#/api/types'
 
 function upcomingLabel(count: number): string {
   if (count === 0) return m.booking_page_upcoming_none()

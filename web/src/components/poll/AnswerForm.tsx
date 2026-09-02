@@ -4,7 +4,7 @@ import { Input } from '#/components/ui/input'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 import type { AnswerDraft } from '#/components/poll/use-answer-draft'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { PollView } from '#/api/types'
 
 /**
  * Everything about an answer that is not per-option: who you are, where to reach you, and the

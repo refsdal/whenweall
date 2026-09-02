@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router'
 import { PollCard } from '#/components/dashboard/PollCard'
-import type { PollSummary } from '#/server/polls/viewmodel'
+import type { PollSummary } from '#/api/types'
 
 afterEach(() => cleanup())
 

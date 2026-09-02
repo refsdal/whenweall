@@ -12,7 +12,7 @@ import {
   type EditorAction,
 } from '#/components/booking/editor-state'
 import { getLocale, intlLocale, m } from '#/lib/i18n'
-import { LIMITS } from '#/server/bookings/schemas'
+import { LIMITS } from '#/api/bookings'
 
 const DEFAULT_OVERRIDE_RANGE: DraftRange = { start: '09:00', end: '17:00' }
 

@@ -11,7 +11,7 @@ import {
 } from '#/components/poll/TimezoneSwitch'
 import { m } from '#/lib/i18n'
 import { useLivePage } from '#/lib/use-live-page'
-import { getPublicAvailability } from '#/server/bookings/bookings.functions'
+import { getPublicAvailability } from '#/api/bookings'
 
 /**
  * `month` is the month the calendar shows and `tz` the zone its days are grouped in — both in
@@ -73,11 +73,9 @@ export const Route = createFileRoute('/book/$handle/$slug')({
 
     const fetchMonth = (value: string) =>
       getPublicAvailability({
-        data: {
-          handle: params.handle,
-          slug: params.slug,
-          ...monthWindow(value),
-        },
+        handle: params.handle,
+        slug: params.slug,
+        ...monthWindow(value),
       })
 
     let result = await fetchMonth(month)

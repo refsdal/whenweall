@@ -7,8 +7,8 @@ import type { SlotClaimant } from '#/components/signup/ClaimantList'
 import type { AppLocale } from '#/app.config'
 import { m } from '#/lib/i18n'
 import { useClaims } from '#/lib/use-claims'
-import type { ClientSession } from '#/server/auth/session.functions'
-import type { PollView } from '#/server/polls/viewmodel'
+import type { Session } from '#/lib/use-session'
+import type { PollView } from '#/api/types'
 
 /** Who is on each slot, in the order people signed up. */
 function claimantsByOption(poll: PollView, yourParticipantId: string | null) {
@@ -43,7 +43,7 @@ export function SlotBoard({
   onChanged,
 }: {
   poll: PollView
-  session: ClientSession
+  session: Session
   locale: AppLocale
   timeZone: string
   onChanged: () => void | Promise<void>
