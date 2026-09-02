@@ -84,7 +84,9 @@ export function connectRoom(opts: {
   onEvent(type: string, data: unknown, seq: number): void  // also receives "presence"
   onResync(): void             // server asked for a refetch — call onSnapshot path again
 }): { close(): void }
-// Tracks last seq; reconnects with `?since=` after backoff; "resync" clears since.
+// Dedupes by a SET of seen seqs (never a `seq <= last` filter — lower seqs arrive late by design);
+// reconnects with `?since=<max seen seq>` after backoff; on "resync" refetch the snapshot (never EventsSince).
+// See internal/rooms/PROTOCOL.md — the wire contract.
 ```
 
 - [ ] Steps: unit tests with a mock ws server (snapshot → events ordering, reconnect sends since, resync clears it) → adapt the three consumers (event names already match `src/do/*protocol.ts` per plan 6) → vitest green → commit `feat(web): room socket client with replay`.
