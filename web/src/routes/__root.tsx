@@ -8,20 +8,19 @@ import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { RouteProgress } from '#/components/layout/RouteProgress'
 import { Toaster } from '#/components/ui/sonner'
 import { getLocale, m } from '#/lib/i18n'
-import { getSession } from '#/server/auth/session.functions'
-import { getPublicConfig } from '#/server/config.functions'
+import { getPublicConfig } from '#/api/config'
+import { fetchSession } from '#/lib/use-session'
 
 // NOTE(go-rewrite-08 task 1): `head`/`shellComponent`/`HeadContent`/`Scripts` were TanStack
 // Start SSR-only APIs — there is no equivalent in plain `@tanstack/react-router` (no server, no
 // document to render). The document shell they used to produce (`<html>`, the theme-init
 // script, `<head>` meta, `#root` mount point) now lives statically in `web/index.html`, which
-// Vite serves and injects `main.tsx` into directly. `beforeLoad`'s `getSession`/`getPublicConfig`
-// calls are TanStack Start server functions (`#/server/*`) that no longer resolve under `web/` —
-// left as-is on purpose; replacing them with real Go API calls is Task 2-4's job (see
-// worklist.txt), not this move.
+// Vite serves and injects `main.tsx` into directly. `beforeLoad`'s `fetchSession`/`getPublicConfig`
+// (Task 2/3) now call the Go backend directly (`#/api/auth.ts`/`#/api/config.ts`) instead of the
+// TanStack Start server functions this route used to call.
 export const Route = createRootRoute({
   beforeLoad: async () => ({
-    session: await getSession(),
+    session: await fetchSession(),
     locale: getLocale(),
     publicConfig: await getPublicConfig(),
   }),

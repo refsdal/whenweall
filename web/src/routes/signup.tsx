@@ -10,10 +10,10 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { authErrorMessage } from '#/lib/auth-errors'
-import { getLocale, m } from '#/lib/i18n'
+import { m } from '#/lib/i18n'
 import { nextSearchSchema, safeNext } from '#/lib/search'
 import { cn } from '#/lib/utils'
-import { authClient } from '#/server/auth/client'
+import { signUpWithCredential } from '#/api/auth'
 
 export const Route = createFileRoute('/signup')({
   validateSearch: nextSearchSchema,
@@ -77,19 +77,13 @@ function SignupPage() {
 
     setSubmitting(true)
     try {
-      const { error } = await authClient.signUp.email({
-        name: name.trim(),
-        email,
-        password,
-        locale: getLocale(),
-        callbackURL: '/verify-email?done=1',
-        fetchOptions: { headers: { 'x-captcha-response': captchaToken } },
-      })
-      if (error) {
-        toast.error(authErrorMessage(error))
-        return
-      }
+      // `name` has nowhere to go server-side yet (see `#/api/auth.ts`'s own doc comment: Limen's
+      // signup handler only reads email/password) — collected here anyway so a later task can wire
+      // it up without a UI change, but it is NOT sent.
+      await signUpWithCredential(email, password)
       setSubmittedEmail(email)
+    } catch (error) {
+      toast.error(authErrorMessage(error))
     } finally {
       setSubmitting(false)
     }

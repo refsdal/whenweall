@@ -8,7 +8,7 @@ import { Label } from '#/components/ui/label'
 import { authErrorMessage } from '#/lib/auth-errors'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { authClient } from '#/server/auth/client'
+import { resetPassword } from '#/api/auth'
 
 export const Route = createFileRoute('/reset-password')({
   validateSearch: z.object({ token: z.string().optional() }),
@@ -47,6 +47,10 @@ function ResetPasswordPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    // Redundant with the early `if (!token) return` above (this closure can't narrow across
+    // that check on its own — it's a hoisted function declaration), but always true by the time
+    // this form can even be submitted.
+    if (!token) return
 
     if (password.length < 12) {
       setError(m.auth_error_password_too_short())
@@ -56,15 +60,10 @@ function ResetPasswordPage() {
 
     setSubmitting(true)
     try {
-      const { error: resetError } = await authClient.resetPassword({
-        newPassword: password,
-        token,
-      })
-      if (resetError) {
-        setError(authErrorMessage(resetError))
-        return
-      }
+      await resetPassword(token, password)
       setDone(true)
+    } catch (resetError) {
+      setError(authErrorMessage(resetError))
     } finally {
       setSubmitting(false)
     }

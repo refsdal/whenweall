@@ -1,7 +1,5 @@
-import { useRouteContext } from '@tanstack/react-router'
 import { appConfig, type AppLocale } from '#/app.config'
 import { getLocale, m, setLocale } from '#/lib/i18n'
-import { authClient } from '#/server/auth/client'
 import { cn } from '#/lib/utils'
 
 const LOCALE_LABELS: Record<AppLocale, () => string> = {
@@ -10,17 +8,14 @@ const LOCALE_LABELS: Record<AppLocale, () => string> = {
 }
 
 export function LocaleSwitcher({ className }: { className?: string }) {
-  const { session } = useRouteContext({ from: '__root__' })
   const activeLocale = getLocale()
 
   function handleSelect(locale: AppLocale) {
     if (locale === activeLocale) return
 
-    if (session) {
-      void authClient.updateUser({ locale })
-    }
-
-    // Sets the `whenweall_locale` cookie and reloads the page by default.
+    // Sets the `whenweall_locale` cookie and reloads the page by default. The Go backend's `users`
+    // table (migrations/00002_auth.sql) has no `locale` column at all, unlike the old better-auth
+    // schema — there is no server-side profile locale to persist anymore, only this cookie.
     setLocale(locale)
   }
 

@@ -1,14 +1,12 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import * as z from 'zod'
 import { AuthCard } from '#/components/auth/AuthCard'
-import { TurnstileField } from '#/components/auth/TurnstileField'
 import { Button, buttonVariants } from '#/components/ui/button'
-import { Input } from '#/components/ui/input'
-import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { authClient } from '#/server/auth/client'
+import { requestEmailVerification } from '#/api/auth'
+import { useSession } from '#/lib/use-session'
 
 export const Route = createFileRoute('/verify-email')({
   // TanStack Router's default search parser turns a number-looking value like `?done=1` into a
@@ -38,23 +36,22 @@ function VerifyEmailPage() {
   return <VerifyEmailExpired />
 }
 
+/**
+ * Limen's `email-verifications` (resend) route is protected and takes no target address — it
+ * always resends to the CALLER'S OWN account (`internal/auth/routes.txt`), unlike the old
+ * better-auth flow, which could resend to any typed-in address while signed out. Without a
+ * session there is nothing to resend to, so this now asks the visitor to sign in first instead of
+ * collecting an email/captcha.
+ */
 function VerifyEmailExpired() {
-  const [email, setEmail] = useState('')
-  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const session = useSession()
   const [submitting, setSubmitting] = useState(false)
   const [sent, setSent] = useState(false)
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!email || !captchaToken) return
-
+  async function handleResend() {
     setSubmitting(true)
     try {
-      await authClient.sendVerificationEmail({
-        email,
-        callbackURL: '/verify-email?done=1',
-        fetchOptions: { headers: { 'x-captcha-response': captchaToken } },
-      })
+      await requestEmailVerification()
       setSent(true)
     } finally {
       setSubmitting(false)
@@ -65,24 +62,19 @@ function VerifyEmailExpired() {
     <AuthCard title={m.auth_verify_error_title()} subtitle={m.auth_verify_error_body()}>
       {sent ? (
         <p className="text-sm text-muted-foreground">{m.auth_verify_resend_success()}</p>
+      ) : session ? (
+        <Button
+          type="button"
+          className="w-full"
+          disabled={submitting}
+          onClick={() => void handleResend()}
+        >
+          {submitting ? m.auth_verify_resend_submitting() : m.auth_verify_resend_submit()}
+        </Button>
       ) : (
-        <form onSubmit={(e) => void handleSubmit(e)} noValidate className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="verify-email">{m.auth_email_label()}</Label>
-            <Input
-              id="verify-email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
-          <TurnstileField onToken={setCaptchaToken} />
-          <Button type="submit" className="w-full" disabled={submitting || !captchaToken}>
-            {submitting ? m.auth_verify_resend_submitting() : m.auth_verify_resend_submit()}
-          </Button>
-        </form>
+        <Link to="/login" className={cn(buttonVariants(), 'w-full')}>
+          {m.auth_login_link()}
+        </Link>
       )}
     </AuthCard>
   )

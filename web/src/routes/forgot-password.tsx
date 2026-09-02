@@ -8,7 +8,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { authClient } from '#/server/auth/client'
+import { requestPasswordReset } from '#/api/auth'
 
 export const Route = createFileRoute('/forgot-password')({
   component: ForgotPasswordPage,
@@ -35,11 +35,7 @@ function ForgotPasswordPage() {
 
     setSubmitting(true)
     try {
-      await authClient.requestPasswordReset({
-        email,
-        redirectTo: '/reset-password',
-        fetchOptions: { headers: { 'x-captcha-response': captchaToken } },
-      })
+      await requestPasswordReset(email)
     } finally {
       // Always show the success state, whether or not the address has an account — the request
       // endpoint must not let an attacker learn which emails are registered.

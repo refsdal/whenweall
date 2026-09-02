@@ -2,14 +2,21 @@ import type { SVGProps } from 'react'
 import { Button } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
 import { safeNext } from '#/lib/search'
-import { authClient } from '#/server/auth/client'
+import { oauthAuthorizeUrl } from '#/api/auth'
 
-/** Redirects to Google's consent screen; Better-Auth brings the user back to `next` on success. */
+/** Navigates to Google's consent screen — `GET /oauth/google/authorize` responds `{url}` rather
+ * than redirecting itself (see `#/api/auth.ts`'s doc comment), so the browser has to be sent there
+ * by hand. Google's own callback brings the browser back to `redirectUri` with the session cookie
+ * already attached. */
 export function GoogleButton({ next }: { next: string }) {
   async function handleClick() {
     // Re-validated here too (defence in depth) even though callers already sanitize `next` —
     // this component must never trust that upstream validation ran.
-    await authClient.signIn.social({ provider: 'google', callbackURL: safeNext(next) })
+    // `redirect_uri` is checked against the backend's own trusted-origin allowlist
+    // (internal/auth/routes.txt: `IsTrustedOrigin`), which compares full origins — a bare path
+    // like `safeNext` returns isn't enough, so it's resolved against this page's own origin first.
+    const url = await oauthAuthorizeUrl('google', new URL(safeNext(next), window.location.origin).toString())
+    window.location.href = url
   }
 
   return (

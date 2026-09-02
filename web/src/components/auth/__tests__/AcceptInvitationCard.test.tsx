@@ -2,14 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AcceptInvitationCard } from '#/components/auth/AcceptInvitationCard'
-import { authClient } from '#/server/auth/client'
+import { acceptInvitation } from '#/api/auth'
 
-vi.mock('#/server/auth/client', () => ({
-  authClient: {
-    organization: {
-      acceptInvitation: vi.fn(),
-    },
-  },
+vi.mock('#/api/auth', () => ({
+  acceptInvitation: vi.fn(),
 }))
 
 afterEach(() => {
@@ -21,31 +17,23 @@ describe('AcceptInvitationCard', () => {
   it('does not call acceptInvitation on render — this route is hit by email link scanners with no human present', () => {
     render(<AcceptInvitationCard invitationId="inv_1" onAccepted={vi.fn()} />)
 
-    expect(authClient.organization.acceptInvitation).not.toHaveBeenCalled()
+    expect(acceptInvitation).not.toHaveBeenCalled()
   })
 
   it('calls acceptInvitation and onAccepted when the accept button is clicked', async () => {
-    vi.mocked(authClient.organization.acceptInvitation).mockResolvedValue({
-      data: { invitation: {}, member: {} },
-      error: null,
-    } as never)
+    vi.mocked(acceptInvitation).mockResolvedValue(undefined)
     const onAccepted = vi.fn()
     const user = userEvent.setup()
     render(<AcceptInvitationCard invitationId="inv_1" onAccepted={onAccepted} />)
 
     await user.click(screen.getByRole('button', { name: /accept invitation/i }))
 
-    expect(authClient.organization.acceptInvitation).toHaveBeenCalledExactlyOnceWith({
-      invitationId: 'inv_1',
-    })
+    expect(acceptInvitation).toHaveBeenCalledExactlyOnceWith('inv_1')
     expect(onAccepted).toHaveBeenCalledOnce()
   })
 
   it('shows the invalid/expired message and never calls onAccepted when acceptance fails', async () => {
-    vi.mocked(authClient.organization.acceptInvitation).mockResolvedValue({
-      data: null,
-      error: { message: 'INVITATION_NOT_FOUND' },
-    } as never)
+    vi.mocked(acceptInvitation).mockRejectedValue(new Error('invitation not found'))
     const onAccepted = vi.fn()
     const user = userEvent.setup()
     render(<AcceptInvitationCard invitationId="inv_1" onAccepted={onAccepted} />)

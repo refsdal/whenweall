@@ -1,8 +1,8 @@
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { CalendarClock, LayoutDashboard, LogOut, Settings } from 'lucide-react'
 import { m } from '#/lib/i18n'
-import { authClient } from '#/server/auth/client'
-import type { ClientSession } from '#/server/auth/session.functions'
+import { signOut } from '#/api/auth'
+import type { Session } from '#/lib/use-session'
 import { buttonVariants } from '#/components/ui/button'
 import {
   DropdownMenu,
@@ -19,7 +19,7 @@ function initial(name: string | null, email: string): string {
   return source.slice(0, 1).toUpperCase()
 }
 
-export function UserMenu({ session }: { session: ClientSession }) {
+export function UserMenu({ session }: { session: Session }) {
   const router = useRouter()
   const navigate = useNavigate()
 
@@ -34,7 +34,7 @@ export function UserMenu({ session }: { session: ClientSession }) {
   const { user } = session
 
   async function handleSignOut() {
-    await authClient.signOut()
+    await signOut()
     await router.invalidate()
     await navigate({ to: '/' })
   }

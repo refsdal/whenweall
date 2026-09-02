@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { AuthCard } from '#/components/auth/AuthCard'
 import { Button } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
-import { authClient } from '#/server/auth/client'
+import { acceptInvitation } from '#/api/auth'
 
 /**
  * Confirmation card for `/accept-invitation/$id`. Accepting is a real state change — it creates a
@@ -26,12 +26,10 @@ export function AcceptInvitationCard({
   async function handleAccept() {
     setSubmitting(true)
     try {
-      const { error } = await authClient.organization.acceptInvitation({ invitationId })
-      if (error) {
-        setFailed(true)
-        return
-      }
+      await acceptInvitation(invitationId)
       onAccepted()
+    } catch {
+      setFailed(true)
     } finally {
       setSubmitting(false)
     }

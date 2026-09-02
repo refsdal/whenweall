@@ -4,7 +4,6 @@ import { toast } from 'sonner'
 import * as z from 'zod'
 import { AuthCard } from '#/components/auth/AuthCard'
 import { GoogleButton } from '#/components/auth/GoogleButton'
-import { PasskeySignInButton } from '#/components/auth/PasskeySignInButton'
 import { TurnstileField } from '#/components/auth/TurnstileField'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -13,7 +12,7 @@ import { Separator } from '#/components/ui/separator'
 import { authErrorMessage } from '#/lib/auth-errors'
 import { m } from '#/lib/i18n'
 import { nextSearchSchema, safeNext } from '#/lib/search'
-import { authClient } from '#/server/auth/client'
+import { signInWithCredential } from '#/api/auth'
 
 export const Route = createFileRoute('/login')({
   validateSearch: nextSearchSchema,
@@ -38,13 +37,9 @@ function LoginPage() {
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
   const [submitting, setSubmitting] = useState(false)
-  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null)
-  const [resending, setResending] = useState(false)
-  const [resendCaptchaToken, setResendCaptchaToken] = useState<string | null>(null)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setUnverifiedEmail(null)
 
     const fieldErrors: typeof errors = {}
     if (!emailSchema.safeParse(email).success) fieldErrors.email = m.auth_error_email_invalid()
@@ -58,38 +53,16 @@ function LoginPage() {
 
     setSubmitting(true)
     try {
-      const { error } = await authClient.signIn.email({
-        email,
-        password,
-        fetchOptions: { headers: { 'x-captcha-response': captchaToken } },
-      })
-      if (error) {
-        if (error.status === 403) {
-          setUnverifiedEmail(email)
-          return
-        }
-        toast.error(authErrorMessage(error))
-        return
-      }
+      // Limen's credential plugin has no unverified-email gate on signin at all (see the task
+      // report) — the old "resend verification from this page" sub-flow (a 403 branch) had
+      // nothing left to key off, so it's gone; verifying happens from `/verify-email` instead.
+      await signInWithCredential(email, password)
       await router.invalidate()
       await navigate({ href: safeNext(next) })
+    } catch (error) {
+      toast.error(authErrorMessage(error))
     } finally {
       setSubmitting(false)
-    }
-  }
-
-  async function handleResend() {
-    if (!unverifiedEmail || !resendCaptchaToken) return
-    setResending(true)
-    try {
-      await authClient.sendVerificationEmail({
-        email: unverifiedEmail,
-        callbackURL: '/verify-email?done=1',
-        fetchOptions: { headers: { 'x-captcha-response': resendCaptchaToken } },
-      })
-      toast.success(m.auth_verify_resent())
-    } finally {
-      setResending(false)
     }
   }
 
@@ -152,22 +125,6 @@ function LoginPage() {
           )}
         </div>
 
-        {unverifiedEmail && (
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-secondary/60 p-3 text-sm">
-            <p>{m.auth_login_unverified()}</p>
-            <TurnstileField onToken={setResendCaptchaToken} />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={resending || !resendCaptchaToken}
-              onClick={() => void handleResend()}
-            >
-              {m.auth_resend_verification()}
-            </Button>
-          </div>
-        )}
-
         <TurnstileField onToken={setCaptchaToken} />
 
         <Button type="submit" className="w-full" disabled={submitting}>
@@ -175,16 +132,16 @@ function LoginPage() {
         </Button>
       </form>
 
-      <div className="flex items-center gap-3">
-        <Separator className="flex-1" />
-        <span className="text-xs text-muted-foreground uppercase">{m.auth_or()}</span>
-        <Separator className="flex-1" />
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <PasskeySignInButton next={safeNext(next)} />
-        {publicConfig.googleEnabled && <GoogleButton next={safeNext(next)} />}
-      </div>
+      {publicConfig.googleEnabled && (
+        <>
+          <div className="flex items-center gap-3">
+            <Separator className="flex-1" />
+            <span className="text-xs text-muted-foreground uppercase">{m.auth_or()}</span>
+            <Separator className="flex-1" />
+          </div>
+          <GoogleButton next={safeNext(next)} />
+        </>
+      )}
     </AuthCard>
   )
 }
