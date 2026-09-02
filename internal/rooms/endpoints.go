@@ -70,8 +70,10 @@ type PollService interface {
 // route. AuthorizeManagePage (internal/bookings/ws.go) is bookings.Service.RequireManageablePage
 // with its own ErrNotFound/ErrForbidden sentinels pre-mapped onto this package's (ErrNotFound/
 // ErrForbidden, ws.go) — the direction that mapping can happen in without an import cycle, since
-// bookings already imports this package.
+// bookings already imports this package. PageExists is the route's own public Authorize gate — see
+// bookingWSHandler's doc comment for why the route needs one at all now.
 type BookingService interface {
+	PageExists(ctx context.Context, pageID string) (bool, error)
 	AuthorizeManagePage(ctx context.Context, pageID, orgID, userID string) error
 	BookingSnapshot(ctx context.Context, pageID, orgID string) (any, error)
 }
@@ -81,19 +83,30 @@ type BookingService interface {
 //   - GET /api/v1/polls/{id}/ws — public (a session, a guest participant token, or a fully
 //     anonymous caller may all connect); 404 for a missing/soft-deleted poll. roomKey "poll:"+id.
 //     Presence on. Connect-rate-limited (wsConnectLimit/wsConnectWindow, I5).
-//   - GET /api/v1/booking-pages/{pageId}/ws — session required (401), and the session's caller
-//     must manage pageId (403) — managers only, mirroring handleListPageBookings's own gate
-//     (handlers.go). roomKey "booking:"+pageId. Presence OFF (M4): booking-protocol.ts's own
-//     frontend contract has no presence UI for the organiser dashboard this route serves, unlike
-//     the poll room's public viewer count — so there is nothing here to broadcast a count for.
+//   - GET /api/v1/booking-pages/{pageId}/ws — public (existence/soft-delete check only, mirroring
+//     the poll room's own gate — and src/routes/api/bookings/$pageId/ws.ts's identical pre-rewrite
+//     behavior: an existence check, nothing more). roomKey "booking:"+pageId. Presence OFF (M4):
+//     booking-protocol.ts's own frontend contract has no presence UI for this route, unlike the
+//     poll room's public viewer count — so there is nothing here to broadcast a count for.
 //     Renamed from /api/v1/bookings/{pageId}/ws (M5) to match this package's own
 //     /api/v1/booking-pages/* REST surface (handlers.go) rather than the /api/v1/bookings/*
 //     namespace that surface reserves for an individual booking's own manage/cancel/reschedule
-//     routes. Deliberately NOT wrapped in the same connect limiter as the two public routes below:
-//     this route is already gated behind a signed-in session that must also manage the target
-//     page, a meaningfully higher bar than any anonymous per-IP budget would add on top of it —
-//     its caller is by construction an authenticated org member, not an anonymous flood vector. A
-//     documented decision, not an oversight.
+//     routes.
+//
+//     Review fix (go-rewrite-08 T7): originally gated session-required + manager-only, on the
+//     theory that this route only serves the organiser's own dashboard. It doesn't — its one
+//     actual caller, `web/src/routes/book/$handle/$slug.tsx`'s `useLivePage`, is the PUBLIC
+//     /book/{org}/{page} page, run by an anonymous visitor with no session at all; the manager
+//     dashboard (`bookings/$id/index.tsx`) never calls `useLivePage` in the first place. The old
+//     gate meant a public visitor's own websocket 401'd immediately, silently killing every
+//     "watch this page for live availability changes" feature the frontend actually shipped — the
+//     symptom an e2e spec caught (a booked slot never disappeared from a second visitor's screen).
+//     Snapshot below still keeps the owner's *data* private (a real booking list, with visitor
+//     PII) — only the *connection* is now public, exactly matching what a plain GET
+//     /api/v1/book/{org}/{page}/availability already discloses to anyone regardless.
+//     Connect-rate-limited now, same as the two public routes below, for the same I5 reasoning
+//     (existsCheck's own DB round trip) — no longer exempt now that an anonymous caller is the
+//     expected, common case rather than an edge case.
 //   - GET /api/v1/stats/ws — fully public, no gate at all. roomKey "stats:global". Presence OFF —
 //     a global anonymous counter has no per-viewer identity worth counting, and StatsRoom.ts's
 //     own DO never tracked one either. Connect-rate-limited, same as polls above.
@@ -104,7 +117,7 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 	connectLimit := httpserver.PublicRateLimit(h.sqlDB, "rooms", "ws_connect", wsConnectLimit, wsConnectWindow, cfg.TrustProxy)
 
 	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
-	mux.HandleFunc("GET /api/v1/booking-pages/{pageId}/ws", bookingWSHandler(h, a, bookings))
+	mux.Handle("GET /api/v1/booking-pages/{pageId}/ws", connectLimit(bookingWSHandler(h, a, bookings)))
 	mux.Handle("GET /api/v1/stats/ws", connectLimit(statsWSHandler(h, stats)))
 }
 
@@ -148,38 +161,47 @@ func pollWSHandler(h *Hub, a httpserver.Auth, svc PollService) http.HandlerFunc 
 }
 
 // bookingWSHandler builds one booking WS connection's handler per request — same shape as
-// pollWSHandler, minus the cross-callback caching (AuthorizeManagePage and BookingSnapshot do
-// genuinely different queries, so there is nothing to share between them).
+// pollWSHandler: existence-only Authorize (PageExists, mirroring PollExists), a Snapshot that
+// runs its own fresh query after Subscribe (see pollWSHandler's own doc comment for why that
+// ordering matters).
+//
+// Snapshot's manager check is NOT what gates the connection (Authorize already let any caller,
+// session or none, through) — it only decides whether THIS caller gets the real, private
+// BookingSnapshot payload or nothing. Safe to leave "nothing" for everyone else: `useLivePage`'s
+// `onSnapshot` (web/src/lib/use-live-page.ts) never reads the snapshot's `data` at all, only that
+// a frame arrived, so the public page (this room's actual consumer — see Register's own doc
+// comment) never notices its snapshot carries no payload.
 func bookingWSHandler(h *Hub, a httpserver.Auth, svc BookingService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pageID := r.PathValue("pageId")
 
 		h.ServeWS(WSOptions{
 			Authorize: func(rq *http.Request) (string, error) {
-				sess, ok := a.FromContext(rq.Context())
-				if !ok {
-					return "", ErrUnauthorized
-				}
-				if sess.ActiveOrgID == "" {
-					return "", ErrForbidden
-				}
-				if err := svc.AuthorizeManagePage(rq.Context(), pageID, sess.ActiveOrgID, sess.UserID); err != nil {
+				exists, err := svc.PageExists(rq.Context(), pageID)
+				if err != nil {
 					return "", err
+				}
+				if !exists {
+					return "", ErrNotFound
 				}
 				return "booking:" + pageID, nil
 			},
 			Snapshot: func(ctx context.Context, _ string) (any, error) {
-				// Authorize has already run and succeeded by the time ServeWS calls Snapshot
-				// (ws.go), so FromContext succeeding here is not re-checked defensively — the
-				// same session that passed the gate above is still on ctx (sendSnapshotAndBackfill
-				// derives its ctx from the same request via context.WithCancel, which preserves
-				// context values).
-				sess, _ := a.FromContext(ctx)
+				sess, ok := a.FromContext(ctx)
+				if !ok || sess.ActiveOrgID == "" {
+					return nil, nil
+				}
+				if err := svc.AuthorizeManagePage(ctx, pageID, sess.ActiveOrgID, sess.UserID); err != nil {
+					// Signed in, but not a manager of this page — same as anonymous: no data,
+					// never an error (an error here would fail the whole connection, not just
+					// withhold the payload — svc.AuthorizeManagePage's own ErrForbidden/ErrNotFound
+					// are exactly the "not a manager" cases this deliberately swallows).
+					return nil, nil
+				}
 				return svc.BookingSnapshot(ctx, pageID, sess.ActiveOrgID)
 			},
-			// Presence OFF (M4) — see Register's own doc comment for why: the organiser dashboard
-			// this route serves has no presence UI to feed, unlike the poll room's public viewer
-			// count.
+			// Presence OFF (M4) — see Register's own doc comment for why: this route has no
+			// presence UI to feed, unlike the poll room's public viewer count.
 			Presence: false,
 		})(w, r)
 	}

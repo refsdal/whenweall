@@ -2,7 +2,8 @@ package rooms_test
 
 // Tests internal/rooms/endpoints.go's auth matrix: the poll WS route is public (anonymous,
 // guest-token, and signed-in callers may all connect) but 404s an unknown poll; the booking WS
-// route requires a session that manages the page (403 otherwise). fakePollService/
+// route is public in the same shape (404s an unknown page, connects anyone else) but withholds
+// its Snapshot's real data unless the caller's session manages the page. fakePollService/
 // fakeBookingService/fakeWSAuth below are small test doubles for rooms.PollService/
 // rooms.BookingService/httpserver.Auth — the same "narrow fake standing in for the real domain
 // service" pattern internal/polls/handlers_test.go's own fakeAuth already uses, kept local to this
@@ -49,12 +50,18 @@ func (f *fakePollService) PollSnapshot(_ context.Context, pollID string, _ rooms
 	return f.byID[pollID], nil
 }
 
-// fakeBookingService is a minimal rooms.BookingService: AuthorizeManagePage succeeds only for
-// managerUserID, matching AuthorizeManagePage's own contract of returning rooms.ErrForbidden for
-// anyone else (internal/bookings/ws.go).
+// fakeBookingService is a minimal rooms.BookingService: PageExists returns false only for
+// missingPageID (default "", so every real test page id — always non-empty — exists by default);
+// AuthorizeManagePage succeeds only for managerUserID, matching AuthorizeManagePage's own contract
+// of returning rooms.ErrForbidden for anyone else (internal/bookings/ws.go).
 type fakeBookingService struct {
+	missingPageID string
 	managerUserID string
 	snapshot      any
+}
+
+func (f *fakeBookingService) PageExists(_ context.Context, pageID string) (bool, error) {
+	return pageID != f.missingPageID, nil
 }
 
 func (f *fakeBookingService) AuthorizeManagePage(_ context.Context, _, _, userID string) error {
@@ -217,19 +224,54 @@ func TestPollWS_SignedInAndGuestTokenAlsoConnect(t *testing.T) {
 	_ = conn2.CloseNow()
 }
 
-func TestBookingWS_NonManagerIs403(t *testing.T) {
-	server, a, _, bookings := newTestMux(t)
+// TestBookingWS_AnonymousConnectsToPublicPage is the review-fix regression test (endpoints.go's
+// own doc comment on Register): the booking WS route's actual, sole consumer —
+// web/src/routes/book/$handle/$slug.tsx's useLivePage — is an anonymous visitor on the public
+// /book/{org}/{page} page, so an anonymous connect (no X-Test-Session at all) must succeed, not
+// 401. Its snapshot carries no data (useLivePage never reads it, only that a frame arrived), never
+// the real BookingSnapshot payload — that's the privacy half of this same fix: an anonymous
+// caller must never see it.
+func TestBookingWS_AnonymousConnectsToPublicPage(t *testing.T) {
+	server, _, _, bookings := newTestMux(t)
 	bookings.managerUserID = "manager-1"
-	bookings.snapshot = []map[string]any{}
+	bookings.snapshot = []map[string]any{{"id": "b1", "name": "Visitor One"}}
 
-	otherUser := a.login(&auth.Session{UserID: "someone-else", ActiveOrgID: "org-1"})
-	dialWSExpectStatus(t, server, "/api/v1/booking-pages/page-1/ws",
-		http.Header{"X-Test-Session": {otherUser}}, http.StatusForbidden)
+	conn := dialWSExpectSuccess(t, server, "/api/v1/booking-pages/page-1/ws", nil)
+	defer func() { _ = conn.CloseNow() }()
+
+	frame := readWSFrame(t, conn, 5*time.Second)
+	if frame["type"] != "snapshot" {
+		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+	if frame["data"] != nil {
+		t.Errorf("snapshot data = %v, want nil (an anonymous caller must never see the owner's BookingSnapshot payload)", frame["data"])
+	}
 }
 
-func TestBookingWS_NoSessionIs401(t *testing.T) {
-	server, _, _, _ := newTestMux(t)
-	dialWSExpectStatus(t, server, "/api/v1/booking-pages/page-1/ws", nil, http.StatusUnauthorized)
+// TestBookingWS_NonManagerConnectsWithNoSnapshotData mirrors the anonymous case above for a
+// signed-in caller who just isn't this page's manager: the connection still succeeds (this route
+// no longer gates on manager status at all — only on the page existing), but the snapshot is
+// still withheld, exactly as for an anonymous caller.
+func TestBookingWS_NonManagerConnectsWithNoSnapshotData(t *testing.T) {
+	server, a, _, bookings := newTestMux(t)
+	bookings.managerUserID = "manager-1"
+	bookings.snapshot = []map[string]any{{"id": "b1", "name": "Visitor One"}}
+
+	otherUser := a.login(&auth.Session{UserID: "someone-else", ActiveOrgID: "org-1"})
+	conn := dialWSExpectSuccess(t, server, "/api/v1/booking-pages/page-1/ws",
+		http.Header{"X-Test-Session": {otherUser}})
+	defer func() { _ = conn.CloseNow() }()
+
+	frame := readWSFrame(t, conn, 5*time.Second)
+	if frame["data"] != nil {
+		t.Errorf("snapshot data = %v, want nil (not this page's manager)", frame["data"])
+	}
+}
+
+func TestBookingWS_UnknownPageIs404(t *testing.T) {
+	server, _, _, bookings := newTestMux(t)
+	bookings.missingPageID = "does-not-exist"
+	dialWSExpectStatus(t, server, "/api/v1/booking-pages/does-not-exist/ws", nil, http.StatusNotFound)
 }
 
 func TestBookingWS_ManagerConnects(t *testing.T) {
@@ -245,6 +287,10 @@ func TestBookingWS_ManagerConnects(t *testing.T) {
 	frame := readWSFrame(t, conn, 5*time.Second)
 	if frame["type"] != "snapshot" {
 		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+	data, ok := frame["data"].([]any)
+	if !ok || len(data) == 0 {
+		t.Fatalf("snapshot data = %v, want the manager's real BookingSnapshot payload", frame["data"])
 	}
 }
 

@@ -355,6 +355,23 @@ func (s *Service) GetOwnedPage(ctx context.Context, pageID, orgID string) (*Page
 	return toPageView(page)
 }
 
+// PageExists reports whether pageID names a real, non-soft-deleted booking page — the booking WS
+// route's own Authorize gate (rooms.Register's BookingService seam), mirroring PollExists's
+// identical role for the poll WS route. A cheap existence-only check, deliberately unscoped by
+// org: this route is public (see internal/rooms/endpoints.go's own doc comment on why — the
+// public /book/{org}/{page} page, this room's only actual consumer today, is the one connecting,
+// with no session and so no org to scope by in the first place).
+func (s *Service) PageExists(ctx context.Context, pageID string) (bool, error) {
+	_, err := s.q.GetBookingPage(ctx, pageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // GetPublicPage ports getPublicPage: a lookup for `/book/<handle>/<slug>`. Returns (nil, nil) — not
 // an error — for an unknown handle, unknown slug, or a soft-deleted page, matching the TS source
 // returning null. A PAUSED page IS still returned (with its "paused" status) so the route can show

@@ -96,7 +96,9 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
   }
 
   // --- the finalized poll's calendar feed is downloadable ---
-  const ics = await request.get(`/p/${pollId}/calendar.ics`)
+  // Downloads live under the API surface, not the SPA route — web/src/api/polls.ts's
+  // `pollCalendarICSUrl` builds this same path, not `/p/{id}/calendar.ics`.
+  const ics = await request.get(`/api/v1/polls/${pollId}/calendar.ics`)
   expect(ics.status()).toBe(200)
   expect(ics.headers()['content-type']).toContain('text/calendar')
   expect(await ics.text()).toContain('BEGIN:VCALENDAR')

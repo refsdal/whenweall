@@ -182,13 +182,39 @@ func requireOwnerSession(w http.ResponseWriter, r *http.Request, a Auth) (*auth.
 
 // parseQueryTime parses r's param query parameter as an RFC3339 datetime, writing the standard
 // "invalid" envelope and returning ok == false on any parse failure (including an absent/blank
-// parameter). Shared by handlePublicAvailability's and handleListPageBookings's own ?from&to.
+// parameter). Used by handleListPageBookings's own ?from&to — web/src/routes/bookings/$id/index.tsx's
+// listPageBookings caller sends `Date.toISOString()` values, so this stays strict.
 func parseQueryTime(w http.ResponseWriter, r *http.Request, param string) (time.Time, bool) {
 	raw := r.URL.Query().Get(param)
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		httpserver.Err(w, http.StatusBadRequest, "invalid", param+" must be an RFC3339 datetime",
 			map[string]string{param: "must be an RFC3339 datetime"})
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// parseQueryDate parses r's param query parameter as a bare "YYYY-MM-DD" date (UTC midnight),
+// writing the standard "invalid" envelope and returning ok == false on any parse failure.
+//
+// Used only by handlePublicAvailability's own ?from&to — src/server/bookings/schemas.ts's old
+// availabilityQuerySchema validated these two with `z.iso.date()` (no time component) and built
+// UTC-midnight Dates from them (`new Date(`${data.from}T00:00:00Z`)`), and
+// web/src/routes/book/$handle/$slug.tsx's monthWindow still sends exactly that shape
+// (`date.toISOString().slice(0, 10)`) — never updated for a Go backend that used to require a
+// full RFC3339 datetime here instead, which made every real /book/{org}/{page} page load 400 on
+// its own availability fetch. UTC midnight is the right anchor to parse into, not just a
+// convenient one: Slots (availability.go) only ever reduces from/to to a local *date* string via
+// localDateStr, and monthWindow already pads its own window by a day either side specifically so
+// a UTC-midnight instant lands on the intended local date even when the page's own timezone is
+// hours off UTC.
+func parseQueryDate(w http.ResponseWriter, r *http.Request, param string) (time.Time, bool) {
+	raw := r.URL.Query().Get(param)
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		httpserver.Err(w, http.StatusBadRequest, "invalid", param+" must be a YYYY-MM-DD date",
+			map[string]string{param: "must be a YYYY-MM-DD date"})
 		return time.Time{}, false
 	}
 	return t, true
@@ -443,11 +469,11 @@ func (s *Service) handlePublicAvailability(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	from, ok := parseQueryTime(w, r, "from")
+	from, ok := parseQueryDate(w, r, "from")
 	if !ok {
 		return
 	}
-	to, ok := parseQueryTime(w, r, "to")
+	to, ok := parseQueryDate(w, r, "to")
 	if !ok {
 		return
 	}

@@ -33,6 +33,29 @@
         } catch (_) {}
       })()
     </script>
+    <!--
+      Sets `<html lang>` from the `whenweall_locale` cookie (Paraglide's own "cookie" strategy —
+      web/src/paraglide/runtime.js's `strategy` array) before first paint, the same way this file's
+      theme script resolves `localStorage` up front. TanStack Start used to render this
+      server-side, per request; there is no server render anymore (this is a static file Vite
+      serves as-is — see web/src/routes/__root.tsx's own doc comment on the move away from SSR),
+      so nothing else ever sets it — `LocaleSwitcher.tsx`'s `setLocale` writes the cookie and
+      reloads the document, but a plain reload only re-parses this same static HTML; without this
+      script `<html lang>` (and Paraglide's own `preferredLanguage`-strategy fallback, which reads
+      `navigator.language`, never this attribute) would stay stuck on whatever this file hardcodes
+      below, regardless of which locale the visitor actually picked.
+    -->
+    <script>
+      ;(function () {
+        try {
+          var m = document.cookie.match(/(?:^|; )whenweall_locale=([^;]+)/)
+          var l = m ? decodeURIComponent(m[1]) : ''
+          if (l === 'en' || l === 'nb') {
+            document.documentElement.lang = l
+          }
+        } catch (_) {}
+      })()
+    </script>
   </head>
   <body class="min-h-dvh antialiased">
     <div id="root"></div>

@@ -225,7 +225,10 @@ export async function getPublicAvailability(input: {
   return { page, slots }
 }
 
-export type BookResult = { bookingId: string; manageToken: string }
+/** handleBook's response shape (internal/bookings/handlers.go): `{booking, manageToken}`, per the
+ * plan's own route table (docs/superpowers/plans/2026-09-01-go-rewrite-05-bookings.md) — NOT the
+ * flat `{bookingId, manageToken}` the old TS route (`bookings.functions.ts`'s `book`) returned. */
+export type BookResult = { booking: BookingView; manageToken: string }
 
 /** The Go endpoint is mounted at `/api/v1/book/{org}/{page}/bookings` (org/page SLUGS, not an
  * internal page id) — `handle`/`slug` come straight off the `PublicPageView` the visitor is

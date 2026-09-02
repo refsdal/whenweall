@@ -30,6 +30,9 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
   const pollId = userWithSignup.pollId!
   const pollPath = `/p/${pollId}`
+  // The roster download lives under the API surface, not the SPA route — web/src/api/polls.ts's
+  // `pollRosterCSVUrl` builds this same path, not `/p/{id}/roster.csv`.
+  const rosterPath = `/api/v1/polls/${pollId}/roster.csv`
 
   // Context A: guest A, a fresh unauthenticated browser context.
   const contextA = await browser.newContext()
@@ -74,7 +77,7 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
 
   // --- the owner downloads the roster: both names, as CSV, with their own session cookies ---
   await signIn(page, userWithSignup)
-  const roster = await page.context().request.get(`${pollPath}/roster.csv`)
+  const roster = await page.context().request.get(rosterPath)
   expect(roster.status()).toBe(200)
   expect(roster.headers()['content-type']).toContain('text/csv')
   const csv = await roster.text()
@@ -82,6 +85,6 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   expect(csv).toContain('Guest B')
 
   // --- anonymous access to the same roster is rejected (401: no session at all) ---
-  const anonymousRoster = await request.get(`${pollPath}/roster.csv`)
+  const anonymousRoster = await request.get(rosterPath)
   expect(anonymousRoster.status()).toBe(401)
 })

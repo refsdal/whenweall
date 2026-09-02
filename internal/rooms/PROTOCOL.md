@@ -12,33 +12,43 @@ the code itself is what's wrong.
 | Route | Auth | Room key | Presence |
 | --- | --- | --- | --- |
 | `GET /api/v1/polls/{id}/ws` | public | `poll:{id}` | on |
-| `GET /api/v1/booking-pages/{pageId}/ws` | session + must manage the page | `booking:{pageId}` | off |
+| `GET /api/v1/booking-pages/{pageId}/ws` | public (Snapshot data withheld unless the caller manages the page) | `booking:{pageId}` | off |
 | `GET /api/v1/stats/ws` | public, no gate at all | `stats:global` | off |
 
 The booking route's path is `/api/v1/booking-pages/{pageId}/ws` (renamed from
 `/api/v1/bookings/{pageId}/ws` to match the REST surface's own `/api/v1/booking-pages/*` naming —
-see the M5 hardening pass). Presence is off for booking (M4: the booking dashboard has no
-presence UI to feed) and for stats (a global anonymous counter has no per-viewer identity worth
-counting) — poll is the only route that broadcasts a live viewer count.
+see the M5 hardening pass). Presence is off for booking (M4: this route has no presence UI to
+feed) and for stats (a global anonymous counter has no per-viewer identity worth counting) — poll
+is the only route that broadcasts a live viewer count.
 
 - **polls**: anonymous, a guest edit token, or a signed-in session may all connect. A missing or
   soft-deleted poll id is a 404 (`not_found`), rejected during the WS handshake itself (before any
   upgrade is attempted) via the standard JSON error envelope.
-- **booking-pages**: 401 (`unauthenticated`) with no session at all; 403 (`forbidden`) for a
-  session that doesn't manage `pageId` (the same manager-only gate `GET
-  /api/v1/booking-pages/{id}/bookings` already uses).
+- **booking-pages**: same connect gate as polls — anonymous, guest, or signed-in, all connect; a
+  missing or soft-deleted page id is a 404 (`not_found`), same as polls. Originally gated
+  session-required + manager-only, on the theory that this route only served the organiser's own
+  dashboard — it doesn't: its one actual caller,
+  `web/src/routes/book/$handle/$slug.tsx`'s `useLivePage`, is the PUBLIC `/book/{org}/{page}` page,
+  run by an anonymous visitor (go-rewrite-08 T7's review fix — the old gate meant that visitor's
+  own socket 401'd immediately, silently killing the "watch this page for live availability
+  changes" feature the frontend actually shipped). The *connection* is public; the *data* isn't —
+  Snapshot only returns the real (PII-bearing) `BookingSnapshot` payload to a caller whose session
+  manages `pageId` (the same check `GET /api/v1/booking-pages/{id}/bookings` uses); every other
+  caller gets `"data":null`, which the frontend already treats identically to a real payload (see
+  `use-live-page.ts`'s own doc comment — it never reads `data` at all, only that a frame arrived).
 - **stats**: no gate. Every caller — signed in, guest, or fully anonymous — connects.
 
-Every route's connect attempt is rejected (401/403/404, per the table above) with the SAME
-handshake-time JSON error envelope `internal/httpserver.Err` writes for a REST call — the WS
-upgrade is only attempted once Authorize succeeds.
+Every route's connect attempt is rejected (404, per the table above — no route in this list can
+ever 401/403 a connect anymore) with the SAME handshake-time JSON error envelope
+`internal/httpserver.Err` writes for a REST call — the WS upgrade is only attempted once Authorize
+succeeds.
 
-The poll and stats routes additionally sit behind a 30-connects-per-minute-per-IP budget
+All three routes now sit behind the same 30-connects-per-minute-per-IP budget
 (`internal/httpserver.PublicRateLimit`); exceeding it is a `429` with `code: "rate_limited"` and a
-`Retry-After` header, same as any other rate-limited REST route in this codebase. The
-booking-pages route does NOT get this same limiter — it is already gated behind a signed-in
-session that must manage the target page, a meaningfully higher bar than an anonymous per-IP
-budget adds on top of it (a documented decision, not an oversight).
+`Retry-After` header, same as any other rate-limited REST route in this codebase. booking-pages
+was originally exempt (reasoning: gated behind a signed-in manager, a meaningfully higher bar than
+an anonymous per-IP budget) — that reasoning no longer holds now that an anonymous caller is the
+expected, common case for this route rather than an edge case.
 
 ## Query parameters
 

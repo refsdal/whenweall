@@ -10,7 +10,6 @@ import {
 test('a visitor books the first open slot, the owner sees it, and cancelling frees it live', async ({
   page,
   browser,
-  request,
   userWithBookingPage,
 }) => {
   test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
@@ -74,12 +73,10 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     const bookingId = match![1]!
     const manageToken = decodeURIComponent(match![2]!)
 
-    // --- the .ics for the fresh booking is a real calendar file ---
-    const ics = await request.get(
-      `/booking/${bookingId}/calendar.ics?t=${encodeURIComponent(manageToken)}`,
-    )
-    expect(ics.status()).toBe(200)
-    expect(ics.headers()['content-type']).toContain('text/calendar')
+    // No `.ics` download for a single booking in this rewrite — internal/bookings/handlers.go has
+    // no calendar.ics route at all (unlike internal/polls, which does); see
+    // ManageBooking.tsx's own comment. A deliberate, already-flagged scope reduction from an
+    // earlier task, not something this suite still exercises.
 
     // --- the watcher sees the booked slot chip disappear live, within 10s, without a reload ---
     await expect(slotByLabel(watcherPage)).toHaveCount(0, { timeout: 10_000 })

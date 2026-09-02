@@ -51,10 +51,11 @@ type SeedBookings interface {
 	CreateSampleBookingPage(ctx context.Context, orgID, userID string) (pageID, handle, slug string, err error)
 }
 
-// seedDefaultPassword mirrors the old TS route's own default ("correct horse battery staple"),
-// except stronger: Limen's credential-password plugin requires at least one uppercase letter and
-// one digit by default (buildLimenConfig takes no ConfigOption overriding that), which the TS
-// phrase — and Better-Auth's own, laxer default policy — never had to satisfy.
+// seedDefaultPassword mirrors the old TS route's own default ("correct horse battery staple") in
+// spirit, not literally: buildLimenConfig sets the credential-password plugin's policy to
+// length-only (>= 12, no character-class requirement — see its own doc comment), matching
+// Better-Auth's laxer default the old route relied on, so this could be any string long enough;
+// it stays a mixed-case-plus-digit phrase for realism, not because the policy demands it.
 const seedDefaultPassword = "Str0ngPassw0rd!"
 
 // seedRequest mirrors seed.ts's SeedBody. Role only ever recognizes "staff" (mirroring the TS

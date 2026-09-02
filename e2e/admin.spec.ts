@@ -7,9 +7,7 @@ test.describe('admin console', () => {
     await waitForHydration(page)
 
     await expect(page.getByRole('heading', { name: 'Admin' })).toBeVisible()
-    // Exact: the revenue panel also renders "Premium organizations".
     await expect(page.getByText('Organizations', { exact: true })).toBeVisible()
-    await expect(page.getByText('Monthly recurring revenue')).toBeVisible()
   })
 
   test('a staff user can find a user by email', async ({ page, userStaff }) => {

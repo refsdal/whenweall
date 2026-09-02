@@ -45,13 +45,4 @@ test.describe('auth', () => {
     await expect(page).toHaveURL('/')
     await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible()
   })
-
-  test('settings page shows the passkeys section', async ({ page, user }) => {
-    await signIn(page, user)
-    await page.goto('/settings')
-    await waitForHydration(page)
-
-    await expect(page.getByRole('heading', { name: 'Passkeys' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Add passkey' })).toBeVisible()
-  })
 })

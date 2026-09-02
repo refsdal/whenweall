@@ -100,13 +100,13 @@ export function PublicBookingPage({
           },
           { captchaToken: values.turnstileToken },
         )
-        saveBookingToken(result.bookingId, result.manageToken)
+        saveBookingToken(result.booking.id, result.manageToken)
         celebrate('booking')
         const endAt = new Date(
           new Date(values.startAt).getTime() + page.slotDurationMin * 60_000,
         ).toISOString()
         setConfirmed({
-          bookingId: result.bookingId,
+          bookingId: result.booking.id,
           manageToken: result.manageToken,
           slot: { start: values.startAt, end: endAt },
           email: values.email,

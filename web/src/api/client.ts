@@ -113,13 +113,19 @@ async function parseErrorBody(response: Response): Promise<ApiError> {
 
 /**
  * Calls `path` on the Go backend and returns the decoded JSON body (`T`), or throws `ApiError`.
- * `credentials: 'same-origin'` carries the Limen session cookie; every non-GET/HEAD body is sent
- * as `Content-Type: application/json` (Limen's own CSRF check requires exactly that on a mutating
- * request — see `internal/auth/routes.txt`).
+ * `credentials: 'same-origin'` carries the Limen session cookie; every non-GET/HEAD/OPTIONS
+ * request carries `Content-Type: application/json` — Limen's own CSRF middleware
+ * (`middlewareCSRFProtection`, the pinned Limen source) requires exactly that (or an
+ * `Authorization`/`X-Requested-With` header) on any mutating request or it 403s "Forbidden",
+ * *even with no body at all* — a bodyless call like signOut()'s `POST /api/v1/auth/signout`
+ * needs the header just as much as one that does carry a body, so this is keyed on the method,
+ * not on whether `body` happens to be present.
  */
 export async function api<T>(method: string, path: string, body?: unknown, opts?: ApiOpts): Promise<T> {
   const headers: Record<string, string> = {}
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    headers['Content-Type'] = 'application/json'
+  }
   if (opts?.guestToken) headers['X-Guest-Token'] = opts.guestToken
   if (opts?.captchaToken) headers['X-Captcha-Token'] = opts.captchaToken
 

@@ -258,6 +258,10 @@ func setupHandlerPage(t *testing.T, cfg *config.Config) handlerPage {
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
+// dateOnly formats t as the bare "YYYY-MM-DD" parseQueryDate expects — handlePublicAvailability's
+// own ?from&to shape, distinct from every other route's own RFC3339 ?from&to (rfc3339, above).
+func dateOnly(t time.Time) string { return t.UTC().Format("2006-01-02") }
+
 // seedUser inserts a standalone user with no organization membership yet — mirrors
 // internal/polls/service_test.go's own helper of the same name.
 func seedUser(t *testing.T, d *sql.DB) string {
@@ -644,8 +648,8 @@ func TestHandlerGetPublicPage(t *testing.T) {
 
 func TestHandlerPublicAvailability(t *testing.T) {
 	p := setupHandlerPage(t, testConfig(t))
-	from := rfc3339(time.Now().UTC())
-	to := rfc3339(time.Now().UTC().Add(72 * time.Hour))
+	from := dateOnly(time.Now().UTC())
+	to := dateOnly(time.Now().UTC().Add(72 * time.Hour))
 
 	rec := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+from+"&to="+to, nil, nil)
 	if rec.Code != http.StatusOK {
@@ -678,8 +682,8 @@ func TestHandlerPublicAvailability(t *testing.T) {
 	// I3: publicAvailabilityQuerySchema's own window cap (schemas.ts, LIMITS.publicWindowDays).
 	t.Run("I3: 400 invalid for a window wider than 62 days", func(t *testing.T) {
 		now := time.Now().UTC()
-		wideTo := rfc3339(now.Add(63 * 24 * time.Hour))
-		rec := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+rfc3339(now)+"&to="+wideTo, nil, nil)
+		wideTo := dateOnly(now.Add(63 * 24 * time.Hour))
+		rec := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+dateOnly(now)+"&to="+wideTo, nil, nil)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
 		}
@@ -688,8 +692,8 @@ func TestHandlerPublicAvailability(t *testing.T) {
 		}
 
 		// Exactly 62 days is still accepted.
-		exactTo := rfc3339(now.Add(62 * 24 * time.Hour))
-		rec2 := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+rfc3339(now)+"&to="+exactTo, nil, nil)
+		exactTo := dateOnly(now.Add(62 * 24 * time.Hour))
+		rec2 := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+dateOnly(now)+"&to="+exactTo, nil, nil)
 		if rec2.Code != http.StatusOK {
 			t.Fatalf("62-day window: status = %d, want 200; body=%s", rec2.Code, rec2.Body)
 		}
@@ -697,7 +701,7 @@ func TestHandlerPublicAvailability(t *testing.T) {
 
 	t.Run("I3: 400 invalid when to is before from", func(t *testing.T) {
 		now := time.Now().UTC()
-		rec := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+rfc3339(now)+"&to="+rfc3339(now.Add(-time.Hour)), nil, nil)
+		rec := doRequest(t, p.h, "GET", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/availability?from="+dateOnly(now)+"&to="+dateOnly(now.Add(-48*time.Hour)), nil, nil)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
 		}

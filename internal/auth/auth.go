@@ -128,6 +128,17 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 			credentialpassword.WithSendPasswordResetEmail(func(email, token string) {
 				s.enqueueTokenMail(email, "reset_password", "/reset-password", token)
 			}),
+			// Matches this app's own password policy, not the plugin's defaults (8 chars,
+			// uppercase+digit required): web/src/routes/signup.tsx's client-side check and its
+			// "Use at least 12 characters" hint (auth_password_hint) only ever enforce length,
+			// mirroring the old Better-Auth config this replaced (src/server/auth/auth.ts's
+			// `emailAndPassword` had no character-class policy of its own either). Leaving the
+			// plugin's stricter defaults in place would silently reject any signup the frontend
+			// itself told the user was fine — a real "I typed a strong 20-character passphrase
+			// and it was rejected" bug, not just an e2e inconvenience.
+			credentialpassword.WithPasswordMinLength(12),
+			credentialpassword.WithPasswordRequireUppercase(false),
+			credentialpassword.WithPasswordRequireNumbers(false),
 		),
 		organization.New(
 			organization.WithSendInvitationMail(func(ctx context.Context, d *organization.SendInvitationMailData) {

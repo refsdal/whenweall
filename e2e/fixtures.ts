@@ -18,7 +18,6 @@ async function seed(
     withPoll?: boolean
     withSignup?: boolean
     withBookingPage?: boolean
-    plan?: 'premium'
     role?: 'staff'
   } = {},
 ): Promise<SeededUser> {
@@ -28,7 +27,6 @@ async function seed(
       withPoll: opts.withPoll ?? false,
       withSignup: opts.withSignup ?? false,
       withBookingPage: opts.withBookingPage ?? false,
-      ...(opts.plan ? { plan: opts.plan } : {}),
       ...(opts.role ? { role: opts.role } : {}),
     },
   })
@@ -53,10 +51,6 @@ type Fixtures = {
    * `src/routes/api/test/seed.ts`.
    */
   userWithBookingPage: SeededUser
-  /** A verified user who owns the org, seeded with an active premium subscription (Phase 2 §4) —
-   * for e2e coverage of the billing UI's Premium branch and the seat-gated invite flow, without
-   * going through real Stripe. */
-  userPremium: SeededUser
   /** A verified user carrying the platform staff role, for the admin console. */
   userStaff: SeededUser
 }
@@ -84,9 +78,6 @@ export const test = base.extend<Fixtures>({
   },
   userStaff: async ({ request }, provide) => {
     await provide(await seed(request, { role: 'staff' }))
-  },
-  userPremium: async ({ request }, provide) => {
-    await provide(await seed(request, { plan: 'premium' }))
   },
 })
 
