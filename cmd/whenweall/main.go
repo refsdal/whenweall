@@ -24,6 +24,7 @@ import (
 	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/mailer"
 	"github.com/refsdal/whenweall/internal/polls"
+	"github.com/refsdal/whenweall/internal/rooms"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -96,10 +97,24 @@ func serve() int {
 	m.RegisterHandler(worker)
 	jobs.RegisterHousekeeping(worker, sqlDB)
 
+	// hub is this replica's realtime fan-out (internal/rooms, plan 6): it owns its own dedicated
+	// LISTEN session (Run) independent of sqlDB's pooled connections, so it's started here,
+	// before anything below registers a WS route against it. statsSvc is the landing-page
+	// counters room (also plan 6) — wired into pollsSvc via SetStats before pollsSvc's own
+	// mutating methods (Create/Finalize/AddParticipant/...) ever run, so no request can reach a
+	// half-wired Service.
+	hub := rooms.NewHub(cfg.DatabaseURL, sqlDB, slog.Default())
+	// Run always returns ctx.Err() (never nil, per its own doc comment) — on an ordinary
+	// SIGINT/SIGTERM shutdown that's just context.Canceled, not a failure worth logging; Run's
+	// own internal logging already covers every real connection/LISTEN problem along the way.
+	go func() { _ = hub.Run(ctx) }()
+	statsSvc := rooms.NewStatsService(sqlDB, slog.Default())
+
 	// pollsSvc owns the poll/sign-up-sheet domain: its HTTP surface (Register, below) and its
 	// three scheduled job kinds (poll.deadline/poll.digest/mail:poll — RegisterJobs) share this
 	// one instance, bound to the same *sql.DB the rest of the process uses.
 	pollsSvc := polls.NewService(sqlDB)
+	pollsSvc.SetStats(statsSvc)
 	pollsSvc.RegisterJobs(worker, m)
 
 	// bookingsSvc owns the booking-page domain: its HTTP surface (Register, below) and its own
@@ -128,6 +143,7 @@ func serve() int {
 	srv.RegisterAPI(func(mux *http.ServeMux) {
 		pollsSvc.Register(mux, authSvc, cfg)
 		bookingsSvc.Register(mux, authSvc, cfg)
+		rooms.Register(mux, hub, authSvc, pollsSvc, bookingsSvc, statsSvc)
 	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)

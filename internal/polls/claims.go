@@ -303,6 +303,13 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "vote"}); err != nil {
 		return nil, err
 	}
+	// Task 3 (plan 6): claimSlot's own recordResponses(['yes']) call (participants.functions.ts)
+	// — "a sign-up claim is stored as a `yes` vote... so it counts as one" (that source's own
+	// comment), reached only on this function's Changed==true path (a re-claim of an
+	// already-held slot returns earlier above, before ever reaching this point).
+	if err := s.incrementStat(ctx, tx, rooms.StatsResponsesYes); err != nil {
+		return nil, err
+	}
 	// Ports claimSlot's call into sendClaimConfirmation (participants.functions.ts) — the mail:poll
 	// handler re-reads the participant's current claims at send time and no-ops if there's nothing
 	// to send (no email on file, no claims left).

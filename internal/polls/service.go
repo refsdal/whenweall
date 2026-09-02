@@ -32,6 +32,12 @@ type Viewer struct {
 type Service struct {
 	db *sql.DB
 	q  *queries.Queries
+
+	// stats is Task 3's (plan 6) landing-page counters wiring — nil until SetStats is called
+	// (main.go's serve(), after both are constructed). A nil stats is a deliberate no-op, not an
+	// error: tests that build a bare Service via NewService and never call SetStats get every
+	// other behavior unchanged, with counting simply turned off.
+	stats *rooms.StatsService
 }
 
 // NewService builds a Service bound to sqlDB. Read-only methods use the Service's own Queries;
@@ -40,6 +46,46 @@ type Service struct {
 // announces — see internal/rooms's package doc).
 func NewService(sqlDB *sql.DB) *Service {
 	return &Service{db: sqlDB, q: queries.New(sqlDB)}
+}
+
+// SetStats wires this Service's landing-page counters — see the stats field's own doc comment.
+// Kept as a post-construction setter (mirroring bookings.Service.SetGoogleSync's identical shape)
+// rather than a NewService parameter, so every existing NewService call site — most of them in
+// tests that have no use for stats counting at all — stays unchanged.
+func (s *Service) SetStats(stats *rooms.StatsService) {
+	s.stats = stats
+}
+
+// incrementStat is every Create/Finalize/Duplicate call site's one-line guard: a no-op when
+// SetStats was never called (see the stats field's doc comment), otherwise Increment inside the
+// SAME transaction as the domain write it counts (Task 3's brief: "same tx as the domain write").
+func (s *Service) incrementStat(ctx context.Context, tx db.DBTX, field string) error {
+	if s.stats == nil {
+		return nil
+	}
+	return s.stats.Increment(ctx, tx, field)
+}
+
+// incrementResponseStats is AddParticipant's and UpdateParticipant's shared call site: one
+// Increment per answer in answers, ported from stats-client.ts's recordResponses(Object.
+// values(data.answers)) — every answer counts, including on an edit (participants.functions.ts's
+// updateParticipant comment: "an edit is a fresh submission — see the spec's §1 on why the totals
+// do not net out"), so this is called unconditionally by both, never gated on whether any vote
+// actually changed. An answer value outside "yes"/"ifneedbe"/"no" (StatsFieldForAnswer's ok ==
+// false) is silently skipped rather than erroring the whole write — validateAnswersTx has already
+// rejected any such value by the time either caller reaches here, so this is defense in depth, not
+// a reachable path.
+func (s *Service) incrementResponseStats(ctx context.Context, tx db.DBTX, answers map[string]string) error {
+	for _, answer := range answers {
+		field, ok := rooms.StatsFieldForAnswer(answer)
+		if !ok {
+			continue
+		}
+		if err := s.incrementStat(ctx, tx, field); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const pollFinalizedStatus = "finalized"
@@ -227,6 +273,11 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreatePol
 
 	view, err := s.buildView(ctx, q, poll, userID)
 	if err != nil {
+		return nil, err
+	}
+	// Task 3 (plan 6): createPoll's own recordPollCreated call (polls.functions.ts) — see the
+	// stats field's doc comment for why this is a no-op absent SetStats.
+	if err := s.incrementStat(ctx, tx, rooms.StatsPollsCreated); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -622,6 +673,13 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		}
 	}
 
+	// Task 3 (plan 6): finalizePoll's own recordPollFinalized call (polls.functions.ts) — reached
+	// only on a genuine not-decided -> decided transition (the already-finalized guard above
+	// returns ErrConflict before this point), matching that source's own comment.
+	if err := s.incrementStat(ctx, tx, rooms.StatsPollsFinalized); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -741,6 +799,11 @@ func (s *Service) Duplicate(ctx context.Context, pollID, orgID, userID string) (
 
 	view, err := s.buildView(ctx, q, copyPoll, userID)
 	if err != nil {
+		return nil, err
+	}
+	// Task 3 (plan 6): duplicatePoll's own recordPollCreated call (polls.functions.ts) — "a
+	// duplicate is a new poll from the counter's point of view" (that source's own comment).
+	if err := s.incrementStat(ctx, tx, rooms.StatsPollsCreated); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

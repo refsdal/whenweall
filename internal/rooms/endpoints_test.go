@@ -1,0 +1,246 @@
+package rooms_test
+
+// Tests internal/rooms/endpoints.go's auth matrix: the poll WS route is public (anonymous,
+// guest-token, and signed-in callers may all connect) but 404s an unknown poll; the booking WS
+// route requires a session that manages the page (403 otherwise). fakePollService/
+// fakeBookingService/fakeWSAuth below are small test doubles for rooms.PollService/
+// rooms.BookingService/httpserver.Auth — the same "narrow fake standing in for the real domain
+// service" pattern internal/polls/handlers_test.go's own fakeAuth already uses, kept local to this
+// file since this package's real callers (internal/polls, internal/bookings) can't be imported
+// here without recreating the very import cycle endpoints.go's own doc comment explains.
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/refsdal/whenweall/internal/auth"
+	"github.com/refsdal/whenweall/internal/rooms"
+	"github.com/refsdal/whenweall/internal/testdb"
+)
+
+// fakePollService is a minimal rooms.PollService: PollSnapshot returns whatever byID holds for
+// pollID, or (nil, nil) for an unknown id — mirroring polls.Service.PollSnapshot's own
+// missing/soft-deleted contract (internal/polls/ws.go) exactly, which is what lets
+// pollWSHandler's nil-check turn "unknown poll" into a 404 with no special-casing here.
+type fakePollService struct {
+	byID map[string]any
+}
+
+func (f *fakePollService) PollSnapshot(_ context.Context, pollID string, _ rooms.PollViewer) (any, error) {
+	return f.byID[pollID], nil
+}
+
+// fakeBookingService is a minimal rooms.BookingService: AuthorizeManagePage succeeds only for
+// managerUserID, matching AuthorizeManagePage's own contract of returning rooms.ErrForbidden for
+// anyone else (internal/bookings/ws.go).
+type fakeBookingService struct {
+	managerUserID string
+	snapshot      any
+}
+
+func (f *fakeBookingService) AuthorizeManagePage(_ context.Context, _, _, userID string) error {
+	if userID != f.managerUserID {
+		return rooms.ErrForbidden
+	}
+	return nil
+}
+
+func (f *fakeBookingService) BookingSnapshot(_ context.Context, _, _ string) (any, error) {
+	return f.snapshot, nil
+}
+
+// fakeWSAuth implements httpserver.Auth without touching Limen — the same role
+// internal/polls/handlers_test.go's own fakeAuth plays for that package's handler tests. Sessions
+// are keyed by an X-Test-Session header value (this harness's stand-in for a real session
+// cookie); guest tokens are a trivially invertible pair, since this file never re-verifies
+// MintGuestToken/VerifyGuestToken's own cryptography (internal/auth/guest_test.go already does).
+type fakeWSAuth struct {
+	sessions map[string]*auth.Session
+}
+
+func newFakeWSAuth() *fakeWSAuth {
+	return &fakeWSAuth{sessions: map[string]*auth.Session{}}
+}
+
+func (f *fakeWSAuth) login(sess *auth.Session) string {
+	f.sessions[sess.UserID] = sess
+	return sess.UserID
+}
+
+type fakeWSSessionKey struct{}
+
+// middleware resolves X-Test-Session into context for every request — mirrors auth.Service.
+// Middleware wrapping the whole mux in production (httpserver.New), which is what lets ws.go's
+// Authorize/Snapshot closures find a session via a.FromContext at all.
+func (f *fakeWSAuth) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id := r.Header.Get("X-Test-Session"); id != "" {
+			if sess, ok := f.sessions[id]; ok {
+				r = r.WithContext(context.WithValue(r.Context(), fakeWSSessionKey{}, sess))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (f *fakeWSAuth) RequireSession(next http.HandlerFunc) http.HandlerFunc { return next }
+
+func (f *fakeWSAuth) FromContext(ctx context.Context) (*auth.Session, bool) {
+	sess, ok := ctx.Value(fakeWSSessionKey{}).(*auth.Session)
+	return sess, ok
+}
+
+func (f *fakeWSAuth) VerifyGuestToken(token string) (string, bool) {
+	const prefix = "guest-token-for-"
+	if len(token) <= len(prefix) || token[:len(prefix)] != prefix {
+		return "", false
+	}
+	return token[len(prefix):], true
+}
+
+func (f *fakeWSAuth) MintGuestToken(participantID string) string {
+	return "guest-token-for-" + participantID
+}
+
+// dialWSExpectSuccess dials path, failing the test if the handshake itself doesn't succeed.
+func dialWSExpectSuccess(t *testing.T, server *httptest.Server, path string, header http.Header) *websocket.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, resp, err := websocket.Dial(ctx, server.URL+path, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("dial %s: %v (status %d)", path, err, status)
+	}
+	return conn
+}
+
+// dialWSExpectStatus dials path, failing the test unless the handshake is rejected with exactly
+// wantStatus — the same "resp is populated even on a failed dial" assertion
+// TestServeWS_AuthorizeErrorRejectsBeforeUpgrade already established for ws_test.go.
+func dialWSExpectStatus(t *testing.T, server *httptest.Server, path string, header http.Header, wantStatus int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, resp, err := websocket.Dial(ctx, server.URL+path, &websocket.DialOptions{HTTPHeader: header})
+	if err == nil {
+		_ = conn.CloseNow()
+		t.Fatalf("dial %s: expected the handshake to fail, it succeeded", path)
+	}
+	if resp == nil {
+		t.Fatalf("dial %s: expected an HTTP response even though the dial failed", path)
+	}
+	if resp.StatusCode != wantStatus {
+		t.Errorf("dial %s: status = %d, want %d", path, resp.StatusCode, wantStatus)
+	}
+}
+
+// newTestMux builds a fresh Hub against a testdb clone, mounts rooms.Register on a ServeMux
+// wrapped in auth's session-resolving middleware (mirroring how httpserver.New wires the real
+// auth.Service.Middleware around the whole mux in production), and returns the running
+// httptest.Server plus every dependency a test might need to configure.
+func newTestMux(t *testing.T) (server *httptest.Server, a *fakeWSAuth, polls *fakePollService, bookings *fakeBookingService) {
+	t.Helper()
+	url, sqlDB := testdb.URL(t)
+	hub := startHub(t, url, sqlDB)
+
+	a = newFakeWSAuth()
+	polls = &fakePollService{byID: map[string]any{}}
+	bookings = &fakeBookingService{}
+	stats := rooms.NewStatsService(sqlDB, nil)
+
+	mux := http.NewServeMux()
+	rooms.Register(mux, hub, a, polls, bookings, stats)
+
+	server = httptest.NewServer(a.middleware(mux))
+	t.Cleanup(server.Close)
+	return server, a, polls, bookings
+}
+
+func TestPollWS_AnonymousConnectsToPublicPoll(t *testing.T) {
+	server, _, polls, _ := newTestMux(t)
+	polls.byID["p1"] = map[string]any{"id": "p1", "title": "Q1 planning"}
+
+	conn := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws", nil)
+	defer func() { _ = conn.CloseNow() }()
+
+	frame := readWSFrame(t, conn, 5*time.Second)
+	if frame["type"] != "snapshot" {
+		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+	data, ok := frame["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("frame data = %v, want an object", frame["data"])
+	}
+	if data["id"] != "p1" {
+		t.Errorf("snapshot data id = %v, want p1", data["id"])
+	}
+}
+
+func TestPollWS_UnknownPollIs404(t *testing.T) {
+	server, _, _, _ := newTestMux(t)
+	dialWSExpectStatus(t, server, "/api/v1/polls/does-not-exist/ws", nil, http.StatusNotFound)
+}
+
+func TestPollWS_SignedInAndGuestTokenAlsoConnect(t *testing.T) {
+	server, a, polls, _ := newTestMux(t)
+	polls.byID["p1"] = map[string]any{"id": "p1"}
+
+	userID := a.login(&auth.Session{UserID: "u1"})
+	conn := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws", http.Header{"X-Test-Session": {userID}})
+	_ = conn.CloseNow()
+
+	guestHeader := http.Header{"X-Guest-Token": {"guest-token-for-participant-1"}}
+	conn2 := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws", guestHeader)
+	_ = conn2.CloseNow()
+}
+
+func TestBookingWS_NonManagerIs403(t *testing.T) {
+	server, a, _, bookings := newTestMux(t)
+	bookings.managerUserID = "manager-1"
+	bookings.snapshot = []map[string]any{}
+
+	otherUser := a.login(&auth.Session{UserID: "someone-else", ActiveOrgID: "org-1"})
+	dialWSExpectStatus(t, server, "/api/v1/bookings/page-1/ws",
+		http.Header{"X-Test-Session": {otherUser}}, http.StatusForbidden)
+}
+
+func TestBookingWS_NoSessionIs401(t *testing.T) {
+	server, _, _, _ := newTestMux(t)
+	dialWSExpectStatus(t, server, "/api/v1/bookings/page-1/ws", nil, http.StatusUnauthorized)
+}
+
+func TestBookingWS_ManagerConnects(t *testing.T) {
+	server, a, _, bookings := newTestMux(t)
+	bookings.managerUserID = "manager-1"
+	bookings.snapshot = []map[string]any{{"id": "b1"}}
+
+	managerID := a.login(&auth.Session{UserID: "manager-1", ActiveOrgID: "org-1"})
+	conn := dialWSExpectSuccess(t, server, "/api/v1/bookings/page-1/ws",
+		http.Header{"X-Test-Session": {managerID}})
+	defer func() { _ = conn.CloseNow() }()
+
+	frame := readWSFrame(t, conn, 5*time.Second)
+	if frame["type"] != "snapshot" {
+		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+}
+
+func TestStatsWS_PublicNoPresence(t *testing.T) {
+	server, _, _, _ := newTestMux(t)
+	conn := dialWSExpectSuccess(t, server, "/api/v1/stats/ws", nil)
+	defer func() { _ = conn.CloseNow() }()
+
+	frame := readWSFrame(t, conn, 5*time.Second)
+	if frame["type"] != "snapshot" {
+		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+}

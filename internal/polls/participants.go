@@ -267,6 +267,11 @@ func (s *Service) AddParticipant(ctx context.Context, pollID string, in Particip
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "participant"}); err != nil {
 		return nil, err
 	}
+	// Task 3 (plan 6): addParticipant's own recordResponses(Object.values(data.answers)) call
+	// (participants.functions.ts).
+	if err := s.incrementResponseStats(ctx, tx, in.Answers); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -325,6 +330,12 @@ func (s *Service) UpdateParticipant(ctx context.Context, pollID, participantID s
 	}
 
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "vote"}); err != nil {
+		return err
+	}
+	// Task 3 (plan 6): updateParticipant's own recordResponses(Object.values(data.answers)) call
+	// (participants.functions.ts) — "an edit is a fresh submission", counted every time, not
+	// netted against the participant's previous answers.
+	if err := s.incrementResponseStats(ctx, tx, in.Answers); err != nil {
 		return err
 	}
 	return tx.Commit()
