@@ -327,13 +327,63 @@ func TestClaimEnqueuesClaimConfirmationMail(t *testing.T) {
 		}
 	}
 
-	// Re-claiming the same slot (a no-op vote-wise) still resends the confirmation — ported from
-	// claimSlot's own unconditional call.
+	// Re-claiming the same slot is a no-op (Changed: false) and must NOT resend the confirmation —
+	// ported from claimSlot's own `if (result.changed) { ... sendClaimConfirmation ... }` gate
+	// (participants.functions.ts): only the changed branch calls it at all.
 	if _, err := s.Claim(ctx, created.ID, slot.ID, polls.ClaimInput{ParticipantID: result.ParticipantID}, polls.Viewer{GuestParticipantID: result.ParticipantID}); err != nil {
 		t.Fatalf("re-Claim: %v", err)
 	}
-	if n := len(filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "claim_confirmation")); n != 2 {
-		t.Errorf("claim_confirmation jobs after re-claim = %d, want 2", n)
+	if n := len(filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "claim_confirmation")); n != 1 {
+		t.Errorf("claim_confirmation jobs after a no-op re-claim = %d, want 1 (unchanged)", n)
+	}
+}
+
+// TestUnclaimEnqueuesClaimConfirmationMail ports unclaimSlot's unconditional call into
+// sendClaimConfirmation: unlike claimSlot, there is no `changed` gate on the TS side at all — every
+// successful unclaim resends the confirmation so the participant's email reflects their remaining
+// claims, even when that leaves them with none (sendClaimConfirmation itself no-ops in that case).
+func TestUnclaimEnqueuesClaimConfirmationMail(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil, nil}, 2)
+	slot1, slot2 := created.Options[0], created.Options[1]
+
+	result, err := s.Claim(ctx, created.ID, slot1.ID, polls.ClaimInput{
+		Name: "Ada", Email: strPtr("ada@example.com"),
+	}, polls.Viewer{})
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if _, err := s.Claim(ctx, created.ID, slot2.ID, polls.ClaimInput{
+		ParticipantID: result.ParticipantID,
+	}, polls.Viewer{GuestParticipantID: result.ParticipantID}); err != nil {
+		t.Fatalf("Claim (2): %v", err)
+	}
+	// Both claims already enqueued a claim_confirmation job of their own — start counting fresh
+	// from here.
+	before := len(filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "claim_confirmation"))
+
+	if err := s.Unclaim(ctx, created.ID, slot1.ID, polls.Viewer{GuestParticipantID: result.ParticipantID}); err != nil {
+		t.Fatalf("Unclaim: %v", err)
+	}
+	claims := filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "claim_confirmation")
+	if len(claims) != before+1 {
+		t.Fatalf("claim_confirmation jobs after Unclaim = %d, want %d", len(claims), before+1)
+	}
+	if claims[len(claims)-1].ParticipantID != result.ParticipantID {
+		t.Errorf("ParticipantID = %q, want %q", claims[len(claims)-1].ParticipantID, result.ParticipantID)
+	}
+
+	// Unclaiming their last remaining slot still enqueues the job — sendClaimConfirmationMail's
+	// own zero-remaining-claims no-op (timers.go) is what makes this safe, not a gate here.
+	if err := s.Unclaim(ctx, created.ID, slot2.ID, polls.Viewer{GuestParticipantID: result.ParticipantID}); err != nil {
+		t.Fatalf("Unclaim (last slot): %v", err)
+	}
+	claims = filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "claim_confirmation")
+	if len(claims) != before+2 {
+		t.Fatalf("claim_confirmation jobs after unclaiming the last slot = %d, want %d", len(claims), before+2)
 	}
 }
 

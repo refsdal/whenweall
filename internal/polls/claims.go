@@ -243,12 +243,12 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 	}
 
 	if alreadyClaimed {
-		// claimSlot resends the claim confirmation unconditionally, even for a no-op re-claim of a
-		// slot already held (participants.functions.ts's own comment on this call site) — ported
-		// the same way here, before the early return.
-		if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "claim_confirmation", ParticipantID: participantID}); err != nil {
-			return nil, err
-		}
+		// A re-claim of a slot already held is a no-op (Changed: false) — nothing changed, so
+		// this must NOT queue a digest entry or resend the confirmation mail for it. Ported from
+		// claimSlot's own `if (result.changed) { ... }` gate (participants.functions.ts): only the
+		// changed branch below calls sendClaimConfirmation/emitPollEvent at all — an earlier
+		// version of this comment claimed the opposite (mail sent "unconditionally, even for a
+		// no-op re-claim"), which was a misreading of the TS source.
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
@@ -408,6 +408,15 @@ func (s *Service) unclaim(ctx context.Context, pollID, optionID, targetParticipa
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "vote"}); err != nil {
 		return err
 	}
+	// unclaimSlot resends the confirmation mail unconditionally after every successful unclaim
+	// (participants.functions.ts's own comment: "resend the confirmation so the participant's
+	// email reflects their remaining claims") — unlike claimSlot, there's no `changed` gate here
+	// at all in the TS source. sendClaimConfirmationMail (timers.go) already no-ops when the
+	// participant now has zero remaining claims (or no email on file), so this is safe to enqueue
+	// even for the last claim on the poll.
+	if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "claim_confirmation", ParticipantID: participantID}); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -418,13 +427,18 @@ func (s *Service) unclaim(ctx context.Context, pollID, optionID, targetParticipa
 // accumulated review requirement) for the HTTP handler layer to call after a claim that actually
 // changed something, to decide whether to raise a signup.full digest item.
 //
-// Deviation: #emitIfSheetFilled also storage-flags the transition so a later claim/unclaim cycle
-// on an already-full sheet doesn't re-announce it every time someone re-takes the last slot, and
-// clears that flag on any unclaim. This port has no equivalent per-poll storage slot to flag (no
-// durable object), so it reports "full" on every call where the sheet is currently full — the
-// handler calling this after each Changed claim may raise more than one signup.full digest item
-// over the sheet's lifetime where the TS source would raise exactly one per fill. Flagged in the
-// task report as a follow-up (e.g. a small poll-scoped flag row) rather than this task's scope.
+// NOT a deviation, despite first appearances: #emitIfSheetFilled also storage-flags the
+// transition (SIGNUP_FULL_KEY) so a later claim/unclaim cycle on an already-full sheet doesn't
+// re-announce it every time someone re-takes the last slot — but PollRoom#unclaim unconditionally
+// clears that same flag on every unclaim (see its own comment: "freeing a slot re-arms the
+// announcement, so filling the sheet again is news again"). Once a sheet is full, every option is
+// already at capacity, so no further distinct claim can succeed (Changed: true) until some slot
+// is freed by an unclaim — and that unclaim is exactly when TS's flag gets cleared. So a
+// Changed:true claim can only ever re-observe "full" here after an intervening unclaim, which is
+// precisely the case TS's own flag re-arms for. This port has no equivalent storage slot to flag
+// (no durable object) and doesn't need one: recomputing "full" fresh at each Changed claim yields
+// the identical cadence — exactly one signup.full per fill, never a duplicate for redundant calls
+// on an unchanged-full sheet, since no such call is reachable.
 func (s *Service) SignupFull(ctx context.Context, pollID string) (bool, error) {
 	options, err := s.q.ListOptionsByPoll(ctx, pollID)
 	if err != nil {
