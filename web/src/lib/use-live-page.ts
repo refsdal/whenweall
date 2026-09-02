@@ -1,24 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BookingRoomEvent } from '#/do/booking-protocol'
+import { connectRoom } from '#/lib/room-socket'
 
-const FIRST_DELAY_MS = 1000
-const MAX_DELAY_MS = 30_000
-
-function isPageEvent(value: unknown): value is BookingRoomEvent {
-  if (typeof value !== 'object' || value === null) return false
-  return (value as { type?: unknown }).type === 'page.changed'
-}
+/** Local replacement for the old `#/do/booking-protocol` (a Cloudflare Durable Object wire type
+ * that no longer exists). Booking pages have no presence UI (unlike polls), so this is
+ * deliberately just the one event a live booking/manage page needs: "something about this page's
+ * bookings changed, re-fetch availability/booking state." */
+export type BookingRoomEvent = { type: 'page.changed' }
 
 /**
- * Subscribes to a booking page's `BookingRoom` durable object over a websocket.
+ * Subscribes to a booking page's live room over `connectRoom` (`#/lib/room-socket`) —
+ * `/api/v1/booking-pages/{pageId}/ws` per `internal/rooms/PROTOCOL.md`, which broadcasts no
+ * presence for this route.
  *
  * Every booking, cancellation and reschedule on the page arrives as one `page.changed` event —
- * the caller usually answers it by invalidating the route, so a slot someone else just took
- * disappears from the list while you are still looking at it.
+ * the caller usually answers it by invalidating the route. A fresh snapshot (first connect, every
+ * reconnect, and every `resync`) forwards the same synthetic `page.changed` — the room's own
+ * `PROTOCOL.md` rule that resync means "re-snapshot," not "trust `?since=`", applies here exactly
+ * as it does for polls.
  *
- * Same shape as `useLivePoll` (1s → 30s backoff, reset on open, no-op during SSR, `onEvent` held
- * in a ref so an inline arrow doesn't tear down the socket); booking rooms broadcast no presence,
- * so there is no count to report.
+ * `onEvent` is held in a ref so an inline arrow doesn't tear down the socket. No-ops during SSR.
  */
 export function useLivePage(
   pageId: string,
@@ -32,61 +32,21 @@ export function useLivePage(
   }, [onEvent])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return
-
-    let disposed = false
-    let socket: WebSocket | null = null
-    let retry: ReturnType<typeof setTimeout> | undefined
-    let delay = FIRST_DELAY_MS
-
-    const connect = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${protocol}://${window.location.host}/api/bookings/${pageId}/ws`)
-      socket = ws
-
-      ws.onopen = () => {
-        delay = FIRST_DELAY_MS
+    const room = connectRoom({
+      path: `/api/v1/booking-pages/${pageId}/ws`,
+      onSnapshot: () => {
         setConnected(true)
-      }
-
-      ws.onmessage = (event: MessageEvent) => {
-        if (typeof event.data !== 'string') return
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(event.data)
-        } catch {
-          return // Keep-alive frames ("pong") and anything else non-JSON.
-        }
-        if (!isPageEvent(parsed)) return
-        onEventRef.current(parsed)
-      }
-
-      ws.onerror = () => {
-        try {
-          ws.close()
-        } catch {
-          // Already closing; `onclose` still schedules the retry.
-        }
-      }
-
-      ws.onclose = () => {
-        setConnected(false)
-        if (disposed) return
-        retry = setTimeout(connect, delay)
-        delay = Math.min(delay * 2, MAX_DELAY_MS)
-      }
-    }
-
-    connect()
+        onEventRef.current({ type: 'page.changed' })
+      },
+      onEvent: (type) => {
+        if (type === 'page.changed') onEventRef.current({ type: 'page.changed' })
+      },
+      onResync: () => onEventRef.current({ type: 'page.changed' }),
+    })
 
     return () => {
-      disposed = true
-      if (retry !== undefined) clearTimeout(retry)
-      try {
-        socket?.close()
-      } catch {
-        // Nothing to clean up if the socket never opened.
-      }
+      setConnected(false)
+      room.close()
     }
   }, [pageId])
 

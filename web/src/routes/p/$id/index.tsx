@@ -1,12 +1,12 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback } from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import * as z from 'zod'
 import { appConfig } from '#/app.config'
 import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { PollPage } from '#/components/poll/PollPage'
-import type { PollEvent } from '#/do/protocol'
 import { m } from '#/lib/i18n'
-import { useLivePoll } from '#/lib/use-live-poll'
+import { useEditToken } from '#/lib/edit-tokens'
+import { type PollEvent, useLivePoll } from '#/lib/use-live-poll'
 import { getPoll } from '#/api/polls'
 
 /** `?created` is set by the creator right after a poll is made; it opens the share sheet once. */
@@ -38,24 +38,23 @@ function PollRoute() {
   const navigate = Route.useNavigate()
   const { session } = Route.useRouteContext()
   const router = useRouter()
+  const editToken = useEditToken(poll.id)
 
   // Every change to the poll — a vote, a comment, a finalize, the deadline alarm closing it —
   // arrives here as one event; re-running the loader is the simplest correct response.
+  //
+  // `useLivePoll` already forwards a synthetic `poll.changed` for the snapshot every connect and
+  // reconnect gets (PROTOCOL.md: a snapshot always reflects state as of that connect, which is
+  // exactly the "a vote cast before this socket opened is missed for good otherwise" catch-up the
+  // old `connected`-triggered effect existed for) and for `resync` (the room's own rule: treat it
+  // like a fresh connect), so this one handler covers all three cases.
   const onEvent = useCallback(
     (event: PollEvent) => {
       if (event.type === 'poll.changed') void router.invalidate()
     },
     [router],
   )
-  const { presence, connected } = useLivePoll(poll.id, onEvent)
-
-  // Same catch-up as the public booking page: the room broadcasts only to sockets already open
-  // and keeps no history, so a vote cast between the loader running and this socket opening is
-  // missed for good — the next event reports the next change, not the one that was dropped.
-  useEffect(() => {
-    if (!connected) return
-    void router.invalidate()
-  }, [connected, router])
+  const { presence } = useLivePoll(poll.id, onEvent, editToken?.token)
 
   const onChanged = useCallback(() => router.invalidate(), [router])
 

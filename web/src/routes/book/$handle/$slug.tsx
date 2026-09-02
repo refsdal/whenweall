@@ -137,18 +137,15 @@ function BookRoute() {
 
   // One event covers every change to the page: somebody booked, cancelled or moved a slot.
   // Re-running the loader is the simplest correct response.
+  //
+  // `useLivePage` already forwards a synthetic `page.changed` for the snapshot every connect and
+  // reconnect gets (closing the same "anything that changed before this socket opened is missed
+  // for good" window the old `connected`-triggered effect existed for — a laptop that slept
+  // through three bookings comes back to the right list rather than a confidently stale one) and
+  // for `resync` (PROTOCOL.md's own rule: treat it like a fresh connect), so this one handler
+  // covers all three cases.
   const onEvent = useCallback(() => void router.invalidate(), [router])
-  const { connected } = useLivePage(page.id, onEvent)
-
-  // The room broadcasts to sockets that are already open and keeps no history, so anything that
-  // changed between the loader running on the server and this socket opening is missed — and,
-  // because the next event only reports the *next* change, missed for good. Re-fetching whenever
-  // the socket comes up closes that window, and covers reconnects too: a laptop that slept
-  // through three bookings comes back to the right list rather than a confidently stale one.
-  useEffect(() => {
-    if (!connected) return
-    void router.invalidate()
-  }, [connected, router])
+  useLivePage(page.id, onEvent)
 
   const onMonthChange = useCallback(
     (next: string) => void navigate({ search: (prev) => ({ ...prev, month: next }) }),

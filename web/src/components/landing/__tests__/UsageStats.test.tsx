@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { splitAroundSlot, UsageStatsSection } from '#/components/landing/UsageStats'
-import type { UsageStats } from '#/do/stats-protocol'
+import type { UsageStats } from '#/lib/stats-types'
 
 const STATS: UsageStats = {
   pollsFinalized: 340,

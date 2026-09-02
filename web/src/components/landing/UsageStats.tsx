@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useReducedMotion } from 'motion/react'
-import { totalResponses, type UsageStats as Stats } from '#/do/stats-protocol'
+import { totalResponses, type UsageStats as Stats } from '#/lib/stats-types'
 import { useLiveStats } from '#/lib/use-live-stats'
 import { m } from '#/lib/i18n'
 import { useCountUp } from '#/lib/use-count-up'

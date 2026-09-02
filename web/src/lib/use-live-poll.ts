@@ -1,30 +1,40 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PollEvent } from '#/do/protocol'
+import { connectRoom } from '#/lib/room-socket'
 
-const FIRST_DELAY_MS = 1000
-const MAX_DELAY_MS = 30_000
+/** Local replacement for the old `#/do/protocol` (a Cloudflare Durable Object wire type that no
+ * longer exists) — the two events a poll page ever needs to react to, unchanged in name and shape
+ * from that file: `internal/rooms`'s Go hub keeps this same vocabulary (PROTOCOL.md), just
+ * delivered as a flattened `room_events` frame instead of a DO message. */
+export type PollEvent =
+  | { type: 'poll.changed'; entity: 'poll' | 'participant' | 'vote' | 'comment' }
+  | { type: 'presence'; count: number }
 
-function isPollEvent(value: unknown): value is PollEvent {
-  if (typeof value !== 'object' || value === null) return false
-  const type = (value as { type?: unknown }).type
-  return type === 'poll.changed' || type === 'presence'
+type PollChangedEntity = Extract<PollEvent, { type: 'poll.changed' }>['entity']
+
+function isEntity(value: unknown): value is PollChangedEntity {
+  return value === 'poll' || value === 'participant' || value === 'vote' || value === 'comment'
 }
 
 /**
- * Subscribes to a poll's `PollRoom` durable object over a websocket.
+ * Subscribes to a poll's live room over `connectRoom` (`#/lib/room-socket`, the plan-8 wire
+ * protocol — see `internal/rooms/PROTOCOL.md`).
  *
- * The socket is the page's live wire: every vote, comment and settings change arrives as a
- * `poll.changed` event (the caller usually answers it by invalidating the route), and the room
- * reports how many people are looking at the poll right now.
+ * Every vote, comment and settings change arrives as a `poll.changed` event (the caller usually
+ * answers it by invalidating the route), and the room reports how many people are looking at the
+ * poll right now. A fresh snapshot (first connect, every reconnect, and every `resync`) is treated
+ * the same as a `poll.changed`: `onSnapshot`'s own data is a full `PollView` this hook doesn't need
+ * to hold onto (the route's REST loader already owns that state), so it forwards a synthetic
+ * `poll.changed` to `onEvent` for it — same "go re-fetch" effect the DO version got for free from
+ * `connected` flipping true, now covering `resync` too (PROTOCOL.md's own rule: resync means
+ * "re-snapshot," not "trust `?since=`").
  *
- * Reconnects with a 1s → 30s exponential backoff, resetting once a connection actually opens, so
- * a laptop waking from sleep reconnects quickly while a downed server isn't hammered. No-ops
- * during SSR. `onEvent` is held in a ref so a caller can pass an inline arrow function without
- * tearing down the socket on every render.
+ * `onEvent` is held in a ref so a caller can pass an inline arrow function without tearing down the
+ * socket on every render. No-ops during SSR.
  */
 export function useLivePoll(
   pollId: string,
   onEvent: (event: PollEvent) => void,
+  guestToken?: string,
 ): { connected: boolean; presence: number } {
   const [connected, setConnected] = useState(false)
   const [presence, setPresence] = useState(0)
@@ -35,64 +45,32 @@ export function useLivePoll(
   }, [onEvent])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return
-
-    let disposed = false
-    let socket: WebSocket | null = null
-    let retry: ReturnType<typeof setTimeout> | undefined
-    let delay = FIRST_DELAY_MS
-
-    const connect = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${protocol}://${window.location.host}/api/polls/${pollId}/ws`)
-      socket = ws
-
-      ws.onopen = () => {
-        delay = FIRST_DELAY_MS
+    const room = connectRoom({
+      path: `/api/v1/polls/${pollId}/ws`,
+      guestToken,
+      onSnapshot: () => {
         setConnected(true)
-      }
-
-      ws.onmessage = (event: MessageEvent) => {
-        if (typeof event.data !== 'string') return
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(event.data)
-        } catch {
-          return // Keep-alive frames ("pong") and anything else non-JSON.
+        onEventRef.current({ type: 'poll.changed', entity: 'poll' })
+      },
+      onEvent: (type, data) => {
+        if (type === 'presence') {
+          const count = (data as { count?: unknown }).count
+          if (typeof count === 'number') setPresence(count)
+          return
         }
-        if (!isPollEvent(parsed)) return
-        if (parsed.type === 'presence') setPresence(parsed.count)
-        onEventRef.current(parsed)
-      }
-
-      ws.onerror = () => {
-        try {
-          ws.close()
-        } catch {
-          // Already closing; `onclose` still schedules the retry.
+        if (type === 'poll.changed') {
+          const entity = (data as { entity?: unknown }).entity
+          if (isEntity(entity)) onEventRef.current({ type: 'poll.changed', entity })
         }
-      }
-
-      ws.onclose = () => {
-        setConnected(false)
-        if (disposed) return
-        retry = setTimeout(connect, delay)
-        delay = Math.min(delay * 2, MAX_DELAY_MS)
-      }
-    }
-
-    connect()
+      },
+      onResync: () => onEventRef.current({ type: 'poll.changed', entity: 'poll' }),
+    })
 
     return () => {
-      disposed = true
-      if (retry !== undefined) clearTimeout(retry)
-      try {
-        socket?.close()
-      } catch {
-        // Nothing to clean up if the socket never opened.
-      }
+      setConnected(false)
+      room.close()
     }
-  }, [pollId])
+  }, [pollId, guestToken])
 
   return { connected, presence }
 }

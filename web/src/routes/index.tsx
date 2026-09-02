@@ -1,9 +1,8 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { motion } from 'motion/react'
 import { ArrowRight, CalendarPlus, Check, Link2, Sparkles, Users } from 'lucide-react'
-import { createServerFn } from '@tanstack/react-start'
 import { appConfig } from '#/app.config'
-import type { UsageStats } from '#/do/stats-protocol'
+import { EMPTY_STATS, type UsageStats } from '#/lib/stats-types'
 import { UsageStatsSection } from '#/components/landing/UsageStats'
 import { VoteGridMock } from '#/components/landing/VoteGridMock'
 import { DecideTogether } from '#/components/landing/steps/DecideTogether'
@@ -14,15 +13,15 @@ import { m } from '#/lib/i18n'
 import { staggerContainer, staggerItem } from '#/lib/motion'
 import { cn } from '#/lib/utils'
 
-/** Server-rendered so the landing page shows real numbers on first paint — no zero-flash, no
- * layout shift, and correct with JavaScript disabled. */
-const getUsageStats = createServerFn({ method: 'GET' }).handler(async () => {
-  const { readUsageStats } = await import('#/server/stats/stats-client')
-  return readUsageStats()
-})
-
+/**
+ * `stats:global` has no REST snapshot endpoint (`internal/rooms/PROTOCOL.md`) — its own websocket
+ * `snapshot` frame is the one source of a fresh read, so unlike the old Durable Object version
+ * there is nothing left to server-render here: the loader hands down all-zero counters, and
+ * `UsageStatsSection`'s socket (opened once the section scrolls into view) replaces them with the
+ * real numbers on the first live frame.
+ */
 export const Route = createFileRoute('/')({
-  loader: async (): Promise<{ stats: UsageStats }> => ({ stats: await getUsageStats() }),
+  loader: (): { stats: UsageStats } => ({ stats: EMPTY_STATS }),
   head: () => ({
     meta: [
       { title: `${appConfig.name} — ${appConfig.tagline}` },

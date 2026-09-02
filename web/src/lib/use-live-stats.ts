@@ -1,18 +1,39 @@
 import { useEffect, useRef, useState } from 'react'
-import type { StatsEvent, UsageStats } from '#/do/stats-protocol'
+import { connectRoom } from '#/lib/room-socket'
+import type { UsageStats } from '#/lib/stats-types'
 
-function isStatsEvent(value: unknown): value is StatsEvent {
-  if (typeof value !== 'object' || value === null) return false
-  return (value as { type?: unknown }).type === 'stats'
+function readStats(value: unknown): UsageStats | null {
+  if (typeof value !== 'object' || value === null) return null
+  const v = value as Record<string, unknown>
+  const { pollsFinalized, pollsCreated, responsesYes, responsesIfNeedBe, responsesNo } = v
+  if (
+    typeof pollsFinalized !== 'number' ||
+    typeof pollsCreated !== 'number' ||
+    typeof responsesYes !== 'number' ||
+    typeof responsesIfNeedBe !== 'number' ||
+    typeof responsesNo !== 'number'
+  ) {
+    return null
+  }
+  return { pollsFinalized, pollsCreated, responsesYes, responsesIfNeedBe, responsesNo }
 }
 
 /**
- * Live usage counters for the landing page.
+ * Live usage counters for the landing page, over `/api/v1/stats/ws` (`internal/rooms/PROTOCOL.md`)
+ * via `connectRoom`.
  *
  * Deliberately simpler than `useLivePoll`: the socket opens only once `enabled` turns true (the
- * caller gates that on the section scrolling into view), and there is **no reconnect backoff**. A
- * stale marketing counter is not worth a retry loop on the busiest page in the product — if the
- * socket drops, the server-rendered numbers simply stay put until the next page load.
+ * caller gates that on the section scrolling into view). `connectRoom` itself still reconnects
+ * with backoff on a genuine drop (the DO version's "no reconnect backoff" comment described the
+ * *previous* raw-`WebSocket` implementation, which is gone now that this shares the same client
+ * every other room uses) — a stale marketing counter recovering on its own is strictly better than
+ * one that never does, and this route has nothing else competing for the retry budget.
+ *
+ * `stats:global` has no REST snapshot endpoint of its own (unlike polls/booking-pages) — the
+ * websocket's own `snapshot` frame IS this room's one source of a fresh read, both for an ordinary
+ * connect and for `resync`: `internal/rooms/PROTOCOL.md`'s "on resync, refetch a snapshot from the
+ * ordinary REST endpoint" rule is satisfied here by tearing down and reopening the socket, since
+ * reopening is exactly what re-triggers that same snapshot frame.
  *
  * No-ops during SSR, and returns `initial` unchanged until a frame actually arrives, so the
  * server-rendered markup and the first client render always agree.
@@ -28,22 +49,38 @@ export function useLiveStats(initial: UsageStats, enabled: boolean): UsageStats 
 
   useEffect(() => {
     if (!enabled) return
-    if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${window.location.host}/api/stats/ws`)
+    const applyStats = (data: unknown) => {
+      const parsed = readStats(data)
+      if (parsed) setStats(parsed)
+    }
 
-    socket.addEventListener('message', (event) => {
-      try {
-        const parsed: unknown = JSON.parse(event.data as string)
-        if (isStatsEvent(parsed)) setStats(parsed.stats)
-      } catch {
-        // A frame we can't parse is not worth tearing the socket down for.
-      }
-    })
+    let room: { close(): void }
+    let disposed = false
+
+    const open = () => {
+      room = connectRoom({
+        path: '/api/v1/stats/ws',
+        onSnapshot: applyStats,
+        onEvent: (type, data) => {
+          if (type === 'stats') applyStats(data)
+        },
+        onResync: () => {
+          // `stats:global` has no REST snapshot endpoint of its own — the websocket's own
+          // `snapshot` frame IS this room's one source of a fresh read, so satisfying
+          // PROTOCOL.md's "on resync, refetch a snapshot" rule here means reopening the socket,
+          // which re-triggers that same snapshot frame.
+          room.close()
+          if (!disposed) open()
+        },
+      })
+    }
+
+    open()
 
     return () => {
-      socket.close()
+      disposed = true
+      room.close()
     }
   }, [enabled])
 
