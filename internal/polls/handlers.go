@@ -43,18 +43,17 @@ import (
 	"github.com/refsdal/whenweall/internal/polls/queries"
 )
 
-// Auth is the narrow seam this package needs from auth.Service — RequireSession/FromContext/
-// VerifyGuestToken/MintGuestToken — kept as an interface (rather than importing *auth.Service
-// directly into every signature below) so tests can substitute a fake session/guest-token source
-// instead of driving a real signup/signin flow through Limen for every one of this file's tests.
-// auth.Service satisfies this with no adapter needed (FromContext is a plain delegation method
-// added alongside this interface — see internal/auth/session.go).
-type Auth interface {
-	RequireSession(next http.HandlerFunc) http.HandlerFunc
-	FromContext(ctx context.Context) (*auth.Session, bool)
-	VerifyGuestToken(token string) (string, bool)
-	MintGuestToken(participantID string) string
-}
+// Auth is an alias for httpserver.Auth (promoted there in Task 8's helper-sharing refactor, once
+// a second HTTP-surfaced domain package needed the same seam this one had already built): the
+// narrow seam this package needs from auth.Service — RequireSession/FromContext/VerifyGuestToken/
+// MintGuestToken — kept as an interface (rather than importing *auth.Service directly into every
+// signature below) so tests can substitute a fake session/guest-token source instead of driving a
+// real signup/signin flow through Limen for every one of this file's tests. auth.Service satisfies
+// this with no adapter needed (FromContext is a plain delegation method — see
+// internal/auth/session.go). Kept as a local alias (rather than rewriting every `Auth` in this
+// file's signatures to `httpserver.Auth`) purely to keep this diff's noise down; the two names are
+// identical from the compiler's point of view.
+type Auth = httpserver.Auth
 
 // Register mounts this package's whole HTTP surface on mux. Handler rules throughout: thin
 // (decode -> Validate -> service -> respond); guest identity via X-Guest-Token header or ?token=;
@@ -63,17 +62,17 @@ type Auth interface {
 // `if (!userId) await requireTurnstile(...)` branch; a light per-IP rate limit on the same public
 // mutating endpoints, keyed like internal/httpserver's own authRateLimit.
 func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
-	voteLimit := s.publicRateLimit(cfg, "vote", 30, time.Minute)
-	commentLimit := s.publicRateLimit(cfg, "comment", 20, time.Minute)
+	voteLimit := httpserver.PublicRateLimit(s.db, "polls", "vote", 30, time.Minute, cfg.TrustProxy)
+	commentLimit := httpserver.PublicRateLimit(s.db, "polls", "comment", 20, time.Minute, cfg.TrustProxy)
 
-	mux.Handle("POST /api/v1/polls", withOrgSession(a, s.handleCreate))
+	mux.Handle("POST /api/v1/polls", httpserver.WithOrgSession(a, s.handleCreate))
 	mux.HandleFunc("GET /api/v1/polls/{id}", s.handleGetView(a))
-	mux.Handle("PATCH /api/v1/polls/{id}", withOrgSession(a, s.handleUpdate))
-	mux.Handle("POST /api/v1/polls/{id}/status", withOrgSession(a, s.handleSetStatus))
-	mux.Handle("POST /api/v1/polls/{id}/finalize", withOrgSession(a, s.handleFinalize))
-	mux.Handle("DELETE /api/v1/polls/{id}", withOrgSession(a, s.handleDelete))
-	mux.Handle("POST /api/v1/polls/{id}/duplicate", withOrgSession(a, s.handleDuplicate))
-	mux.Handle("GET /api/v1/polls", withOrgSession(a, s.handleListMine))
+	mux.Handle("PATCH /api/v1/polls/{id}", httpserver.WithOrgSession(a, s.handleUpdate))
+	mux.Handle("POST /api/v1/polls/{id}/status", httpserver.WithOrgSession(a, s.handleSetStatus))
+	mux.Handle("POST /api/v1/polls/{id}/finalize", httpserver.WithOrgSession(a, s.handleFinalize))
+	mux.Handle("DELETE /api/v1/polls/{id}", httpserver.WithOrgSession(a, s.handleDelete))
+	mux.Handle("POST /api/v1/polls/{id}/duplicate", httpserver.WithOrgSession(a, s.handleDuplicate))
+	mux.Handle("GET /api/v1/polls", httpserver.WithOrgSession(a, s.handleListMine))
 
 	mux.Handle("POST /api/v1/polls/{id}/participants", voteLimit(http.HandlerFunc(s.handleAddParticipant(a, cfg))))
 	mux.Handle("PATCH /api/v1/polls/{id}/participants/{pid}", voteLimit(s.handleUpdateParticipant(a)))
@@ -86,114 +85,40 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("DELETE /api/v1/polls/{id}/claims/{oid}", voteLimit(s.handleUnclaim(a)))
 
 	mux.HandleFunc("GET /api/v1/polls/{id}/calendar.ics", s.handleCalendarICS(cfg))
-	mux.Handle("GET /api/v1/polls/{id}/roster.csv", withOrgSession(a, s.handleRosterCSV))
+	mux.Handle("GET /api/v1/polls/{id}/roster.csv", httpserver.WithOrgSession(a, s.handleRosterCSV))
 
-	mux.Handle("POST /api/v1/polls/{id}/notification-prefs", withOrgSession(a, s.handleUpdateNotificationPrefs))
-	mux.Handle("POST /api/v1/polls/{id}/following", withOrgSession(a, s.handleSetFollowing))
+	mux.Handle("POST /api/v1/polls/{id}/notification-prefs", httpserver.WithOrgSession(a, s.handleUpdateNotificationPrefs))
+	mux.Handle("POST /api/v1/polls/{id}/following", httpserver.WithOrgSession(a, s.handleSetFollowing))
 
 	mux.HandleFunc("GET /api/v1/config", handleConfig(cfg))
 }
 
-// publicRateLimit builds a per-IP rate limiter over this Service's own *sql.DB — the same fixed-
-// window counter internal/httpserver.RateLimit uses for the auth surface, just namespaced
-// "polls.<name>" so the two never share a bucket.
-func (s *Service) publicRateLimit(cfg *config.Config, name string, limit int, window time.Duration) func(http.Handler) http.Handler {
-	return httpserver.RateLimit(s.db, "polls."+name, limit, window, func(r *http.Request) string {
-		return httpserver.ClientIP(r, cfg.TrustProxy)
-	})
-}
-
-// withOrgSession requires a valid session (401 otherwise) AND a caller with an active
-// organization (403 "no_active_org" otherwise — practically unreachable once signed in, since
-// auth.Service's own session resolution always defaults ActiveOrgID to the caller's personal org,
-// but every "auth+org" row in the brief's table needs an orgID to pass to the Service methods
-// below, so this is checked explicitly rather than assumed).
-func withOrgSession(a Auth, next func(w http.ResponseWriter, r *http.Request, sess *auth.Session)) http.HandlerFunc {
-	return a.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-		sess, ok := a.FromContext(r.Context())
-		if !ok {
-			httpserver.Err(w, http.StatusUnauthorized, "unauthenticated", "authentication required", nil)
-			return
-		}
-		if sess.ActiveOrgID == "" {
-			httpserver.Err(w, http.StatusForbidden, "no_active_org", "no active organization", nil)
-			return
-		}
-		next(w, r, sess)
-	})
-}
-
-// guestParticipantID resolves the caller's guest edit token — X-Guest-Token header first, then
-// ?token= — into a verified participant id, or "" for no/invalid token.
-func guestParticipantID(a Auth, r *http.Request) string {
-	token := r.Header.Get("X-Guest-Token")
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
-	if token == "" {
-		return ""
-	}
-	pid, ok := a.VerifyGuestToken(token)
-	if !ok {
-		return ""
-	}
-	return pid
-}
-
 // viewerFromRequest resolves a Viewer for a public(token)|auth endpoint: the caller's own userID
-// if signed in (never required), plus any verified guest participant id.
+// if signed in (never required), plus any verified guest participant id (httpserver.
+// GuestParticipantID — the domain-agnostic token extraction/verification; Viewer itself stays
+// here, since it's this package's own domain type).
 func viewerFromRequest(a Auth, r *http.Request) Viewer {
-	v := Viewer{GuestParticipantID: guestParticipantID(a, r)}
+	v := Viewer{GuestParticipantID: httpserver.GuestParticipantID(a, r)}
 	if sess, ok := a.FromContext(r.Context()); ok {
 		v.UserID = sess.UserID
 	}
 	return v
 }
 
-// requireCaptchaIfAnon ports participants.functions.ts's own `if (!userId) await
-// requireTurnstile(...)` branch: captcha is only ever demanded of an anonymous caller, and only
-// when Turnstile is actually configured (cfg.Capabilities.Turnstile) — a deployment with no
-// Turnstile keys has no way to verify a token, so it must not block on one (mirrors
-// config.functions.ts's capability gating elsewhere). The token travels in the X-Captcha-Token
-// header — this REST surface's own convention, rather than the TS source's server-function body
-// field.
-func requireCaptchaIfAnon(cfg *config.Config, a Auth, r *http.Request) error {
-	if sess, ok := a.FromContext(r.Context()); ok && sess.UserID != "" {
-		return nil
-	}
-	if !cfg.Capabilities.Turnstile {
-		return nil
-	}
-	token := r.Header.Get("X-Captcha-Token")
-	remoteIP := httpserver.ClientIP(r, cfg.TrustProxy)
-	return httpserver.VerifyTurnstile(r.Context(), cfg.TurnstileSecretKey, token, remoteIP)
-}
-
-// decodeJSON decodes r's JSON body into dst, writing the standard "invalid" envelope and
-// returning false on any decode failure (including a missing body).
-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if r.Body == nil {
-		httpserver.Err(w, http.StatusBadRequest, "invalid", "request body is required", nil)
-		return false
-	}
-	defer func() { _ = r.Body.Close() }()
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		httpserver.Err(w, http.StatusBadRequest, "invalid", "malformed JSON body", nil)
-		return false
-	}
-	return true
-}
-
 // writeServiceError maps every sentinel this package's Service methods can return to the standard
-// HTTP error envelope. *ValidationError -> 422 "invalid" (carrying Fields); ErrCapacityFull -> 409
-// "capacity_full"; each of the six ErrConflict-wrapping sentinels (errors.go) -> 409 with its own
-// snake_case envelope code (poll_closed, poll_finalized, limit_reached, claim_limit_reached,
-// capacity_below_claims, email_required) — checked before the plain ErrConflict case, since every
-// one of them also satisfies errors.Is(err, ErrConflict); a bare ErrConflict (none of the six) ->
-// 409 "conflict"; ErrNotFound -> 404 "not_found" (this is where requireOrgPoll's wrong-org ->
-// ErrNotFound mapping, and RequireManageable's own NOT_FOUND half, surface as a real 404 — see
-// this file's package doc comment, item (c)); ErrForbidden -> 403 "forbidden". Anything else is
-// logged and reported as a generic 500.
+// HTTP error envelope, via httpserver.WriteDomainError's shared "map or log-and-500" plumbing
+// (Task 8's helper-sharing refactor — the envelope-writing core is domain-agnostic and now lives
+// in internal/httpserver; this is the thin per-package wrapper the promotion left behind, mapping
+// THIS package's own sentinels). mapServiceError below is the actual mapping: *ValidationError ->
+// 422 "invalid" (carrying Fields); ErrCapacityFull -> 409 "capacity_full"; each of the six
+// ErrConflict-wrapping sentinels (errors.go) -> 409 with its own snake_case envelope code
+// (poll_closed, poll_finalized, limit_reached, claim_limit_reached, capacity_below_claims,
+// email_required) — checked before the plain ErrConflict case, since every one of them also
+// satisfies errors.Is(err, ErrConflict); a bare ErrConflict (none of the six) -> 409 "conflict";
+// ErrNotFound -> 404 "not_found" (this is where requireOrgPoll's wrong-org -> ErrNotFound mapping,
+// and RequireManageable's own NOT_FOUND half, surface as a real 404 — see this file's package doc
+// comment, item (c)); ErrForbidden -> 403 "forbidden". Anything else falls through to
+// WriteDomainError's own log-and-500.
 //
 // The envelope codes below are this Go service's own vocabulary, not the TS frontend's — the TS
 // AppError codes are SCREAMING_CASE (src/lib/errors.ts's ERROR_CODES) and the frontend's error
@@ -201,33 +126,36 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 // src/routes/p/$id/edit.tsx) match on those directly; translating this envelope's snake_case codes
 // into that shape is plan 8's job, not this handler's.
 func writeServiceError(w http.ResponseWriter, err error) {
+	httpserver.WriteDomainError(w, err, mapServiceError)
+}
+
+func mapServiceError(err error) (status int, code, message string, fields map[string]string, ok bool) {
 	var verr *ValidationError
 	switch {
 	case errors.As(err, &verr):
-		httpserver.Err(w, http.StatusUnprocessableEntity, "invalid", "validation failed", verr.Fields)
+		return http.StatusUnprocessableEntity, "invalid", "validation failed", verr.Fields, true
 	case errors.Is(err, ErrCapacityFull):
-		httpserver.Err(w, http.StatusConflict, "capacity_full", "this slot is full", nil)
+		return http.StatusConflict, "capacity_full", "this slot is full", nil, true
 	case errors.Is(err, ErrPollClosed):
-		httpserver.Err(w, http.StatusConflict, "poll_closed", "this poll is closed", nil)
+		return http.StatusConflict, "poll_closed", "this poll is closed", nil, true
 	case errors.Is(err, ErrPollFinalized):
-		httpserver.Err(w, http.StatusConflict, "poll_finalized", "this poll has been finalized", nil)
+		return http.StatusConflict, "poll_finalized", "this poll has been finalized", nil, true
 	case errors.Is(err, ErrLimitReached):
-		httpserver.Err(w, http.StatusConflict, "limit_reached", "this poll has reached its participant limit", nil)
+		return http.StatusConflict, "limit_reached", "this poll has reached its participant limit", nil, true
 	case errors.Is(err, ErrClaimLimitReached):
-		httpserver.Err(w, http.StatusConflict, "claim_limit_reached", "you have reached this poll's claim limit", nil)
+		return http.StatusConflict, "claim_limit_reached", "you have reached this poll's claim limit", nil, true
 	case errors.Is(err, ErrCapacityBelowClaims):
-		httpserver.Err(w, http.StatusConflict, "capacity_below_claims", "capacity cannot be set below the current number of claims", nil)
+		return http.StatusConflict, "capacity_below_claims", "capacity cannot be set below the current number of claims", nil, true
 	case errors.Is(err, ErrEmailRequired):
-		httpserver.Err(w, http.StatusConflict, "email_required", "an email address is required for this poll", nil)
+		return http.StatusConflict, "email_required", "an email address is required for this poll", nil, true
 	case errors.Is(err, ErrConflict):
-		httpserver.Err(w, http.StatusConflict, "conflict", "the poll's current state does not allow this", nil)
+		return http.StatusConflict, "conflict", "the poll's current state does not allow this", nil, true
 	case errors.Is(err, ErrNotFound):
-		httpserver.Err(w, http.StatusNotFound, "not_found", "not found", nil)
+		return http.StatusNotFound, "not_found", "not found", nil, true
 	case errors.Is(err, ErrForbidden):
-		httpserver.Err(w, http.StatusForbidden, "forbidden", "forbidden", nil)
+		return http.StatusForbidden, "forbidden", "forbidden", nil, true
 	default:
-		slog.Default().Error("polls: unhandled service error", "error", err)
-		httpserver.Err(w, http.StatusInternalServerError, "internal", "internal error", nil)
+		return 0, "", "", nil, false
 	}
 }
 
@@ -428,7 +356,7 @@ func toCommentResponse(c *Comment) commentResponse {
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	var req createPollRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
 	in, err := req.toInput()
@@ -468,7 +396,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request, sess *aut
 		return
 	}
 	var req updatePollRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
 	in, err := req.toInput()
@@ -491,7 +419,7 @@ func (s *Service) handleSetStatus(w http.ResponseWriter, r *http.Request, sess *
 		return
 	}
 	var req setStatusRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
 	if err := s.SetStatus(r.Context(), pollID, sess.ActiveOrgID, req.Status); err != nil {
@@ -508,7 +436,7 @@ func (s *Service) handleFinalize(w http.ResponseWriter, r *http.Request, sess *a
 		return
 	}
 	var req finalizeRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
 	if err := s.Finalize(r.Context(), pollID, sess.ActiveOrgID, req.OptionID, sess.UserID); err != nil {
@@ -596,13 +524,13 @@ func (s *Service) handleAddParticipant(a Auth, cfg *config.Config) http.HandlerF
 			writeServiceError(w, err)
 			return
 		}
-		if err := requireCaptchaIfAnon(cfg, a, r); err != nil {
+		if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
 			httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
 			return
 		}
 
 		var req addParticipantRequest
-		if !decodeJSON(w, r, &req) {
+		if !httpserver.DecodeJSON(w, r, &req) {
 			return
 		}
 		viewer := viewerFromRequest(a, r)
@@ -639,7 +567,7 @@ func (s *Service) handleUpdateParticipant(a Auth) http.HandlerFunc {
 		}
 
 		var req updateParticipantRequest
-		if !decodeJSON(w, r, &req) {
+		if !httpserver.DecodeJSON(w, r, &req) {
 			return
 		}
 		viewer := viewerFromRequest(a, r)
@@ -693,13 +621,13 @@ func (s *Service) handleAddComment(a Auth, cfg *config.Config) http.HandlerFunc 
 		pollID := r.PathValue("id")
 		ctx := r.Context()
 
-		if err := requireCaptchaIfAnon(cfg, a, r); err != nil {
+		if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
 			httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
 			return
 		}
 
 		var req addCommentRequest
-		if !decodeJSON(w, r, &req) {
+		if !httpserver.DecodeJSON(w, r, &req) {
 			return
 		}
 		viewer := viewerFromRequest(a, r)
@@ -747,13 +675,13 @@ func (s *Service) handleClaim(a Auth, cfg *config.Config) http.HandlerFunc {
 		pollID := r.PathValue("id")
 		ctx := r.Context()
 
-		if err := requireCaptchaIfAnon(cfg, a, r); err != nil {
+		if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
 			httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
 			return
 		}
 
 		var req claimRequest
-		if !decodeJSON(w, r, &req) {
+		if !httpserver.DecodeJSON(w, r, &req) {
 			return
 		}
 		optionID := req.OptionID
@@ -973,7 +901,7 @@ func (s *Service) handleRosterCSV(w http.ResponseWriter, r *http.Request, sess *
 func (s *Service) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	pollID := r.PathValue("id")
 	var req notificationPrefsRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
 	if err := s.UpdateNotificationPrefs(r.Context(), pollID, sess.ActiveOrgID, sess.UserID, req.Channels); err != nil {
@@ -986,7 +914,7 @@ func (s *Service) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.R
 func (s *Service) handleSetFollowing(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	pollID := r.PathValue("id")
 	var req followingRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
 	if err := s.SetFollowing(r.Context(), pollID, sess.ActiveOrgID, sess.UserID, req.Following); err != nil {
