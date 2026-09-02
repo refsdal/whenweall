@@ -300,6 +300,19 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 		return nil, err
 	}
 
+	// Mail + the reminder timer are enqueued/armed inside this same transaction (Task 4): a
+	// booking whose commit fails must not leave a stray confirmation job or reminder behind, and
+	// one whose commit succeeds must never lose either — matching internal/polls/timers.go's own
+	// enqueueMailPoll/armDeadline call sites.
+	if err := enqueueMailBooking(ctx, tx, "confirmed", bookingID, nil); err != nil {
+		return nil, err
+	}
+	if page.Reminders {
+		if err := armBookingReminder(ctx, tx, bookingID, in.StartAt); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -353,6 +366,15 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 	}
 
 	if err := rooms.Emit(ctx, tx, "booking:"+booking.PageID, "page.changed", nil); err != nil {
+		return err
+	}
+
+	// Mail + cancelling the reminder timer are done inside this same transaction (Task 4) — see
+	// Book's own comment on why this must not be a separate, possibly-partial step.
+	if err := enqueueMailBooking(ctx, tx, "cancelled", bookingID, nil); err != nil {
+		return err
+	}
+	if err := cancelBookingReminder(ctx, tx, bookingID); err != nil {
 		return err
 	}
 
@@ -435,6 +457,23 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 
 	if err := rooms.Emit(ctx, tx, "booking:"+page.ID, "page.changed", nil); err != nil {
 		return nil, err
+	}
+
+	// Mail + the reminder timer, inside this same transaction (Task 4) — see Book's own comment.
+	// The reminder is re-armed at the NEW start when the page still wants one, or cancelled
+	// outright when it doesn't — ports BookingRoom.reschedule's own if/else exactly (unlike Book,
+	// which only ever arms, never cancels, since a fresh booking has no prior reminder to clear).
+	if err := enqueueMailBooking(ctx, tx, "rescheduled", bookingID, &previousStartAt); err != nil {
+		return nil, err
+	}
+	if page.Reminders {
+		if err := armBookingReminder(ctx, tx, bookingID, newStart); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := cancelBookingReminder(ctx, tx, bookingID); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

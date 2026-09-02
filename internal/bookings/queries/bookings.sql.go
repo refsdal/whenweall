@@ -249,6 +249,30 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 	return i, err
 }
 
+const getUser = `-- name: GetUser :one
+
+SELECT id, email, password, email_verified_at, first_name, last_name, created_at, updated_at, two_factor_enabled FROM users WHERE id = $1
+`
+
+// Task 4 (booking mail set and reminders) queries below.
+// The page's memberUserId owner — who receives the organiser half of a lifecycle mail (emails.go).
+func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Password,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TwoFactorEnabled,
+	)
+	return i, err
+}
+
 const insertBooking = `-- name: InsertBooking :exec
 INSERT INTO bookings (
   id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale,

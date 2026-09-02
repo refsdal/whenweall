@@ -101,3 +101,9 @@ UPDATE bookings SET start_at = $2, end_at = $3, updated_at = $4 WHERE id = $1;
 
 -- name: GetOrganization :one
 SELECT * FROM organizations WHERE id = $1;
+
+-- Task 4 (booking mail set and reminders) queries below.
+
+-- name: GetUser :one
+-- The page's memberUserId owner — who receives the organiser half of a lifecycle mail (emails.go).
+SELECT * FROM users WHERE id = $1;

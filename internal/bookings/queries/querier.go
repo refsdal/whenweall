@@ -24,6 +24,9 @@ type Querier interface {
 	GetBookingPageForUpdate(ctx context.Context, id string) (BookingPage, error)
 	GetOrganization(ctx context.Context, id int64) (Organization, error)
 	GetOrganizationBySlug(ctx context.Context, slug string) (Organization, error)
+	// Task 4 (booking mail set and reminders) queries below.
+	// The page's memberUserId owner — who receives the organiser half of a lifecycle mail (emails.go).
+	GetUser(ctx context.Context, id int64) (User, error)
 	InsertBooking(ctx context.Context, arg InsertBookingParams) error
 	// Task 2 (booking pages service) queries below.
 	InsertBookingPage(ctx context.Context, arg InsertBookingPageParams) error
