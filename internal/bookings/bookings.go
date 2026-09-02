@@ -209,6 +209,7 @@ func (s *Service) PublicAvailability(ctx context.Context, orgSlug, pageSlug stri
 	if err != nil {
 		return nil, err
 	}
+	busy = googleBusyForPage(ctx, s.google, page, from, to, busy)
 
 	return Slots(rules, busy, time.Now().UTC(), from, to), nil
 }
@@ -263,6 +264,7 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 	if err != nil {
 		return nil, err
 	}
+	existing = googleBusyForPage(ctx, s.google, page, from, to, existing)
 	busy := make([]Interval, 0, len(in.Busy)+len(existing))
 	busy = append(busy, in.Busy...)
 	busy = append(busy, existing...)
@@ -309,6 +311,15 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 	}
 	if page.Reminders {
 		if err := armBookingReminder(ctx, tx, bookingID, in.StartAt); err != nil {
+			return nil, err
+		}
+	}
+
+	// The Google Calendar event is created post-commit, via a "google:sync" job enqueued in this
+	// same transaction (Task 5) — never inline: an API stall must not fail a booking that already
+	// succeeded. See google.go's package doc comment.
+	if page.GoogleSync {
+		if err := enqueueGoogleSync(ctx, tx, "insert", bookingID); err != nil {
 			return nil, err
 		}
 	}
@@ -378,6 +389,16 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 		return err
 	}
 
+	// A known Google Calendar event is always cleaned up, regardless of the page's CURRENT
+	// googleSync toggle (spec finding 7, ported from google-sync.ts's own comment): the event was
+	// created while sync was on, so it still needs deleting even if sync has since been turned
+	// off.
+	if booking.GoogleEventID.Valid {
+		if err := enqueueGoogleSync(ctx, tx, "delete", bookingID); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -441,6 +462,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
+	existing = googleBusyForPage(ctx, s.google, page, from, to, existing)
 
 	if !IsSlotAvailable(rules, newStart, now, existing) {
 		return nil, ErrSlotTaken
@@ -472,6 +494,16 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 		}
 	} else {
 		if err := cancelBookingReminder(ctx, tx, bookingID); err != nil {
+			return nil, err
+		}
+	}
+
+	// Google Calendar delete-then-recreate, post-commit, via one "reschedule" google:sync job
+	// (Task 5) — see googleSyncReschedule's own doc comment for the sequencing contract. Enqueued
+	// whenever there's a known event to clean up OR sync is (now) on; a no-op job (neither) is
+	// skipped rather than scheduled for nothing.
+	if booking.GoogleEventID.Valid || page.GoogleSync {
+		if err := enqueueGoogleSync(ctx, tx, "reschedule", bookingID); err != nil {
 			return nil, err
 		}
 	}

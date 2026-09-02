@@ -107,3 +107,27 @@ SELECT * FROM organizations WHERE id = $1;
 -- name: GetUser :one
 -- The page's memberUserId owner — who receives the organiser half of a lifecycle mail (emails.go).
 SELECT * FROM users WHERE id = $1;
+
+-- Task 5 (Google Calendar sync) queries below.
+
+-- name: UpdateBookingGoogleEventID :exec
+-- Persists (or clears, when null) the booking's known Google Calendar event id. See
+-- Service.SetGoogleEventID (google.go).
+UPDATE bookings SET google_event_id = $2, updated_at = $3 WHERE id = $1;
+
+-- name: GetGoogleAccount :one
+-- The linked Google account row backing a page's member — google.go's own token store. Limen owns
+-- this table (migrations/00002_auth.sql); this package only ever reads/refreshes the one row a
+-- Google Calendar sync needs, never any other provider's row.
+SELECT id, access_token, refresh_token, access_token_expires_at
+FROM accounts
+WHERE user_id = $1 AND provider = 'google'
+ORDER BY id
+LIMIT 1;
+
+-- name: UpdateGoogleAccountToken :exec
+-- Persists a refreshed access (and, when Google issued a new one, refresh) token back onto the
+-- account row google.go just refreshed it from.
+UPDATE accounts
+SET access_token = $2, refresh_token = $3, access_token_expires_at = $4, updated_at = $5
+WHERE id = $1;

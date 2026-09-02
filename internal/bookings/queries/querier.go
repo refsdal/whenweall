@@ -22,6 +22,10 @@ type Querier interface {
 	// Same lock as GetBookingPageByOrgSlugForUpdate, keyed by id instead of (org, slug) — used by
 	// Reschedule, which already has the booking's page_id in hand.
 	GetBookingPageForUpdate(ctx context.Context, id string) (BookingPage, error)
+	// The linked Google account row backing a page's member — google.go's own token store. Limen owns
+	// this table (migrations/00002_auth.sql); this package only ever reads/refreshes the one row a
+	// Google Calendar sync needs, never any other provider's row.
+	GetGoogleAccount(ctx context.Context, userID int64) (GetGoogleAccountRow, error)
 	GetOrganization(ctx context.Context, id int64) (Organization, error)
 	GetOrganizationBySlug(ctx context.Context, slug string) (Organization, error)
 	// Task 4 (booking mail set and reminders) queries below.
@@ -38,9 +42,16 @@ type Querier interface {
 	// see bookedIntervalsForPage's (bookings.go) doc comment on why no buffer is applied here.
 	ListConfirmedBookingsInRange(ctx context.Context, arg ListConfirmedBookingsInRangeParams) ([]Booking, error)
 	SoftDeleteBookingPage(ctx context.Context, arg SoftDeleteBookingPageParams) error
+	// Task 5 (Google Calendar sync) queries below.
+	// Persists (or clears, when null) the booking's known Google Calendar event id. See
+	// Service.SetGoogleEventID (google.go).
+	UpdateBookingGoogleEventID(ctx context.Context, arg UpdateBookingGoogleEventIDParams) error
 	UpdateBookingPage(ctx context.Context, arg UpdateBookingPageParams) error
 	UpdateBookingSchedule(ctx context.Context, arg UpdateBookingScheduleParams) error
 	UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) error
+	// Persists a refreshed access (and, when Google issued a new one, refresh) token back onto the
+	// account row google.go just refreshed it from.
+	UpdateGoogleAccountToken(ctx context.Context, arg UpdateGoogleAccountTokenParams) error
 	UpdateOrganizationSlug(ctx context.Context, arg UpdateOrganizationSlugParams) error
 }
 

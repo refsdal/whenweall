@@ -149,6 +149,12 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m *mailer.Mailer) {
 	w.Register(jobKindMailBooking, func(ctx context.Context, job jobs.Job) error {
 		return s.handleMailBookingJob(ctx, m, job)
 	})
+
+	// "google:sync" (Task 5, google.go) needs no mailer of its own — a hard failure enqueues a
+	// "mail:booking"/"sync_failed" job instead, handled by the registration just above.
+	w.Register(jobKindGoogleSync, func(ctx context.Context, job jobs.Job) error {
+		return s.handleGoogleSyncJob(ctx, job)
+	})
 }
 
 // handleBookingReminderJob is "booking.reminder"'s body: re-check the booking is still confirmed
@@ -238,6 +244,11 @@ func (s *Service) handleMailBookingJob(ctx context.Context, m *mailer.Mailer, jo
 			return nil
 		}
 		return s.sendBookingReminderMail(ctx, m, booking, page, org)
+	case "sync_failed":
+		// Ports sendGoogleSyncFailedNotice's own contract (emails.ts): an organiser-only notice,
+		// unconditional on booking.Status — the booking itself is unaffected by a sync failure
+		// (Task 5, google.go), only the organiser's calendar may be out of sync.
+		return s.sendGoogleSyncFailedMail(ctx, m, page)
 	default:
 		return fmt.Errorf("bookings: unknown mail:booking kind %q", payload.Kind)
 	}
@@ -559,6 +570,35 @@ func (s *Service) sendBookingReminderMail(ctx context.Context, m *mailer.Mailer,
 			"Location":      location,
 			"ViewURL":       bookingDashboardURL(m.AppURL(), page.ID),
 			"Locale":        "en",
+		},
+	})
+}
+
+// sendGoogleSyncFailedMail sends the organiser a best-effort notice that a Google Calendar sync
+// failed (create/reschedule/cancel — see google.go's googleSyncInsert/Delete/Reschedule, the only
+// callers that enqueue the "sync_failed" kind this handles). Ports sendGoogleSyncFailedNotice
+// (emails.ts): a no-op when the page has no assigned member (nothing to notify), matching the TS
+// source's own `if (!owner) return`. A send failure here is returned like any other kind's, so it
+// gets the same SMTP-hiccup retry every other "mail:booking" send already has — TS's own
+// send-and-swallow (its function has no caller left to report a failure to) isn't available here
+// since this port routes every kind through the same job queue.
+func (s *Service) sendGoogleSyncFailedMail(ctx context.Context, m *mailer.Mailer, page queries.BookingPage) error {
+	if !page.MemberUserID.Valid {
+		return nil
+	}
+	owner, err := s.q.GetUser(ctx, page.MemberUserID.Int64)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return m.Send(ctx, mailer.Message{
+		To:       owner.Email,
+		Template: "booking_sync_failed",
+		Data: map[string]any{
+			"PageTitle": page.Title,
 		},
 	})
 }

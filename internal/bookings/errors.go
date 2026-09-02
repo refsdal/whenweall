@@ -24,13 +24,13 @@ import (
 //	SLOT_UNAVAILABLE      ErrSlotTaken            Task 3 (bookings.ts's createBooking)
 //	PAGE_PAUSED           ErrPagePaused           Task 3
 //	BOOKING_PAST          ErrBookingPast          Task 3
-//	(no direct TS code — a   ErrGoogleNotConnected  Task 3 (google-sync.ts)
+//	(no direct TS code — a   ErrGoogleNotConnected  Task 5 (google.go), google-sync.ts
 //	 write attempted with
 //	 no Google connection)
 //
-// ErrSlotTaken/ErrPagePaused/ErrBookingPast/ErrGoogleNotConnected are declared now, ahead of Task
-// 3 actually returning them, per this task's brief: conflict sentinels are named up front rather
-// than added piecemeal as each task needs one.
+// ErrSlotTaken/ErrPagePaused/ErrBookingPast/ErrGoogleNotConnected are declared now, ahead of the
+// tasks actually returning them (3 for the first three, 5 for the last), per this task's brief:
+// conflict sentinels are named up front rather than added piecemeal as each task needs one.
 var (
 	// ErrForbidden is returned when the caller is authenticated but not allowed to act on a page's
 	// contents (role/creator checks). A page belonging to a DIFFERENT org maps to ErrNotFound
@@ -69,8 +69,8 @@ var (
 	// already passed. TS: BOOKING_PAST.
 	ErrBookingPast = fmt.Errorf("%w: booking start is in the past", ErrConflict)
 
-	// ErrGoogleNotConnected wraps ErrConflict: Task 3's Google Calendar sync path was invoked for a
-	// page/member with no usable Google connection.
+	// ErrGoogleNotConnected wraps ErrConflict: Task 5's Google Calendar sync path (google.go) was
+	// invoked for a page/member with no usable Google connection.
 	ErrGoogleNotConnected = fmt.Errorf("%w: google calendar is not connected", ErrConflict)
 )
 

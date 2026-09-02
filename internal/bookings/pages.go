@@ -25,11 +25,25 @@ import (
 type Service struct {
 	db *sql.DB
 	q  *queries.Queries
+
+	// google is nil ("sync off") unless SetGoogleSync wires in a real one (NewGoogleSync,
+	// google.go) — every Google-touching code path in this package treats a nil google exactly
+	// like a page with googleSync off, so PublicAvailability/Book/Cancel/Reschedule behave
+	// unchanged for every existing caller/test that never calls SetGoogleSync.
+	google GoogleSync
 }
 
-// NewService builds a Service bound to sqlDB.
+// NewService builds a Service bound to sqlDB, with Google Calendar sync off (see SetGoogleSync).
 func NewService(sqlDB *sql.DB) *Service {
 	return &Service{db: sqlDB, q: queries.New(sqlDB)}
+}
+
+// SetGoogleSync wires g (typically NewGoogleSync's result) into s. A setter rather than a
+// NewService parameter so every existing call site — production wiring not yet built, and every
+// test that predates Task 5 — keeps compiling and behaving unchanged; g may be nil (sync stays
+// off), the same value NewGoogleSync itself returns when the capability isn't configured.
+func (s *Service) SetGoogleSync(g GoogleSync) {
+	s.google = g
 }
 
 // isSlugConflict reports whether err is a raw Postgres unique-violation on the partial unique

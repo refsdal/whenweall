@@ -18,6 +18,7 @@ require (
 	github.com/thecodearcher/limen/plugins/organization v0.1.1-0.20260813001613-c6a34aa6dcb4
 	github.com/thecodearcher/limen/plugins/two-factor v0.2.1-0.20260813001613-c6a34aa6dcb4
 	github.com/wneessen/go-mail v0.8.1
+	golang.org/x/oauth2 v0.35.0
 )
 
 require (
@@ -79,7 +80,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

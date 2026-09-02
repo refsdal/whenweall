@@ -211,6 +211,36 @@ func (q *Queries) GetBookingPageForUpdate(ctx context.Context, id string) (Booki
 	return i, err
 }
 
+const getGoogleAccount = `-- name: GetGoogleAccount :one
+SELECT id, access_token, refresh_token, access_token_expires_at
+FROM accounts
+WHERE user_id = $1 AND provider = 'google'
+ORDER BY id
+LIMIT 1
+`
+
+type GetGoogleAccountRow struct {
+	ID                   int64
+	AccessToken          string
+	RefreshToken         sql.NullString
+	AccessTokenExpiresAt sql.NullTime
+}
+
+// The linked Google account row backing a page's member — google.go's own token store. Limen owns
+// this table (migrations/00002_auth.sql); this package only ever reads/refreshes the one row a
+// Google Calendar sync needs, never any other provider's row.
+func (q *Queries) GetGoogleAccount(ctx context.Context, userID int64) (GetGoogleAccountRow, error) {
+	row := q.db.QueryRowContext(ctx, getGoogleAccount, userID)
+	var i GetGoogleAccountRow
+	err := row.Scan(
+		&i.ID,
+		&i.AccessToken,
+		&i.RefreshToken,
+		&i.AccessTokenExpiresAt,
+	)
+	return i, err
+}
+
 const getOrganization = `-- name: GetOrganization :one
 SELECT id, name, slug, logo, metadata, created_at, updated_at FROM organizations WHERE id = $1
 `
@@ -558,6 +588,25 @@ func (q *Queries) SoftDeleteBookingPage(ctx context.Context, arg SoftDeleteBooki
 	return err
 }
 
+const updateBookingGoogleEventID = `-- name: UpdateBookingGoogleEventID :exec
+
+UPDATE bookings SET google_event_id = $2, updated_at = $3 WHERE id = $1
+`
+
+type UpdateBookingGoogleEventIDParams struct {
+	ID            string
+	GoogleEventID sql.NullString
+	UpdatedAt     time.Time
+}
+
+// Task 5 (Google Calendar sync) queries below.
+// Persists (or clears, when null) the booking's known Google Calendar event id. See
+// Service.SetGoogleEventID (google.go).
+func (q *Queries) UpdateBookingGoogleEventID(ctx context.Context, arg UpdateBookingGoogleEventIDParams) error {
+	_, err := q.db.ExecContext(ctx, updateBookingGoogleEventID, arg.ID, arg.GoogleEventID, arg.UpdatedAt)
+	return err
+}
+
 const updateBookingPage = `-- name: UpdateBookingPage :exec
 UPDATE booking_pages SET
   slug = $2,
@@ -659,6 +708,33 @@ func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStat
 		arg.ID,
 		arg.Status,
 		arg.CancelledBy,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const updateGoogleAccountToken = `-- name: UpdateGoogleAccountToken :exec
+UPDATE accounts
+SET access_token = $2, refresh_token = $3, access_token_expires_at = $4, updated_at = $5
+WHERE id = $1
+`
+
+type UpdateGoogleAccountTokenParams struct {
+	ID                   int64
+	AccessToken          string
+	RefreshToken         sql.NullString
+	AccessTokenExpiresAt sql.NullTime
+	UpdatedAt            time.Time
+}
+
+// Persists a refreshed access (and, when Google issued a new one, refresh) token back onto the
+// account row google.go just refreshed it from.
+func (q *Queries) UpdateGoogleAccountToken(ctx context.Context, arg UpdateGoogleAccountTokenParams) error {
+	_, err := q.db.ExecContext(ctx, updateGoogleAccountToken,
+		arg.ID,
+		arg.AccessToken,
+		arg.RefreshToken,
+		arg.AccessTokenExpiresAt,
 		arg.UpdatedAt,
 	)
 	return err
