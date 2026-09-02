@@ -16,6 +16,7 @@ func TestMigrationsCreateInfraTables(t *testing.T) {
 		"polls", "poll_options", "participants", "votes", "comments",
 		"notification_prefs", "notification_subscriptions",
 		"booking_pages", "bookings",
+		"admin_audit_log",
 	} {
 		var n int
 		err := d.QueryRowContext(context.Background(),
