@@ -2,7 +2,12 @@ package polls
 
 // Ports src/server/polls/ics.ts (mapping a poll's finalized option to a calendar event) fused with
 // src/lib/ics.ts's buildIcs (the actual VCALENDAR/VEVENT string builder) — Go has no shared
-// frontend/worker "lib" package to split the two across, so both live in this one file.
+// frontend/worker "lib" package to split the two across, so both live in this one file. The
+// RFC 5545 mechanics themselves (escaping, line folding, the basic date/date-time formats, and
+// the VCALENDAR wrapper) live in internal/ics — this file's own job is just mapping a poll's
+// finalized option to that shared core's event-line shape (buildVeventLines below); see triage
+// 3's own refactor (internal/ics's package doc comment) for why bookings' ics.go now shares it
+// too instead of each carrying its own copy of the same rules ported from the same TS source.
 //
 // Deviation from the brief's literal signature: BuildPollICS takes an extra pollURL parameter
 // (the caller's already-computed absolute URL, e.g. `${APP_URL}/p/{id}`) that the brief's pinned
@@ -15,14 +20,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
+	"github.com/refsdal/whenweall/internal/ics"
 	"github.com/refsdal/whenweall/internal/polls/queries"
 )
-
-// icsLineLimit is RFC 5545's 75-octet line-length cap (CRLF excluded) that foldLine enforces.
-const icsLineLimit = 75
 
 // icsStart mirrors ics.ts's IcsStart union: either an all-day date, or a timed start with an
 // optional explicit end.
@@ -69,126 +71,39 @@ type icsEvent struct {
 	start       icsStart
 }
 
-// formatUTCBasic renders t in UTC as iCalendar's basic date-time form, e.g. "20260901T163000Z".
-func formatUTCBasic(t time.Time) string {
-	return t.UTC().Format("20060102T150405Z")
-}
-
-// formatDateBasic renders an all-day date's start as iCalendar's basic date form, e.g. "20260901".
-func formatDateBasic(t time.Time) string {
-	return t.UTC().Format("20060102")
-}
-
-// nextDayBasic renders the day after t's (UTC) date in basic date form — DTEND for an all-day
-// event is exclusive per RFC 5545, so a one-day event's DTEND is the following date.
-func nextDayBasic(t time.Time) string {
-	return t.UTC().AddDate(0, 0, 1).Format("20060102")
-}
-
-// icsEscaper escapes the four characters iCalendar TEXT values must escape, in the same order as
-// ics.ts's escapeText: backslash first (so later escapes' own backslashes aren't re-escaped),
-// then semicolon, comma, and newline. strings.Replacer applies all pairs in a single left-to-right
-// pass over the *original* string, which — since none of these four patterns can appear inside
-// another's replacement — is equivalent to the TS chain of four sequential .replace() calls.
-var icsEscaper = strings.NewReplacer(
-	`\`, `\\`,
-	`;`, `\;`,
-	`,`, `\,`,
-	"\n", `\n`,
-)
-
-func escapeText(s string) string {
-	return icsEscaper.Replace(s)
-}
-
-// foldLine ports ics.ts's foldLine: RFC 5545 caps a content line at 75 octets (CRLF excluded);
-// a longer line is split into that line plus continuation lines, each joined by "\r\n " (a CRLF
-// followed by a single leading space, which iCalendar readers know to strip and rejoin). The
-// first continuation's octet budget is one less than the first line's, since the leading space
-// that will precede it on rejoining still counts against the 75-octet cap for that physical line.
-func foldLine(line string) string {
-	if len(line) <= icsLineLimit {
-		return line
-	}
-
-	var chunks []string
-	var current strings.Builder
-	currentBytes := 0
-
-	for _, r := range line {
-		char := string(r)
-		charBytes := len(char)
-		limit := icsLineLimit
-		if len(chunks) > 0 {
-			limit = icsLineLimit - 1
-		}
-		if currentBytes+charBytes > limit {
-			chunks = append(chunks, current.String())
-			current.Reset()
-			currentBytes = 0
-		}
-		current.WriteString(char)
-		currentBytes += charBytes
-	}
-	if current.Len() > 0 {
-		chunks = append(chunks, current.String())
-	}
-
-	return strings.Join(chunks, "\r\n ")
-}
-
 // buildVeventLines ports buildVevent (ics.ts): the BEGIN:VEVENT..END:VEVENT lines for one event,
-// unfolded (foldLine is applied once, package-wide, over every line in buildIcsCalendar).
+// unfolded (internal/ics's BuildCalendar folds every line, package-wide, over the whole
+// VCALENDAR — header and footer included, not just this VEVENT).
 func buildVeventLines(e icsEvent, now time.Time) []string {
 	var dtstart, dtend string
 	if e.start.isDate {
-		dtstart = "DTSTART;VALUE=DATE:" + formatDateBasic(e.start.date)
-		dtend = "DTEND;VALUE=DATE:" + nextDayBasic(e.start.date)
+		dtstart = "DTSTART;VALUE=DATE:" + ics.FormatDateBasic(e.start.date)
+		dtend = "DTEND;VALUE=DATE:" + ics.NextDayBasic(e.start.date)
 	} else {
 		end := e.start.endDateTime
 		if !e.start.hasEnd {
 			end = e.start.dateTime.Add(time.Hour)
 		}
-		dtstart = "DTSTART:" + formatUTCBasic(e.start.dateTime)
-		dtend = "DTEND:" + formatUTCBasic(end)
+		dtstart = "DTSTART:" + ics.FormatUTCBasic(e.start.dateTime)
+		dtend = "DTEND:" + ics.FormatUTCBasic(end)
 	}
 
 	lines := []string{
 		"BEGIN:VEVENT",
-		"UID:" + escapeText(e.uid),
-		"DTSTAMP:" + formatUTCBasic(now),
+		"UID:" + ics.EscapeText(e.uid),
+		"DTSTAMP:" + ics.FormatUTCBasic(now),
 		dtstart,
 		dtend,
-		"SUMMARY:" + escapeText(e.title),
+		"SUMMARY:" + ics.EscapeText(e.title),
 	}
 	if e.description != "" {
-		lines = append(lines, "DESCRIPTION:"+escapeText(e.description))
+		lines = append(lines, "DESCRIPTION:"+ics.EscapeText(e.description))
 	}
 	if e.location != "" {
-		lines = append(lines, "LOCATION:"+escapeText(e.location))
+		lines = append(lines, "LOCATION:"+ics.EscapeText(e.location))
 	}
-	lines = append(lines, "URL:"+escapeText(e.url), "END:VEVENT")
+	lines = append(lines, "URL:"+ics.EscapeText(e.url), "END:VEVENT")
 	return lines
-}
-
-// buildIcsCalendar ports buildIcs (ics.ts): one VCALENDAR wrapping a single VEVENT, CRLF line
-// endings throughout (each line folded to RFC 5545's 75-octet cap), with a trailing CRLF.
-func buildIcsCalendar(e icsEvent, now time.Time) string {
-	lines := []string{
-		"BEGIN:VCALENDAR",
-		"VERSION:2.0",
-		"PRODID:-//whenweall//EN",
-		"CALSCALE:GREGORIAN",
-		"METHOD:PUBLISH",
-	}
-	lines = append(lines, buildVeventLines(e, now)...)
-	lines = append(lines, "END:VCALENDAR")
-
-	folded := make([]string, len(lines))
-	for i, l := range lines {
-		folded[i] = foldLine(l)
-	}
-	return strings.Join(folded, "\r\n") + "\r\n"
 }
 
 // BuildPollICS builds the .ics file for pollID's finalized option, with the VEVENT's URL property
@@ -197,7 +112,7 @@ func buildIcsCalendar(e icsEvent, now time.Time) string {
 // poll is missing/soft-deleted, isn't finalized, its finalized option is gone, or the finalized
 // option is a plain-text option with no calendar meaning; ports buildPollIcs's own "return null"
 // cases (ics.ts) plus the filename the caller attaches it under.
-func BuildPollICS(ctx context.Context, q *queries.Queries, pollID, pollURL string) (filename string, ics []byte, err error) {
+func BuildPollICS(ctx context.Context, q *queries.Queries, pollID, pollURL string) (filename string, calendar []byte, err error) {
 	poll, err := q.GetPoll(ctx, pollID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, nil
@@ -242,6 +157,5 @@ func BuildPollICS(ctx context.Context, q *queries.Queries, pollID, pollURL strin
 		event.location = poll.Location.String
 	}
 
-	body := buildIcsCalendar(event, time.Now())
-	return "calendar.ics", []byte(body), nil
+	return "calendar.ics", ics.BuildCalendar(buildVeventLines(event, time.Now())), nil
 }

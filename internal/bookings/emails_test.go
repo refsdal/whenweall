@@ -551,7 +551,7 @@ func TestMailBookingDeliversRealMail(t *testing.T) {
 	// emails.go's own doc comment on the conscious call this is) — this port's mail always goes
 	// through the async "mail:booking" job (never Book's own return value directly), so this also
 	// proves the job independently re-derives the SAME token from the booking id alone. Unfolded
-	// first (RFC 5545 line folding, icsFoldLine/ics.go): the token pushes this one property line
+	// first (RFC 5545 line folding, internal/ics's FoldLine): the token pushes this one property line
 	// past 75 octets, so the raw wire form now legitimately splits it across a "\r\n " fold this
 	// plain Contains would otherwise miss.
 	wantURL := m.AppURL() + "/booking/" + result.BookingID + "?t=" + result.ManageToken
