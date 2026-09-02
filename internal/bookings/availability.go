@@ -130,6 +130,18 @@ func Slots(rules PageRules, booked []Interval, now, from, to time.Time) []time.T
 	latestEnd := now.Add(time.Duration(rules.MaxDaysAhead) * 24 * time.Hour)
 	slotDuration := time.Duration(rules.SlotDurationMin) * time.Minute
 
+	// horizonDateStr is a defensive cap on the outer day loop below, independent of how large a
+	// window [from, to] a caller passes in (handlePublicAvailability, handlers.go, rejects an
+	// overlong one before it ever reaches here — I3 — but Slots is exported and callable
+	// directly, so it doesn't rely on that alone): no slot dated beyond rules.MaxDaysAhead+1 days
+	// from now can ever pass the per-slot `end.After(latestEnd)` check below, so once dateStr
+	// walks past that point every remaining day in [from, to] is guaranteed dead weight — a
+	// months- or years-long window would otherwise still cost one loop iteration (and a map
+	// lookup) per day for no slot it could ever emit. The +1 (rather than exactly MaxDaysAhead)
+	// gives the last legitimate range's own late-evening slots room to still fall on-or-before
+	// latestEnd even after their day's own local-to-UTC conversion.
+	horizonDateStr := localDateStr(now.Add(time.Duration(rules.MaxDaysAhead+1)*24*time.Hour), loc)
+
 	type key struct {
 		start, end int64
 	}
@@ -138,6 +150,9 @@ func Slots(rules PageRules, booked []Interval, now, from, to time.Time) []time.T
 
 	for i := 0; i <= spanDays; i++ {
 		dateStr := addDaysToDateStr(fromDateStr, i)
+		if dateStr > horizonDateStr {
+			break
+		}
 		ranges, ok := rules.DateOverrides[dateStr]
 		if !ok {
 			ranges = rules.Availability[weekdayKey(dateStr)]

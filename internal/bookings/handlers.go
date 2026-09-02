@@ -31,6 +31,7 @@ package bookings
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -413,6 +414,14 @@ func (s *Service) handleGetPublicPage(w http.ResponseWriter, r *http.Request) {
 // trusting PublicAvailability's own (nil, nil) return) because Slots (availability.go) can
 // legitimately return an empty/nil slot list for a perfectly valid page too — GetPublicPage's own
 // nil is the only unambiguous "no such page" signal.
+//
+// I3: ports publicAvailabilityQuerySchema's own window refinement (schemas.ts) — `to` before
+// `from`, or a span past LimitPublicWindowDays (62 days), is rejected with the standard 400
+// "invalid" envelope (field "to", mirroring the TS source's own `path: ['to']`) before
+// PublicAvailability ever runs a query against it. Without this cap a caller could ask for an
+// arbitrarily large window (say, 50 years) and force PublicAvailability/Slots to walk every day
+// in it — Slots (availability.go) now also has its own defensive horizon break as a second line
+// of defense, but this is the cheap rejection that should catch it first.
 func (s *Service) handlePublicAvailability(w http.ResponseWriter, r *http.Request) {
 	orgSlug, pageSlug := r.PathValue("org"), r.PathValue("page")
 	page, err := s.GetPublicPage(r.Context(), orgSlug, pageSlug)
@@ -431,6 +440,12 @@ func (s *Service) handlePublicAvailability(w http.ResponseWriter, r *http.Reques
 	}
 	to, ok := parseQueryTime(w, r, "to")
 	if !ok {
+		return
+	}
+	if to.Before(from) || to.Sub(from) > LimitPublicWindowDays*24*time.Hour {
+		httpserver.Err(w, http.StatusBadRequest, "invalid",
+			fmt.Sprintf("window must be between 0 and %d days", LimitPublicWindowDays),
+			map[string]string{"to": fmt.Sprintf("window must be between 0 and %d days", LimitPublicWindowDays)})
 		return
 	}
 

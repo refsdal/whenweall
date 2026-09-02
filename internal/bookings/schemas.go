@@ -33,6 +33,9 @@ const (
 	LimitNote  = 1000
 	LimitName  = 80
 	LimitEmail = 254
+	// LimitPublicWindowDays ports LIMITS.publicWindowDays (schemas.ts) — the widest [from, to]
+	// span handlePublicAvailability accepts (handlers.go); see that handler's own doc comment.
+	LimitPublicWindowDays = 62
 )
 
 var (

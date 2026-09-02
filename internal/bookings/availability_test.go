@@ -351,6 +351,45 @@ func TestSlots(t *testing.T) {
 			t.Errorf("slots = %v, want empty", slots)
 		}
 	})
+
+	// I3: a defensive horizon break — independent of handlePublicAvailability's own [from, to]
+	// window cap (handlers.go), which a caller going through Slots directly (as this test does)
+	// never passes through at all. Without it, a `to` decades out would still walk one iteration
+	// per day for the whole span even though every day past MaxDaysAhead+1 can never produce a
+	// slot; this proves both that it terminates quickly and that it still returns exactly the
+	// slots a bounded window would.
+	t.Run("caps iteration at a defensive horizon for a huge [from, to] window", func(t *testing.T) {
+		rules := baseRules(func(r *bookings.PageRules) {
+			r.MaxDaysAhead = 60
+			r.Availability = bookings.Availability{"1": {rangeOf("09:00", "09:30")}} // every Monday
+		})
+		now := mustUTC(t, "2026-01-01T00:00:00Z")
+		from := atNoonUTC(t, "2026-01-01")
+		to := from.AddDate(50, 0, 0) // 50 years out — impossible to fully walk in a unit test's own budget
+
+		start := time.Now()
+		slots := bookings.Slots(rules, nil, now, from, to)
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("Slots took %v, want it capped well under the 50-year span", elapsed)
+		}
+
+		// Only Mondays within [now, now+61 days] can appear — 2026-01-05, 01-12, 01-19, 01-26,
+		// 02-02, 02-09, 02-16, 02-23 (2026-03-01/03-02 already past MaxDaysAhead=60).
+		got := slotStarts(t, slots)
+		want := []string{
+			"2026-01-05T09:00:00.000Z", "2026-01-12T09:00:00.000Z", "2026-01-19T09:00:00.000Z",
+			"2026-01-26T09:00:00.000Z", "2026-02-02T09:00:00.000Z", "2026-02-09T09:00:00.000Z",
+			"2026-02-16T09:00:00.000Z", "2026-02-23T09:00:00.000Z",
+		}
+		if len(got) != len(want) {
+			t.Fatalf("starts = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("starts[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
 }
 
 func TestIsSlotAvailable(t *testing.T) {
