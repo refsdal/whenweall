@@ -42,6 +42,15 @@ const (
 // Run always returns ctx.Err() (nil is never a possible return): the only way out of its loop is
 // ctx ending, whether that happens before the first connection attempt or in the middle of one.
 func (h *Hub) Run(ctx context.Context) error {
+	// Presence's boot sweep and heartbeat (presence.go) are wired in here, not because they have
+	// anything to do with the LISTEN session this function otherwise manages, but because Run is
+	// this Hub's one "I am now alive as a replica" entry point — the natural place to start and
+	// stop them alongside everything else this process does for as long as ctx lives.
+	if err := h.presenceBootSweep(ctx); err != nil {
+		h.log.Error("rooms: presence boot sweep", "replica_id", h.replicaID, "error", err)
+	}
+	go h.presenceHeartbeatLoop(ctx)
+
 	backoff := initialBackoff
 	reconnecting := false
 
