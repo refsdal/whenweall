@@ -12,7 +12,7 @@ func TestMigrationsCreateInfraTables(t *testing.T) {
 	d := testdb.New(t)
 	for _, table := range []string{
 		"rate_limits", "room_events", "room_state", "scheduled_jobs", "ws_presence",
-		"users", "staff_users",
+		"users", "staff_users", "locked_users",
 		"polls", "poll_options", "participants", "votes", "comments",
 		"notification_prefs", "notification_subscriptions",
 		"booking_pages", "bookings",

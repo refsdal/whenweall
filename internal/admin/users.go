@@ -346,11 +346,47 @@ func UserDetail(ctx context.Context, tx db.DBTX, userID string) (*AdminUserDetai
 	return detail, nil
 }
 
+// ErrSelfTarget is returned by LockUser/DeleteUser when actor's own account is the target — see
+// writeCannotTargetSelf (handlers.go) for why the HTTP layer turns this into a 400 "invalid"
+// rather than a 403. Living here, on the service funcs themselves (M4), rather than only as a
+// string comparison in the HTTP handler, means a caller that reaches LockUser/DeleteUser directly
+// (any future one — today's handlers.go is the only caller) still gets the guard, not just the
+// one call site that happens to check it first.
+var ErrSelfTarget = errors.New("admin: actor cannot target their own account")
+
+// sameUserID reports whether a and b — both stringified bigint user ids (an auth.Session.UserID
+// or a path {id} value) — refer to the same underlying id once parsed, rather than comparing the
+// strings byte-for-byte. A byte-for-byte compare is what the self-target guard used before this
+// (M4's own bug): net/http's ServeMux never normalizes a {id} wildcard's value, and
+// strconv.ParseInt(..., 10, 64) is perfectly happy to accept a leading zero, so a staff member
+// could self-target by padding their own id ("007" for actor id "7") — same underlying user,
+// different string, the old guard silently skipped. An id that fails to parse is never treated as
+// a self-match (conservative: an unparseable id 404s further down in requireExistingUser instead
+// of being waved through here as "obviously not a self-match").
+func sameUserID(a, b string) bool {
+	aID, aErr := strconv.ParseInt(a, 10, 64)
+	if aErr != nil {
+		return false
+	}
+	bID, bErr := strconv.ParseInt(b, 10, 64)
+	if bErr != nil {
+		return false
+	}
+	return aID == bID
+}
+
 // LockUser flags userID as locked (audited, in the same tx) and then revokes their existing Limen
 // sessions through the auth seam — see migrations/00007_admin_locks.sql's doc comment for why both
 // halves matter. authSvc may be nil in a test that only cares about the lock/audit row itself; a
 // nil authSvc simply skips the revoke.
 func LockUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *auth.Session, userID, reason string) error {
+	if actor == nil {
+		return errors.New("admin: LockUser requires a non-nil actor session")
+	}
+	if sameUserID(actor.UserID, userID) {
+		return ErrSelfTarget
+	}
+
 	uid, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
 		return fmt.Errorf("admin: invalid user id %q: %w", userID, err)
@@ -369,7 +405,7 @@ func LockUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *
 		return fmt.Errorf("admin: locking user %s: %w", userID, err)
 	}
 
-	if err := Record(ctx, tx, actor, "lock-user", "user", userID, reason, nil); err != nil {
+	if err := Record(ctx, tx, actor, ActionLockUser, "user", userID, reason, nil); err != nil {
 		return fmt.Errorf("admin: recording audit for lock-user: %w", err)
 	}
 
@@ -409,7 +445,7 @@ func UnlockUser(ctx context.Context, sqlDB *sql.DB, actor *auth.Session, userID,
 		return fmt.Errorf("admin: unlocking user %s: %w", userID, err)
 	}
 
-	if err := Record(ctx, tx, actor, "unlock-user", "user", userID, reason, nil); err != nil {
+	if err := Record(ctx, tx, actor, ActionUnlockUser, "user", userID, reason, nil); err != nil {
 		return fmt.Errorf("admin: recording audit for unlock-user: %w", err)
 	}
 
@@ -425,6 +461,13 @@ func UnlockUser(ctx context.Context, sqlDB *sql.DB, actor *auth.Session, userID,
 // null via their own ON DELETE SET NULL — this function never touches those rows itself, exactly
 // as personal-org.ts's own doc comment describes for the TS original.
 func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *auth.Session, userID, reason string) error {
+	if actor == nil {
+		return errors.New("admin: DeleteUser requires a non-nil actor session")
+	}
+	if sameUserID(actor.UserID, userID) {
+		return ErrSelfTarget
+	}
+
 	uid, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
 		return fmt.Errorf("admin: invalid user id %q: %w", userID, err)
@@ -471,7 +514,7 @@ func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor
 		return fmt.Errorf("admin: no user with id %q", userID)
 	}
 
-	if err := Record(ctx, tx, actor, "delete-user", "user", userID, reason, nil); err != nil {
+	if err := Record(ctx, tx, actor, ActionDeleteUser, "user", userID, reason, nil); err != nil {
 		return fmt.Errorf("admin: recording audit for delete-user: %w", err)
 	}
 

@@ -69,10 +69,36 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	// Fails closed: a lock control that fails open on its own query error (treating "couldn't
 	// tell" as "not locked") defeats the point of having it, so an error here is treated the same
 	// as "locked" — the request is anonymous — rather than falling through to a normal session.
-	if locked, err := s.isUserLocked(r.Context(), validated.User.ID); err != nil {
-		s.logger.Error("auth: locked_users check failed; treating session as anonymous", "user_id", fmt.Sprint(validated.User.ID), "error", err)
+	//
+	// This runs as one query with the staff_users check below (two EXISTS subselects, one round
+	// trip) rather than two separate ones — folded together since both are per-request lookups
+	// keyed on the same validated.User.ID, with no reason to pay for two round trips instead of
+	// one. The two checks fail differently on their own, though (asymmetric on purpose, not an
+	// oversight of the fold): a locked_users error must fail CLOSED (deny — see above), while a
+	// staff_users error has always failed to false (an ordinary, non-staff session, not an error
+	// the caller has to handle — RequireStaff's own 403 already covers "not staff" whether that's
+	// because the row is genuinely absent or because this query couldn't tell). Combined into one
+	// query, though, an error is one error for both columns at once — there is no scanning "only
+	// the locked column failed." Resolving that the same way locked_users' own asymmetry already
+	// requires — fail closed — is what the switch below does: a query error blanks the whole
+	// session (anonymous), which satisfies locked_users' fail-closed contract outright, and, as a
+	// side effect, also can never leave staff looking true on an error (an anonymous request has
+	// no Staff field for any caller to read at all) — it just does so via a stricter path (no
+	// session) than staff_users' own the-row-must-be-missing-or-existing "fails to false" used to
+	// take on its own (a valid, non-staff session). That's a real behavior change for a
+	// staff_users-only failure (previously: a normal non-staff session; now: anonymous) — one
+	// judged acceptable because it's still no less safe (RequireStaff already denies both), and no
+	// existing test exercises that exact failure mode in isolation.
+	var locked, staff bool
+	switch err := s.db.QueryRowContext(r.Context(), `
+		SELECT
+			EXISTS(SELECT 1 FROM locked_users WHERE user_id = $1),
+			EXISTS(SELECT 1 FROM staff_users WHERE user_id = $1)
+	`, validated.User.ID).Scan(&locked, &staff); {
+	case err != nil:
+		s.logger.Error("auth: locked_users/staff_users check failed; treating session as anonymous", "user_id", fmt.Sprint(validated.User.ID), "error", err)
 		return nil
-	} else if locked {
+	case locked:
 		return nil
 	}
 
@@ -88,6 +114,7 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	sess := &Session{
 		UserID: fmt.Sprint(validated.User.ID),
 		Email:  validated.User.Email,
+		Staff:  staff,
 	}
 
 	// Every authenticated request is where the personal-org invariant gets enforced (lazily,
@@ -125,22 +152,16 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 		}
 	}
 
-	var staff bool
-	if err := s.db.QueryRowContext(r.Context(),
-		"SELECT EXISTS(SELECT 1 FROM staff_users WHERE user_id = $1)", validated.User.ID,
-	).Scan(&staff); err == nil {
-		sess.Staff = staff
-	}
-
 	return sess
 }
 
 // isUserLocked reports whether userID (Limen's `any` user id, same value resolveSession scans
-// off validated.User.ID) has a locked_users row. Shared by resolveSession (which treats a locked
-// user as anonymous for this application's own handlers) and LockedSessionMiddleware below (which
-// blocks a locked user from Limen's own mounted routes directly) — one query, one place that knows
-// its shape, rather than two copies drifting apart. Callers, not this helper, decide how to fail on
-// err != nil; both existing callers fail closed (treat "couldn't tell" as locked).
+// off validated.User.ID) has a locked_users row. Used by LockedSessionMiddleware below, which only
+// ever needs the lock half of resolveSession's own combined locked_users/staff_users query (that
+// query folds both into one round trip for its own reasons — see its doc comment — but this
+// middleware has no use for the staff flag at all, so there is no reason to fold it in here too).
+// The caller, not this helper, decides how to fail on err != nil; LockedSessionMiddleware fails
+// closed (treats "couldn't tell" as locked), matching resolveSession's own locked_users half.
 func (s *Service) isUserLocked(ctx context.Context, userID any) (bool, error) {
 	var locked bool
 	err := s.db.QueryRowContext(ctx,

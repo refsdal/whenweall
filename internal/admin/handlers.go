@@ -216,18 +216,30 @@ func handleLockUser(sqlDB *sql.DB, authSvc *auth.Service) http.HandlerFunc {
 			return
 		}
 		id := r.PathValue("id")
-		reason, ok := decodeReason(w, r)
-		if !ok {
+		// The self-target check runs before decodeReason (M11): a self-lock request with a blank
+		// reason must surface "you cannot lock your own account", not "reason is required" — the
+		// self-target condition is the one that can never succeed no matter what reason is
+		// supplied, so it wins. sameUserID (users.go) compares PARSED ids, not the raw path
+		// string, so a padded id ("007" for actor id "7") is still caught (M4).
+		if sameUserID(actor.UserID, id) {
+			writeCannotTargetSelf(w, "lock")
 			return
 		}
-		if id == actor.UserID {
-			writeCannotTargetSelf(w, "lock")
+		reason, ok := decodeReason(w, r)
+		if !ok {
 			return
 		}
 		if _, ok := requireExistingUser(w, r, sqlDB, id); !ok {
 			return
 		}
 		if err := LockUser(r.Context(), sqlDB, authSvc, actor, id, reason); err != nil {
+			// Defense in depth, not the primary path: LockUser's own sameUserID guard would catch
+			// a self-target here too (same comparison as above), reachable in practice only if a
+			// future caller reaches LockUser directly without going through this check first.
+			if errors.Is(err, ErrSelfTarget) {
+				writeCannotTargetSelf(w, "lock")
+				return
+			}
 			writeInternalError(w, err)
 			return
 		}
@@ -264,18 +276,25 @@ func handleDeleteUser(sqlDB *sql.DB, authSvc *auth.Service) http.HandlerFunc {
 			return
 		}
 		id := r.PathValue("id")
-		reason, ok := decodeReason(w, r)
-		if !ok {
+		// See handleLockUser's identical guard for why this runs before decodeReason (M11) and
+		// compares parsed ids via sameUserID rather than the raw path string (M4).
+		if sameUserID(actor.UserID, id) {
+			writeCannotTargetSelf(w, "delete")
 			return
 		}
-		if id == actor.UserID {
-			writeCannotTargetSelf(w, "delete")
+		reason, ok := decodeReason(w, r)
+		if !ok {
 			return
 		}
 		if _, ok := requireExistingUser(w, r, sqlDB, id); !ok {
 			return
 		}
 		if err := DeleteUser(r.Context(), sqlDB, authSvc, actor, id, reason); err != nil {
+			// Defense in depth — see handleLockUser's identical comment.
+			if errors.Is(err, ErrSelfTarget) {
+				writeCannotTargetSelf(w, "delete")
+				return
+			}
 			writeInternalError(w, err)
 			return
 		}
@@ -390,12 +409,13 @@ func handleRetryJob(sqlDB *sql.DB) http.HandlerFunc {
 			writeInternalError(w, err)
 			return
 		}
-		// "job.retry" is this route's own audit action (the brief's naming, distinct from
-		// users.go's "lock-user"/"unlock-user"/"delete-user" hyphenated convention) — target type
+		// ActionJobRetry ("job.retry", audit.go) is this route's own audit action — dotted, unlike
+		// users.go's hyphenated ActionLockUser/ActionUnlockUser/ActionDeleteUser (see ActionJobRetry's
+		// own doc comment for why that inconsistency is frozen, not a bug to fix). Target type
 		// "job", targetID the scheduled_jobs row's own id. No reason: a retry is never asked to
 		// justify itself the way a lock/unlock/delete is (there is nothing to weigh against a
 		// user's rights — it only resumes work the system itself already scheduled).
-		if err := Record(r.Context(), tx, actor, "job.retry", "job", id, "", nil); err != nil {
+		if err := Record(r.Context(), tx, actor, ActionJobRetry, "job", id, "", nil); err != nil {
 			writeInternalError(w, err)
 			return
 		}

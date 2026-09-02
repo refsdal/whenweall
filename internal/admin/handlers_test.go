@@ -373,6 +373,90 @@ func TestHandleLockUser_RejectsSelfTarget(t *testing.T) {
 	}
 }
 
+// TestHandleLockUser_RejectsSelfTargetWithPaddedID is M4's own regression test: the self-target
+// guard used to compare the path {id} against actor.UserID byte-for-byte, so a staff member could
+// self-target by padding their own id with a leading zero (a string ServeMux never normalizes,
+// and strconv.ParseInt happily accepts) — same underlying user, different string, guard skipped.
+func TestHandleLockUser_RejectsSelfTargetWithPaddedID(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	email := "staff-self-lock-padded@example.com"
+	client := staffClient(t, h, email)
+	selfID := userIDByEmail(t, d, email)
+	paddedID := "0" + selfID // same underlying id once parsed; never equal to selfID as a string
+
+	resp := h.requestJSON(t, client, http.MethodPost, "/api/v1/admin/users/"+paddedID+"/lock", map[string]any{"reason": "oops"})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (a padded self-id must still be recognized as self)", resp.StatusCode)
+	}
+
+	var locked bool
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT EXISTS(SELECT 1 FROM locked_users WHERE user_id = $1)`, mustParseUserID(t, selfID),
+	).Scan(&locked); err != nil {
+		t.Fatalf("checking locked_users: %v", err)
+	}
+	if locked {
+		t.Error("padded self-lock request must not actually lock the caller")
+	}
+}
+
+// TestHandleLockUser_SelfTargetWinsOverEmptyReason is M11's own regression test: a self-lock
+// request with a blank reason must report the self-target error, not "reason is required" — the
+// self-target condition is checked first specifically so its message wins.
+func TestHandleLockUser_SelfTargetWinsOverEmptyReason(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	email := "staff-self-lock-empty-reason@example.com"
+	client := staffClient(t, h, email)
+	selfID := userIDByEmail(t, d, email)
+
+	resp := h.requestJSON(t, client, http.MethodPost, "/api/v1/admin/users/"+selfID+"/lock", map[string]any{"reason": ""})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	var body struct {
+		Error struct {
+			Fields map[string]string `json:"fields"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error.Fields["id"] != "self" {
+		t.Errorf(`error.fields = %v, want {"id":"self"} — the self-target message must win over the empty-reason one`, body.Error.Fields)
+	}
+}
+
+// TestHandleDeleteUser_RejectsSelfTargetWithPaddedID mirrors the lock-side padded-id test above
+// for DeleteUser's own guard.
+func TestHandleDeleteUser_RejectsSelfTargetWithPaddedID(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	email := "staff-self-delete-padded@example.com"
+	client := staffClient(t, h, email)
+	selfID := userIDByEmail(t, d, email)
+	paddedID := "0" + selfID
+
+	resp := h.requestJSON(t, client, http.MethodDelete, "/api/v1/admin/users/"+paddedID, map[string]any{"reason": "oops"})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (a padded self-id must still be recognized as self)", resp.StatusCode)
+	}
+
+	var stillExists bool
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, mustParseUserID(t, selfID),
+	).Scan(&stillExists); err != nil {
+		t.Fatalf("checking users: %v", err)
+	}
+	if !stillExists {
+		t.Error("padded self-delete request must not actually delete the caller")
+	}
+}
+
 func TestHandleUnlockUser_UnlocksAndAudits(t *testing.T) {
 	d := testdb.New(t)
 	h := newAdminHTTPHarness(t, d)

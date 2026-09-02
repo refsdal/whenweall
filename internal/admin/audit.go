@@ -42,12 +42,37 @@ type AuditEntry struct {
 	CreatedAt   string          `json:"createdAt"`
 }
 
+// Audit action names — every value Record's own `action` argument is called with across this
+// package, gathered here rather than left as scattered string literals so a caller can compare
+// against (or filter List/Count by) the same constant this package itself writes.
+//
+// The naming is inconsistent on purpose, or rather: it's frozen, not fixed. ActionLockUser/
+// ActionUnlockUser/ActionDeleteUser are hyphenated (users.go's own pre-existing convention, itself
+// with no TS source to match since admin.functions.ts never exposed these at all — this file's own
+// package doc comment); ActionJobRetry is dotted ("job.retry", handlers.go) because that was this
+// task's brief's own literal instruction for that one action, not a value this package chose. Both
+// spellings are already durable: they're what existing admin_audit_log rows contain, and what any
+// caller filtering List/Count by Action already has to match. Renaming either now would mean either
+// living with two spellings for the same action across old and new rows, or a backfill migration —
+// not worth it to make the const block's own casing consistent with itself.
+const (
+	ActionLockUser   = "lock-user"
+	ActionUnlockUser = "unlock-user"
+	ActionDeleteUser = "delete-user"
+	ActionJobRetry   = "job.retry"
+)
+
 // Record writes one audit row in the same transaction as the action it records — see the
 // package's callers, which always pass their own tx rather than the pool. There is deliberately
 // no counterpart that edits or removes a row: the trail is the only thing separating legitimate
 // support access from misuse, so it must not be erasable from inside the application (ports
-// audit.ts's own doc comment, and the "exports no way to change or remove a recorded action" test
-// that guards it in the TS source — mirrored here as TestRecord_HasNoMutatorCounterpart).
+// audit.ts's own doc comment). The TS source guarded this with a reflection test asserting no
+// such mutator was exported; this package has no Go equivalent of that test (audit_test.go's own
+// package doc comment explains why: with no mutator function ever written, its absence is a
+// static fact the compiler already guarantees on every build, not something worth re-verifying at
+// test time by grepping the package's own exported symbols for a specific naming pattern —
+// a check that would be easy to satisfy by accident with a differently-named function, and easy
+// to break by renaming this comment's own vocabulary).
 func Record(ctx context.Context, tx db.DBTX, actor *auth.Session, action, targetType, targetID, reason string, metadata any) error {
 	if actor == nil {
 		return errors.New("admin: Record requires a non-nil actor session")
