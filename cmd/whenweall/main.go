@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -108,6 +109,14 @@ func serve() int {
 	// mutating methods (Create/Finalize/AddParticipant/...) ever run, so no request can reach a
 	// half-wired Service.
 	hub := rooms.NewHub(cfg.DatabaseURL, sqlDB, slog.Default())
+	// OriginPatterns (M8, hub.go's own doc comment): allow-list the app's own configured origin
+	// for the WS handshake's Origin check, on top of (never instead of) Accept's default check
+	// against the request's own Host header — config.Load has already validated cfg.AppURL as an
+	// absolute http(s) URL with a non-empty host by the time serve() ever reaches this line, so
+	// url.Parse succeeding is not defensively re-checked here.
+	if u, err := url.Parse(cfg.AppURL); err == nil && u.Host != "" {
+		hub.OriginPatterns = []string{u.Host}
+	}
 	// Run always returns ctx.Err() (never nil, per its own doc comment) — on an ordinary
 	// SIGINT/SIGTERM shutdown that's just context.Canceled, not a failure worth logging; Run's
 	// own internal logging already covers every real connection/LISTEN problem along the way.

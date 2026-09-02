@@ -81,14 +81,19 @@ type BookingService interface {
 //   - GET /api/v1/polls/{id}/ws — public (a session, a guest participant token, or a fully
 //     anonymous caller may all connect); 404 for a missing/soft-deleted poll. roomKey "poll:"+id.
 //     Presence on. Connect-rate-limited (wsConnectLimit/wsConnectWindow, I5).
-//   - GET /api/v1/bookings/{pageId}/ws — session required (401), and the session's caller must
-//     manage pageId (403) — managers only, mirroring handleListPageBookings's own gate
-//     (handlers.go). roomKey "booking:"+pageId. Presence on. Deliberately NOT wrapped in the same
-//     connect limiter as the two public routes below: this route is already gated behind a
-//     signed-in session that must also manage the target page, a meaningfully higher bar than any
-//     anonymous per-IP budget would add on top of it — its caller is by construction an
-//     authenticated org member, not an anonymous flood vector. A documented decision, not an
-//     oversight.
+//   - GET /api/v1/booking-pages/{pageId}/ws — session required (401), and the session's caller
+//     must manage pageId (403) — managers only, mirroring handleListPageBookings's own gate
+//     (handlers.go). roomKey "booking:"+pageId. Presence OFF (M4): booking-protocol.ts's own
+//     frontend contract has no presence UI for the organiser dashboard this route serves, unlike
+//     the poll room's public viewer count — so there is nothing here to broadcast a count for.
+//     Renamed from /api/v1/bookings/{pageId}/ws (M5) to match this package's own
+//     /api/v1/booking-pages/* REST surface (handlers.go) rather than the /api/v1/bookings/*
+//     namespace that surface reserves for an individual booking's own manage/cancel/reschedule
+//     routes. Deliberately NOT wrapped in the same connect limiter as the two public routes below:
+//     this route is already gated behind a signed-in session that must also manage the target
+//     page, a meaningfully higher bar than any anonymous per-IP budget would add on top of it —
+//     its caller is by construction an authenticated org member, not an anonymous flood vector. A
+//     documented decision, not an oversight.
 //   - GET /api/v1/stats/ws — fully public, no gate at all. roomKey "stats:global". Presence OFF —
 //     a global anonymous counter has no per-viewer identity worth counting, and StatsRoom.ts's
 //     own DO never tracked one either. Connect-rate-limited, same as polls above.
@@ -99,7 +104,7 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 	connectLimit := httpserver.PublicRateLimit(h.sqlDB, "rooms", "ws_connect", wsConnectLimit, wsConnectWindow, cfg.TrustProxy)
 
 	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
-	mux.HandleFunc("GET /api/v1/bookings/{pageId}/ws", bookingWSHandler(h, a, bookings))
+	mux.HandleFunc("GET /api/v1/booking-pages/{pageId}/ws", bookingWSHandler(h, a, bookings))
 	mux.Handle("GET /api/v1/stats/ws", connectLimit(statsWSHandler(h, stats)))
 }
 
@@ -172,7 +177,10 @@ func bookingWSHandler(h *Hub, a httpserver.Auth, svc BookingService) http.Handle
 				sess, _ := a.FromContext(ctx)
 				return svc.BookingSnapshot(ctx, pageID, sess.ActiveOrgID)
 			},
-			Presence: true,
+			// Presence OFF (M4) — see Register's own doc comment for why: the organiser dashboard
+			// this route serves has no presence UI to feed, unlike the poll room's public viewer
+			// count.
+			Presence: false,
 		})(w, r)
 	}
 }

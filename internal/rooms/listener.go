@@ -21,6 +21,12 @@ const (
 	initialBackoff            = 250 * time.Millisecond
 	maxBackoff                = 10 * time.Second
 	healthyConnectionDuration = 30 * time.Second
+
+	// dialTimeout (M3) bounds a single pgx.Connect attempt: without it, a dial that hangs (a
+	// network partition mid-handshake, a firewall silently dropping packets rather than
+	// rejecting the connection) never errors out and never retries — Run's own ctx lives for the
+	// whole process, so nothing else would ever time this out on its behalf.
+	dialTimeout = 10 * time.Second
 )
 
 // Run owns the hub's LISTEN connection for as long as ctx is alive. It dials its own dedicated
@@ -28,10 +34,20 @@ const (
 // separate checkouts), issues LISTEN room_events, and processes notifications one at a time until
 // the connection is lost or ctx is done, reconnecting with backoff in between.
 //
-// Every reconnect — including recovering from a failed dial or a failed LISTEN, not only losing
-// an already-established session — is followed by a resync nudge to every live local subscriber
-// (see resyncAll). This exists because of a real, permanent loss mode distinct from the
-// cursor-visibility hazard handleNotify closes: Postgres does not queue NOTIFYs for a session
+// EVERY successful LISTEN — the very first one included, not only a reconnect (M1) — is followed
+// by a resync nudge to every live local subscriber (see resyncAll). Reconnects need it for the
+// reason explained below; the first-ever LISTEN needs it too because of a race this function
+// cannot rule out from its own side: a subscriber can register (Hub.Subscribe, from a WS
+// connection that happened to arrive right at boot) before THIS function's own first pgx.Connect +
+// LISTEN has actually completed. That subscriber's watermark floor is established relative to
+// whatever room_events existed at Subscribe-time, which says nothing about whether this hub's
+// LISTEN session was already active by then — any NOTIFY that fired in between is exactly as lost
+// as one fired during a genuine reconnect gap (Postgres doesn't queue it either way), so the fix is
+// the same: nudge every subscriber to refetch a full snapshot, unconditionally, the moment a LISTEN
+// session is confirmed live, whether or not `reconnecting` happens to be true.
+//
+// The reconnect case's own reason: this is a real, permanent loss mode distinct from the
+// cursor-visibility hazard handleNotify closes. Postgres does not queue NOTIFYs for a session
 // that isn't listening, so anything that fired while this hub was disconnected (or never yet
 // connected) is gone for good — including a late committer whose id was at or below whatever
 // this hub's watermark for that room happened to be. Once that NOTIFY is lost, no future
@@ -59,7 +75,9 @@ func (h *Hub) Run(ctx context.Context) error {
 			return err
 		}
 
-		conn, err := pgx.Connect(ctx, h.listenURL)
+		dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
+		conn, err := pgx.Connect(dialCtx, h.listenURL)
+		dialCancel()
 		if err != nil {
 			h.log.Error("rooms: hub listener connect failed", "replica_id", h.replicaID, "error", err)
 			// A subscriber that joined while every dial attempt so far has failed has never once
@@ -94,9 +112,14 @@ func (h *Hub) Run(ctx context.Context) error {
 			// across every room at once, in the one place that actually knows a reconnect happened.
 			// Safe regardless of what (if anything) resyncAll below is about to nudge: a client told
 			// to resync refetches a full snapshot, never relying on pendingNotify's bookkeeping.
+			// Scoped to reconnect only (unlike resyncAll below, M1): the very first LISTEN can never
+			// have a stale pendingNotify entry to begin with — it starts out empty (NewHub) — so
+			// there is nothing for a first-connect call to clear.
 			h.clearPendingNotify()
-			h.resyncAll()
 		}
+		// Unconditional (M1): see this function's own doc comment for why the very first LISTEN
+		// needs this nudge exactly as much as a reconnect does.
+		h.resyncAll()
 
 		connectedAt := time.Now()
 		listenErr := h.listenLoop(ctx, conn)

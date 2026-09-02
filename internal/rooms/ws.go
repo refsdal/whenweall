@@ -79,21 +79,20 @@ func (h *Hub) ServeWS(opts WSOptions) http.HandlerFunc {
 			return
 		}
 
-		// OriginPatterns is left nil, and InsecureSkipVerify is left false: Accept's default
-		// behaviour, absent both, is to require a request's Origin header (when one is present at
-		// all — an absent header, e.g. a same-origin request from an older client, is let
-		// through unchanged) to match the request's own Host header exactly. That is a
-		// same-origin check, but not the SAME check internal/httpserver.CheckOrigin makes for
-		// mutating REST calls (that one compares Origin against the configured AppURL) — the two
-		// coincide behind an ordinary reverse proxy that forwards Host unchanged, but they are
-		// two different mechanisms, not one shared assumption. No configured allow-list is needed
-		// here regardless, since this app is never legitimately served from any origin other than
-		// the one answering this very request.
+		// InsecureSkipVerify is left false: Accept's default behaviour is to require a request's
+		// Origin header (when one is present at all — an absent header, e.g. a same-origin request
+		// from an older client, is let through unchanged) to match EITHER the request's own Host
+		// header exactly, OR one of OriginPatterns (h.OriginPatterns, hub.go — nil by default,
+		// preserving the plain same-origin check alone). See OriginPatterns's own doc comment
+		// (hub.go) for why a configured allow-list is worth adding on top of the request's own Host
+		// header (M8) rather than trusting it alone, the way an earlier version of this comment
+		// argued was unconditionally fine.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// NoContextTakeover: many small JSON frames, across a potentially large number of
 			// concurrent connections — bounding each connection's compression window matters more
 			// here than the extra compression ratio ContextTakeover would buy.
 			CompressionMode: websocket.CompressionNoContextTakeover,
+			OriginPatterns:  h.OriginPatterns,
 		})
 		if err != nil {
 			// Accept already wrote the handshake failure response itself.

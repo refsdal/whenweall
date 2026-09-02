@@ -193,7 +193,7 @@ func TestReplicaFanOut_VotePresenceAndBookingCrossReplicas(t *testing.T) {
 		t.Fatalf("CreatePage: %v", err)
 	}
 
-	watcher := dialWSExpectSuccess(t, stack1.httptestServer, "/api/v1/bookings/"+page.ID+"/ws",
+	watcher := dialWSExpectSuccess(t, stack1.httptestServer, "/api/v1/booking-pages/"+page.ID+"/ws",
 		http.Header{"X-Test-Session": {ownerSessionID}})
 	defer func() { _ = watcher.CloseNow() }()
 	_ = readWSFrame(t, watcher, 5*time.Second) // snapshot

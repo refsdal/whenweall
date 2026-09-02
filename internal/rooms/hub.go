@@ -128,6 +128,24 @@ type Hub struct {
 	// no production code should need to touch them.
 	KeepaliveInterval time.Duration
 	PingTimeout       time.Duration
+
+	// OriginPatterns (M8) is ws.go's ServeWS's own extra allow-list for the WS handshake's Origin
+	// check (websocket.AcceptOptions.OriginPatterns) — ADDITIONAL to coder/websocket's own default
+	// (a request's Origin must match ITS OWN Host header, when an Origin header is present at
+	// all), never a replacement for it. nil (NewHub's default, and every test's) preserves that
+	// default alone, which is all a same-origin deployment ever needs.
+	//
+	// A Hub field, set once by its caller right after NewHub returns — not a NewHub parameter —
+	// so every existing NewHub call site (most of them in tests with no origin-check concern at
+	// all) stays unchanged; cmd/whenweall/main.go's own serve() is the one production call site
+	// that sets it, derived from cfg.AppURL's host. This exists because the default check alone
+	// trusts whatever Host header THIS PARTICULAR request happened to carry, which is not
+	// necessarily the same thing internal/httpserver.CheckOrigin checks for mutating REST calls
+	// (that one compares Origin against the CONFIGURED AppURL, not the request's own Host) — the
+	// two coincide behind an ordinary reverse proxy that forwards Host unchanged, but not every
+	// topology guarantees that. Explicitly allow-listing the configured AppURL's own host here
+	// closes that gap without weakening the existing check at all.
+	OriginPatterns []string
 }
 
 // NewHub builds a Hub. listenURL is used only for Run's dedicated LISTEN connection (a pooled

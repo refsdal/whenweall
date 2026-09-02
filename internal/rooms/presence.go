@@ -111,11 +111,22 @@ func (h *Hub) presenceBootSweep(ctx context.Context) error {
 	return err
 }
 
-// presenceHeartbeatLoop re-stamps every ws_presence row this replica owns every
-// presenceHeartbeatInterval, until ctx ends. Started unconditionally from Run — regardless of
-// whether this process's Hub ever actually serves a Presence-enabled route — because an idle
-// replica with no presence rows simply re-stamps zero rows each tick; that is simpler than
-// threading "does anything need this" state through Run just to skip a cheap no-op UPDATE.
+// presenceHeartbeatLoop re-stamps every ws_presence row this replica owns AND STILL HAS AT LEAST
+// ONE VIEWER IN (M2: `count > 0`) every presenceHeartbeatInterval, until ctx ends. Started
+// unconditionally from Run — regardless of whether this process's Hub ever actually serves a
+// Presence-enabled route — because an idle replica with no presence rows simply re-stamps zero
+// rows each tick; that is simpler than threading "does anything need this" state through Run just
+// to skip a cheap no-op UPDATE.
+//
+// The `count > 0` guard is the fix, not an optimization: presenceLeave floors a row at 0 rather
+// than deleting it (a decrement racing some other cleanup path must never drive it negative — see
+// presenceLeave's own doc comment), so a room this replica served but nobody is currently viewing
+// can sit at count=0 indefinitely. Without this guard, THIS loop would re-stamp that zero-count
+// row's heartbeat_at forever, keeping it perpetually "fresh" and permanently invisible to
+// internal/jobs's presence:sweep housekeeping job (which only deletes rows whose heartbeat has
+// actually lapsed) — an unbounded ws_presence leak, one row per room this replica has ever served
+// even once, that would never self-heal. Excluding count=0 rows here lets them age out and get
+// swept normally, the same 90s after their last real join/leave as any other stale row.
 func (h *Hub) presenceHeartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(presenceHeartbeatInterval)
 	defer ticker.Stop()
@@ -125,7 +136,7 @@ func (h *Hub) presenceHeartbeatLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if _, err := h.sqlDB.ExecContext(ctx,
-				`UPDATE ws_presence SET heartbeat_at = now() WHERE replica_id = $1`, h.replicaID,
+				`UPDATE ws_presence SET heartbeat_at = now() WHERE replica_id = $1 AND count > 0`, h.replicaID,
 			); err != nil {
 				h.log.Error("rooms: presence heartbeat", "replica_id", h.replicaID, "error", err)
 			}

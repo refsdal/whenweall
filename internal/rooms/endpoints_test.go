@@ -223,13 +223,13 @@ func TestBookingWS_NonManagerIs403(t *testing.T) {
 	bookings.snapshot = []map[string]any{}
 
 	otherUser := a.login(&auth.Session{UserID: "someone-else", ActiveOrgID: "org-1"})
-	dialWSExpectStatus(t, server, "/api/v1/bookings/page-1/ws",
+	dialWSExpectStatus(t, server, "/api/v1/booking-pages/page-1/ws",
 		http.Header{"X-Test-Session": {otherUser}}, http.StatusForbidden)
 }
 
 func TestBookingWS_NoSessionIs401(t *testing.T) {
 	server, _, _, _ := newTestMux(t)
-	dialWSExpectStatus(t, server, "/api/v1/bookings/page-1/ws", nil, http.StatusUnauthorized)
+	dialWSExpectStatus(t, server, "/api/v1/booking-pages/page-1/ws", nil, http.StatusUnauthorized)
 }
 
 func TestBookingWS_ManagerConnects(t *testing.T) {
@@ -238,7 +238,7 @@ func TestBookingWS_ManagerConnects(t *testing.T) {
 	bookings.snapshot = []map[string]any{{"id": "b1"}}
 
 	managerID := a.login(&auth.Session{UserID: "manager-1", ActiveOrgID: "org-1"})
-	conn := dialWSExpectSuccess(t, server, "/api/v1/bookings/page-1/ws",
+	conn := dialWSExpectSuccess(t, server, "/api/v1/booking-pages/page-1/ws",
 		http.Header{"X-Test-Session": {managerID}})
 	defer func() { _ = conn.CloseNow() }()
 
@@ -291,6 +291,33 @@ func TestPollWS_ConnectRateLimited(t *testing.T) {
 		_ = conn.CloseNow()
 	}
 	dialWSExpectStatus(t, server, "/api/v1/polls/p1/ws", nil, http.StatusTooManyRequests)
+}
+
+// TestBookingWS_PresenceOff is M4's regression test: unlike the poll room (where a second
+// connection's own join broadcasts a live "presence" frame every other connected viewer sees —
+// TestServeWS_PresenceCountJoinAndLeave), a second manager connecting to the SAME booking page
+// must produce no frame at all for the first — bookingWSHandler's Presence is off.
+func TestBookingWS_PresenceOff(t *testing.T) {
+	server, a, _, bookings := newTestMux(t)
+	bookings.managerUserID = "manager-1"
+	bookings.snapshot = []map[string]any{}
+
+	managerID := a.login(&auth.Session{UserID: "manager-1", ActiveOrgID: "org-1"})
+	conn1 := dialWSExpectSuccess(t, server, "/api/v1/booking-pages/page-1/ws",
+		http.Header{"X-Test-Session": {managerID}})
+	defer func() { _ = conn1.CloseNow() }()
+	_ = readWSFrame(t, conn1, 5*time.Second) // conn1's own snapshot
+
+	conn2 := dialWSExpectSuccess(t, server, "/api/v1/booking-pages/page-1/ws",
+		http.Header{"X-Test-Session": {managerID}})
+	defer func() { _ = conn2.CloseNow() }()
+	_ = readWSFrame(t, conn2, 5*time.Second) // conn2's own snapshot
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, _, err := conn1.Read(ctx); err == nil {
+		t.Fatal("booking ws connection received a frame after a second manager connected, want none (Presence must be off)")
+	}
 }
 
 func TestStatsWS_PublicNoPresence(t *testing.T) {
