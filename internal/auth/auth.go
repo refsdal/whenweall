@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -201,6 +202,10 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 			// silently refuses to send back over that same http connection, breaking sessions
 			// entirely rather than just weakening them.
 			limen.WithHTTPCookieSecure(strings.HasPrefix(cfg.AppURL, "https://")),
+			// Every signin/signup/me (and two-factor/magic-link/oauth) response is routed
+			// through this transformer instead of Limen's default user serialization — see
+			// sessionTransformer's own doc comment for why the default is missing a usable id.
+			limen.WithHTTPSessionTransformer(s.sessionTransformer),
 			// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
 			// (this package's first attempt at the personal-org invariant) turns out to miss most
 			// real signups. ctx.GetAuthResult() is only populated when the route handler itself
@@ -244,6 +249,52 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 		return fmt.Errorf("auth: inserting staff_users: %w", err)
 	}
 	return nil
+}
+
+// sessionTransformer implements limen.SessionTransformer (registered via
+// limen.WithHTTPSessionTransformer in buildLimenConfig), so it runs on every signin/signup/me
+// (and two-factor/magic-link/oauth) response that goes through Limen's Responder.SessionResponse.
+//
+// It exists because Limen's default user serialization never includes a usable id: UserSchema.Serialize
+// deletes the id column outright (see the pinned source's user.go), and even without that,
+// LimenCore.SerializeModel drops whatever's left of the id field unless it happens to already be a
+// string — ours is a BIGSERIAL, so it comes back as an int64 and gets deleted either way. The
+// frontend's self-ownership checks (e.g. "is this my own poll") need the user's id in the /me
+// payload, so this rebuilds the payload from user (Limen hands us result.User.Raw(), the same
+// unfiltered row resolveSession above scans user_id off of) instead of Limen's own serialization:
+// the password column is stripped, and the id is added back as a Go string — matching the
+// convention used everywhere else in this seam (fmt.Sprint(user.ID), see the users.id comment in
+// migrations/00002_auth.sql) rather than leaving it as whatever numeric type the driver returned.
+//
+// It also adds "isStaff", straight from staff_users, so the frontend no longer needs its own
+// separate admin-only probe just to learn whether the signed-in user is staff.
+func (s *Service) sessionTransformer(user map[string]any, _ *limen.SessionResult) (map[string]any, error) {
+	payload := maps.Clone(user)
+	delete(payload, "password")
+
+	rawID := user["id"]
+	payload["id"] = fmt.Sprint(rawID)
+	payload["isStaff"] = s.lookupStaffForSessionResponse(rawID)
+
+	return map[string]any{"user": payload}, nil
+}
+
+// lookupStaffForSessionResponse is sessionTransformer's staff_users check. Unlike
+// resolveSession's combined locked_users/staff_users query, this can't take a request context —
+// limen.SessionTransformer's signature carries none (Limen calls it outside any request scope) —
+// so it issues its own query against context.Background(). Fails safe to false on error: a
+// session response is not the place to turn a staff_users hiccup into a broken login, and
+// RequireStaff (session.go) is the actual gate on anything staff-only regardless of what this
+// reports.
+func (s *Service) lookupStaffForSessionResponse(userID any) bool {
+	var staff bool
+	if err := s.db.QueryRowContext(context.Background(),
+		"SELECT EXISTS(SELECT 1 FROM staff_users WHERE user_id = $1)", userID,
+	).Scan(&staff); err != nil {
+		s.logger.Error("auth: staff_users check failed in session transformer; defaulting to false", "user_id", fmt.Sprint(userID), "error", err)
+		return false
+	}
+	return staff
 }
 
 // RevokeUserSessions revokes every session belonging to userID, for internal/admin's LockUser and

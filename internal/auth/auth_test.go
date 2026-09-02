@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -204,6 +205,20 @@ func TestSignupSigninMeFlow(t *testing.T) {
 	if got, _ := user["email"].(string); got != email {
 		t.Errorf("/me user.email = %q, want %q", got, email)
 	}
+	// The frontend's self-ownership checks need a usable id here — see sessionTransformer's doc
+	// comment in auth.go for why Limen's own serialization drops it otherwise. It must come back
+	// as a string of digits (the Go-string-id convention used everywhere else in this seam), not
+	// whatever numeric type the driver happens to hand back.
+	userIDStr, ok := user["id"].(string)
+	if !ok || userIDStr == "" {
+		t.Fatalf("/me user.id = %#v, want a non-empty string", user["id"])
+	}
+	if _, err := strconv.ParseInt(userIDStr, 10, 64); err != nil {
+		t.Errorf("/me user.id = %q, want a string of digits: %v", userIDStr, err)
+	}
+	if isStaff, _ := user["isStaff"].(bool); isStaff {
+		t.Errorf("/me user.isStaff = true, want false for a fresh signup")
+	}
 
 	probeResp := ts.get(t, "/probe")
 	probeBody := decodeJSON(t, probeResp)
@@ -219,6 +234,40 @@ func TestSignupSigninMeFlow(t *testing.T) {
 	}
 	if gotEmail, _ := probeBody["Email"].(string); gotEmail != email {
 		t.Errorf("probe Session.Email = %q, want %q", gotEmail, email)
+	}
+}
+
+// TestMeReflectsStaffFlagAfterMakeStaff covers sessionTransformer's isStaff addition to /me:
+// false right after a fresh signup, true once MakeStaff has run — the same pattern
+// TestStaffFlagAndRequireStaff already exercises for RequireStaff, here for the /me payload the
+// frontend actually reads instead of the seam's internal Session.
+func TestMeReflectsStaffFlagAfterMakeStaff(t *testing.T) {
+	ts := newTestService(t)
+	email := "future-staffer@example.com"
+
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    email,
+		"password": signupPassword,
+	}), "signup")
+
+	meBody := decodeJSON(t, ts.get(t, "/api/v1/auth/me"))
+	user, _ := meBody["user"].(map[string]any)
+	if isStaff, _ := user["isStaff"].(bool); isStaff {
+		t.Fatalf("/me user.isStaff = true before MakeStaff, want false: %+v", user)
+	}
+
+	if err := ts.svc.MakeStaff(context.Background(), email); err != nil {
+		t.Fatalf("MakeStaff: %v", err)
+	}
+
+	meBody2 := decodeJSON(t, ts.get(t, "/api/v1/auth/me"))
+	user2, _ := meBody2["user"].(map[string]any)
+	if isStaff, _ := user2["isStaff"].(bool); !isStaff {
+		t.Errorf("/me user.isStaff = false after MakeStaff, want true: %+v", user2)
+	}
+	// The id must survive unchanged across that transition too.
+	if got, _ := user2["id"].(string); got == "" {
+		t.Errorf("/me user.id went missing after MakeStaff: %+v", user2)
 	}
 }
 
