@@ -10,6 +10,10 @@ import (
 
 type Querier interface {
 	CountUpcomingConfirmedBookings(ctx context.Context, arg CountUpcomingConfirmedBookingsParams) (int64, error)
+	// Ports disconnectGoogleSync (pages.ts): turns googleSync off on every booking page whose
+	// member_user_id is userId — the account row itself (accounts, Limen's) is left untouched; only
+	// this user's own pages stop trying to sync against it.
+	DisableGoogleSyncForMember(ctx context.Context, arg DisableGoogleSyncForMemberParams) error
 	GetBooking(ctx context.Context, id string) (Booking, error)
 	GetBookingPage(ctx context.Context, id string) (BookingPage, error)
 	GetBookingPageByOrgSlug(ctx context.Context, arg GetBookingPageByOrgSlugParams) (BookingPage, error)
@@ -34,6 +38,12 @@ type Querier interface {
 	InsertBooking(ctx context.Context, arg InsertBookingParams) error
 	// Task 2 (booking pages service) queries below.
 	InsertBookingPage(ctx context.Context, arg InsertBookingPageParams) error
+	// Task 6 (HTTP surface — accumulated requirement (a), the canManageContent-shaped authz gate)
+	// queries below.
+	// Ports the membership-is-the-authority rule (canManageContent's own membership precondition —
+	// see internal/polls/queries's identical query for the sibling rationale): does userId belong to
+	// organizationId at all, regardless of role?
+	IsOrgMember(ctx context.Context, arg IsOrgMemberParams) (bool, error)
 	ListBookingPagesByOrg(ctx context.Context, organizationID int64) ([]BookingPage, error)
 	// Every booking (any status) on a page overlapping [range_from, range_to) — ListPageBookings'
 	// own query, unfiltered by status (matching listBookings, bookings.ts).
@@ -41,6 +51,10 @@ type Querier interface {
 	// Confirmed bookings on a page overlapping [range_from, range_to) as their raw stored interval —
 	// see bookedIntervalsForPage's (bookings.go) doc comment on why no buffer is applied here.
 	ListConfirmedBookingsInRange(ctx context.Context, arg ListConfirmedBookingsInRangeParams) ([]Booking, error)
+	// Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
+	// in organizationId? (The creator-manages-their-own-content half is checked separately by the
+	// caller against the resource's own createdBy — this query only ever answers the role question.)
+	MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error)
 	SoftDeleteBookingPage(ctx context.Context, arg SoftDeleteBookingPageParams) error
 	// Task 5 (Google Calendar sync) queries below.
 	// Persists (or clears, when null) the booking's known Google Calendar event id. See

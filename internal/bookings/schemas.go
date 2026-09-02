@@ -208,12 +208,14 @@ func toMinutes(hhmm string) int {
 
 // validateHandle ports handleSchema — the org-slug ("handle") counterpart of a page's own slug,
 // used by SetOrgSlug. Same length bounds and character rules as a page slug, but reported under
-// the "slug" field key (SetOrgSlug's own parameter name) rather than pageSchema's "slug" field, so
-// the two never look like they share a validator instance by accident.
+// the "handle" field key (Task 6's accumulated requirement (b): the org-handle HTTP endpoint's
+// request body names this field "handle", not "slug" — pageSchema's own "slug" field is a
+// different resource entirely, so the two never look like they share a validator instance by
+// accident).
 func validateHandle(handle string) error {
 	if !handleSlugRegexp.MatchString(handle) || len(handle) < LimitHandleMin || len(handle) > LimitHandleMax {
 		return &ValidationError{Fields: map[string]string{
-			"slug": "slug must be lowercase letters, digits and hyphens, 3-30 characters",
+			"handle": "handle must be lowercase letters, digits and hyphens, 3-30 characters",
 		}}
 	}
 	return nil

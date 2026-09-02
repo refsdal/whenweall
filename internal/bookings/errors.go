@@ -72,6 +72,17 @@ var (
 	// ErrGoogleNotConnected wraps ErrConflict: Task 5's Google Calendar sync path (google.go) was
 	// invoked for a page/member with no usable Google connection.
 	ErrGoogleNotConnected = fmt.Errorf("%w: google calendar is not connected", ErrConflict)
+
+	// ErrInvalidToken is returned by Cancel/Reschedule/ManagedBooking when a manage token was
+	// supplied (byOrganiser: false) and the booking it names DOES exist, but the token itself
+	// doesn't match that booking's stored hash. Distinct from ErrNotFound (no such booking at all)
+	// per Task 6's accumulated requirement (d): the earlier port (this file's own history, and
+	// bookings.go's Cancel/Reschedule/ManagedBooking doc comments before this task) deliberately
+	// collapsed a wrong token into ErrNotFound, a simplification of getBookingForManage's own
+	// separate INVALID_TOKEN code (bookings.ts) — Task 6's HTTP layer needs to map "no such
+	// booking" to 404 and "wrong token" to 403 differently, so this sentinel now exists to tell
+	// the two apart again. TS: INVALID_TOKEN.
+	ErrInvalidToken = errors.New("bookings: invalid manage token")
 )
 
 // ValidationError reports one or more field-level validation failures, ported from zod's issue

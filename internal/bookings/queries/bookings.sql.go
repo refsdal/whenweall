@@ -30,6 +30,23 @@ func (q *Queries) CountUpcomingConfirmedBookings(ctx context.Context, arg CountU
 	return count, err
 }
 
+const disableGoogleSyncForMember = `-- name: DisableGoogleSyncForMember :exec
+UPDATE booking_pages SET google_sync = false, updated_at = $2 WHERE member_user_id = $1
+`
+
+type DisableGoogleSyncForMemberParams struct {
+	MemberUserID sql.NullInt64
+	UpdatedAt    time.Time
+}
+
+// Ports disconnectGoogleSync (pages.ts): turns googleSync off on every booking page whose
+// member_user_id is userId — the account row itself (accounts, Limen's) is left untouched; only
+// this user's own pages stop trying to sync against it.
+func (q *Queries) DisableGoogleSyncForMember(ctx context.Context, arg DisableGoogleSyncForMemberParams) error {
+	_, err := q.db.ExecContext(ctx, disableGoogleSyncForMember, arg.MemberUserID, arg.UpdatedAt)
+	return err
+}
+
 const getBooking = `-- name: GetBooking :one
 SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings WHERE id = $1
 `
@@ -413,6 +430,30 @@ func (q *Queries) InsertBookingPage(ctx context.Context, arg InsertBookingPagePa
 	return err
 }
 
+const isOrgMember = `-- name: IsOrgMember :one
+
+SELECT EXISTS (
+  SELECT 1 FROM organization_members WHERE organization_id = $1 AND user_id = $2
+) AS is_member
+`
+
+type IsOrgMemberParams struct {
+	OrganizationID int64
+	UserID         int64
+}
+
+// Task 6 (HTTP surface — accumulated requirement (a), the canManageContent-shaped authz gate)
+// queries below.
+// Ports the membership-is-the-authority rule (canManageContent's own membership precondition —
+// see internal/polls/queries's identical query for the sibling rationale): does userId belong to
+// organizationId at all, regardless of role?
+func (q *Queries) IsOrgMember(ctx context.Context, arg IsOrgMemberParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isOrgMember, arg.OrganizationID, arg.UserID)
+	var is_member bool
+	err := row.Scan(&is_member)
+	return is_member, err
+}
+
 const listBookingPagesByOrg = `-- name: ListBookingPagesByOrg :many
 SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE organization_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC
 `
@@ -572,6 +613,29 @@ func (q *Queries) ListConfirmedBookingsInRange(ctx context.Context, arg ListConf
 		return nil, err
 	}
 	return items, nil
+}
+
+const memberHasManagingRole = `-- name: MemberHasManagingRole :one
+SELECT EXISTS (
+  SELECT 1 FROM organization_members om
+  JOIN organization_member_roles omr ON omr.member_id = om.id
+  WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role IN ('owner', 'admin')
+) AS has_role
+`
+
+type MemberHasManagingRoleParams struct {
+	OrganizationID int64
+	UserID         int64
+}
+
+// Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
+// in organizationId? (The creator-manages-their-own-content half is checked separately by the
+// caller against the resource's own createdBy — this query only ever answers the role question.)
+func (q *Queries) MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, memberHasManagingRole, arg.OrganizationID, arg.UserID)
+	var has_role bool
+	err := row.Scan(&has_role)
+	return has_role, err
 }
 
 const softDeleteBookingPage = `-- name: SoftDeleteBookingPage :exec

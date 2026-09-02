@@ -131,3 +131,30 @@ LIMIT 1;
 UPDATE accounts
 SET access_token = $2, refresh_token = $3, access_token_expires_at = $4, updated_at = $5
 WHERE id = $1;
+
+-- Task 6 (HTTP surface — accumulated requirement (a), the canManageContent-shaped authz gate)
+-- queries below.
+
+-- name: IsOrgMember :one
+-- Ports the membership-is-the-authority rule (canManageContent's own membership precondition —
+-- see internal/polls/queries's identical query for the sibling rationale): does userId belong to
+-- organizationId at all, regardless of role?
+SELECT EXISTS (
+  SELECT 1 FROM organization_members WHERE organization_id = $1 AND user_id = $2
+) AS is_member;
+
+-- name: MemberHasManagingRole :one
+-- Ports canManageContent's role half (org-roles.ts): does userId hold an 'owner' or 'admin' role
+-- in organizationId? (The creator-manages-their-own-content half is checked separately by the
+-- caller against the resource's own createdBy — this query only ever answers the role question.)
+SELECT EXISTS (
+  SELECT 1 FROM organization_members om
+  JOIN organization_member_roles omr ON omr.member_id = om.id
+  WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role IN ('owner', 'admin')
+) AS has_role;
+
+-- name: DisableGoogleSyncForMember :exec
+-- Ports disconnectGoogleSync (pages.ts): turns googleSync off on every booking page whose
+-- member_user_id is userId — the account row itself (accounts, Limen's) is left untouched; only
+-- this user's own pages stop trying to sync against it.
+UPDATE booking_pages SET google_sync = false, updated_at = $2 WHERE member_user_id = $1;

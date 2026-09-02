@@ -333,13 +333,14 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 
 // Cancel ports the auth-check half of getBookingForManage plus cancelBooking (bookings.ts),
 // merged into one atomic call — this port's fixed signature (bookingID, manageToken, byOrganiser)
-// carries no org/user identity to check an organiser's *role* against (that belongs to a future
-// HTTP layer's own auth seam, mirroring GetOwnedPage's/ListPageBookings' own deviation note);
-// byOrganiser is the caller's already-established "this is the page owner, not a token-bearing
-// visitor" fact. A wrong manageToken (byOrganiser: false) is ErrNotFound, not a distinct
-// "invalid token" sentinel — ported per this task's brief, a deliberate simplification of
-// getBookingForManage's own separate INVALID_TOKEN code. Idempotent: cancelling an
-// already-cancelled booking is a no-op, matching cancelBooking's own doc comment.
+// carries no org/user identity to check an organiser's *role* against; byOrganiser is the caller's
+// already-established "this is the page owner, not a token-bearing visitor" fact — Task 6's HTTP
+// layer establishes it via RequireManageableBooking (authz.go) before calling Cancel with
+// byOrganiser: true. A wrong manageToken (byOrganiser: false) is ErrInvalidToken — the booking
+// itself was found, but this credential doesn't open it (Task 6's accumulated requirement (d);
+// see ErrInvalidToken's own doc comment in errors.go for why this changed from an earlier,
+// simpler ErrNotFound). Idempotent: cancelling an already-cancelled booking is a no-op, matching
+// cancelBooking's own doc comment.
 func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byOrganiser bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -356,7 +357,7 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 		return err
 	}
 	if !byOrganiser && !tokenMatches(manageToken, booking.ManageTokenHash) {
-		return ErrNotFound
+		return ErrInvalidToken
 	}
 
 	if booking.Status == "cancelled" {
@@ -404,12 +405,14 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 
 // Reschedule ports rescheduleBooking (bookings.ts) — see this file's package doc comment for the
 // atomicity contract (the same page-row lock Book takes, re-acquired here). Always requires
-// manageToken to match (ErrNotFound otherwise) — this port's fixed signature carries no
-// byOrganiser flag the way Cancel's does, so there is no separate owner-forced path here; an
-// owner-initiated reschedule (were one ever added) would need its own method, the same way
-// UnclaimFor sits beside Unclaim in internal/polls/claims.go. Unlike createBooking's own busy
-// parameter, this port's fixed signature has no caller-supplied Google-freebusy list either — only
-// the page's own live bookings are checked (a deviation noted here rather than hidden).
+// manageToken to match (ErrInvalidToken otherwise — see ErrInvalidToken's own doc comment in
+// errors.go for Task 6's requirement (d) that changed this from an earlier ErrNotFound) — this
+// port's fixed signature carries no byOrganiser flag the way Cancel's does, so there is no
+// separate owner-forced path here; an owner-initiated reschedule (were one ever added) would need
+// its own method, the same way UnclaimFor sits beside Unclaim in internal/polls/claims.go. Unlike
+// createBooking's own busy parameter, this port's fixed signature has no caller-supplied
+// Google-freebusy list either — only the page's own live bookings are checked (a deviation noted
+// here rather than hidden).
 func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string, newStart time.Time) (*BookingResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -426,7 +429,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 		return nil, err
 	}
 	if !tokenMatches(manageToken, booking.ManageTokenHash) {
-		return nil, ErrNotFound
+		return nil, ErrInvalidToken
 	}
 	if booking.Status == "cancelled" {
 		return nil, ErrConflict
@@ -536,8 +539,11 @@ func toBookingView(b queries.Booking) BookingView {
 // ManagedBooking ports the token-authenticated half of getBookingForManage (bookings.ts) — this
 // port's fixed signature (bookingID, manageToken) carries no org/user identity, so the
 // org-manager auth branch (requireOrgPage-shaped: same-org check + canManageContent) isn't
-// reachable here, the same deviation GetOwnedPage/ListPageBookings already document. A wrong
-// token is ErrNotFound (see Cancel's own doc comment on why, not a separate INVALID_TOKEN code).
+// reachable here, the same deviation GetOwnedPage/ListPageBookings already document; Task 6's own
+// HTTP endpoint table keeps GET .../manage token-only (unlike POST .../cancel, whose organiser
+// fallback is this task's accumulated requirement (e)), so this stays token-only too. A wrong
+// token is ErrInvalidToken (see ErrInvalidToken's own doc comment in errors.go for Task 6's
+// requirement (d) that changed this from an earlier ErrNotFound).
 func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken string) (*ManagedBookingView, error) {
 	booking, err := s.q.GetBooking(ctx, bookingID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -547,7 +553,7 @@ func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken str
 		return nil, err
 	}
 	if !tokenMatches(manageToken, booking.ManageTokenHash) {
-		return nil, ErrNotFound
+		return nil, ErrInvalidToken
 	}
 
 	page, err := s.q.GetBookingPage(ctx, booking.PageID)

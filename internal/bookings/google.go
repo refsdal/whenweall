@@ -356,6 +356,53 @@ func (s *Service) SetGoogleEventID(ctx context.Context, bookingID string, eventI
 	})
 }
 
+// GoogleStatus ports getGoogleCalendarStatus (calendar.ts) for Task 6's
+// GET /api/v1/booking-pages/{id}/google-status endpoint, simplified to this task's brief: whether
+// pageID's own member has a linked Google account row at all, rather than the TS source's fuller
+// scope-inspection-then-live-freebusy-probe contract (out of this task's scope to port). false
+// (never an error) whenever the capability itself is off (s.google == nil — this task's brief's
+// own "nil GoogleSync -> {available:false}" case) or the page has no assigned member; ErrNotFound
+// for an unknown/deleted page id (the handler's own org-scoping check runs before this, so this
+// is reached only for a page that's disappeared between the two).
+func (s *Service) GoogleStatus(ctx context.Context, pageID string) (bool, error) {
+	if s.google == nil {
+		return false, nil
+	}
+	page, err := s.q.GetBookingPage(ctx, pageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if !page.MemberUserID.Valid {
+		return false, nil
+	}
+	if _, err := s.q.GetGoogleAccount(ctx, page.MemberUserID.Int64); errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DisconnectGoogleSync ports disconnectGoogleSync (pages.ts): turns googleSync off on every
+// booking page whose memberUserId is userID. Deliberately does NOT touch the underlying Limen
+// accounts row (the Google OAuth connection itself lives — and stays linked — outside this
+// package's ownership; a user disconnecting sync here can still be signed in via Google, or use
+// its token elsewhere) — matching the TS source's own scope exactly (it only ever updates
+// bookingPages, never accounts).
+func (s *Service) DisconnectGoogleSync(ctx context.Context, userID string) error {
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return ErrNotFound
+	}
+	return s.q.DisableGoogleSyncForMember(ctx, queries.DisableGoogleSyncForMemberParams{
+		MemberUserID: sql.NullInt64{Int64: userIDInt, Valid: true},
+		UpdatedAt:    time.Now().UTC(),
+	})
+}
+
 // --- Composition with Book/PublicAvailability/Reschedule (bookings.go) --------------------------
 
 // googleBusyForPage best-effort merges page's own Google Calendar freebusy over [from, to) into

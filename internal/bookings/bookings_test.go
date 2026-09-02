@@ -66,11 +66,13 @@ func uniqueHandle() string {
 // bookablePage bundles everything a test needs to address one seeded, bookable page: the service
 // and its own *sql.DB (for planting raw rows via makeBooking, or direct SQL assertions), the
 // numeric org id UpdatePage/ListPageBookings take, the org's public handle and page slug Book/
-// PublicAvailability take, and the page's own id.
+// PublicAvailability take, the page's own id, and the page's creator (ownerID — used by
+// handlers_test.go's own authz cases, requirement (a)/(e)).
 type bookablePage struct {
 	svc     *bookings.Service
 	db      *sql.DB
 	orgID   string
+	ownerID string
 	orgSlug string
 	pageID  string
 	slug    string
@@ -92,7 +94,7 @@ func setupBookablePage(t *testing.T, mutate func(*bookings.PageInput)) bookableP
 	if err != nil {
 		t.Fatalf("CreatePage: %v", err)
 	}
-	return bookablePage{svc: s, db: d, orgID: orgID, orgSlug: handle, pageID: page.ID, slug: page.Slug}
+	return bookablePage{svc: s, db: d, orgID: orgID, ownerID: ownerID, orgSlug: handle, pageID: page.ID, slug: page.Slug}
 }
 
 func bookInput(start time.Time, email string) bookings.BookInput {
@@ -320,7 +322,7 @@ func TestCancel(t *testing.T) {
 		}
 	})
 
-	t.Run("a wrong manage token returns NOT_FOUND, not a distinct invalid-token error", func(t *testing.T) {
+	t.Run("a wrong manage token returns the distinct INVALID_TOKEN error (task 6 requirement d)", func(t *testing.T) {
 		p := setupBookablePage(t, nil)
 		start := futureUTCSlot(3, 9, 0)
 		result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "a@example.com"))
@@ -328,8 +330,8 @@ func TestCancel(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		if err := p.svc.Cancel(ctx, result.BookingID, "wrong-token", false); !errors.Is(err, bookings.ErrNotFound) {
-			t.Errorf("err = %v, want ErrNotFound", err)
+		if err := p.svc.Cancel(ctx, result.BookingID, "wrong-token", false); !errors.Is(err, bookings.ErrInvalidToken) {
+			t.Errorf("err = %v, want ErrInvalidToken", err)
 		}
 	})
 
@@ -423,7 +425,7 @@ func TestReschedule(t *testing.T) {
 		}
 	})
 
-	t.Run("a wrong manage token returns NOT_FOUND", func(t *testing.T) {
+	t.Run("a wrong manage token returns the distinct INVALID_TOKEN error (task 6 requirement d)", func(t *testing.T) {
 		p := setupBookablePage(t, nil)
 		start := futureUTCSlot(3, 9, 0)
 		result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "a@example.com"))
@@ -431,8 +433,8 @@ func TestReschedule(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		if _, err := p.svc.Reschedule(ctx, result.BookingID, "wrong-token", futureUTCSlot(3, 11, 0)); !errors.Is(err, bookings.ErrNotFound) {
-			t.Errorf("err = %v, want ErrNotFound", err)
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, "wrong-token", futureUTCSlot(3, 11, 0)); !errors.Is(err, bookings.ErrInvalidToken) {
+			t.Errorf("err = %v, want ErrInvalidToken", err)
 		}
 	})
 
@@ -514,7 +516,7 @@ func TestManagedBooking(t *testing.T) {
 		}
 	})
 
-	t.Run("a wrong token returns NOT_FOUND", func(t *testing.T) {
+	t.Run("a wrong token returns the distinct INVALID_TOKEN error (task 6 requirement d)", func(t *testing.T) {
 		p := setupBookablePage(t, nil)
 		start := futureUTCSlot(3, 9, 0)
 		result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "a@example.com"))
@@ -522,8 +524,8 @@ func TestManagedBooking(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		if _, err := p.svc.ManagedBooking(ctx, result.BookingID, "wrong-token"); !errors.Is(err, bookings.ErrNotFound) {
-			t.Errorf("err = %v, want ErrNotFound", err)
+		if _, err := p.svc.ManagedBooking(ctx, result.BookingID, "wrong-token"); !errors.Is(err, bookings.ErrInvalidToken) {
+			t.Errorf("err = %v, want ErrInvalidToken", err)
 		}
 	})
 
