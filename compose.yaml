@@ -70,5 +70,15 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
+  # Uncomment for a local smoke test: a real SMTP sink with a web UI at http://localhost:8025 to
+  # read whatever whenweall sends, no external network or real mail provider required. Point the
+  # `app` service at it with SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_SECURE=false.
+  # mailpit:
+  #   image: axllent/mailpit:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - '127.0.0.1:8025:8025' # web UI
+  #     - '127.0.0.1:1025:1025' # SMTP
+
 volumes:
   db-data:
