@@ -182,11 +182,12 @@ func TestServeWS_ReconnectReplaysMissedThenLive(t *testing.T) {
 	}
 }
 
-// TestServeWS_PresenceCountJoinAndLeave uses ?since=0 on both dials so each connection's own
-// join is guaranteed to reach it — via backfill for the connection that just joined (its own
-// presence++ commits, and so is Emitted, strictly before that connection's own Subscribe call —
-// see ServeWS's doc comment — so it can never see its own join live) and via the ordinary live
-// path for whichever connection(s) were already subscribed beforehand.
+// TestServeWS_PresenceCountJoinAndLeave connects two clients with NO ?since= at all — neither
+// needs one. Subscribe now runs before presenceJoin (see ServeWS's doc comment), so each
+// connection's own join broadcast is already reaching its own (buffered) subscriber channel by
+// the time presenceJoin returns, and arrives as an ordinary live frame shortly after that
+// connection's snapshot — this is the regression test for that fix: a first-connect client used
+// to be unable to learn its own presence count until some other peer moved.
 func TestServeWS_PresenceCountJoinAndLeave(t *testing.T) {
 	url, sqlDB := testdb.URL(t)
 	hub := startHub(t, url, sqlDB)
@@ -200,15 +201,15 @@ func TestServeWS_PresenceCountJoinAndLeave(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	conn1 := dialWS(t, server, "/ws?since=0")
+	conn1 := dialWS(t, server, "/ws")
 	_ = readWSFrame(t, conn1, 5*time.Second) // snapshot
-	awaitPresenceFrame(t, conn1, 1)          // conn1's own join, via its own backfill
+	awaitPresenceFrame(t, conn1, 1)          // conn1's own join, live — no ?since= needed
 
-	conn2 := dialWS(t, server, "/ws?since=0")
-	_ = readWSFrame(t, conn2, 5*time.Second) // snapshot — by now conn2's join has committed
+	conn2 := dialWS(t, server, "/ws")
+	_ = readWSFrame(t, conn2, 5*time.Second) // snapshot
 
 	awaitPresenceFrame(t, conn1, 2) // conn1 sees conn2's join live
-	awaitPresenceFrame(t, conn2, 2) // conn2 sees it (and its own) via its own backfill
+	awaitPresenceFrame(t, conn2, 2) // conn2 sees its own join live too
 
 	_ = conn2.CloseNow()
 

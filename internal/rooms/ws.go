@@ -71,11 +71,13 @@ func (h *Hub) ServeWS(opts WSOptions) http.HandlerFunc {
 		// OriginPatterns is left nil, and InsecureSkipVerify is left false: Accept's default
 		// behaviour, absent both, is to require a request's Origin header (when one is present at
 		// all — an absent header, e.g. a same-origin request from an older client, is let
-		// through unchanged) to match the request's own Host header exactly. That is precisely
-		// "same-origin", which is what this app is by design — internal/httpserver's own
-		// CheckOrigin makes the identical assumption for mutating REST calls — so no configured
-		// allow-list is needed here for a client that is never legitimately served from any
-		// origin other than the one answering this very request.
+		// through unchanged) to match the request's own Host header exactly. That is a
+		// same-origin check, but not the SAME check internal/httpserver.CheckOrigin makes for
+		// mutating REST calls (that one compares Origin against the configured AppURL) — the two
+		// coincide behind an ordinary reverse proxy that forwards Host unchanged, but they are
+		// two different mechanisms, not one shared assumption. No configured allow-list is needed
+		// here regardless, since this app is never legitimately served from any origin other than
+		// the one answering this very request.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// NoContextTakeover: many small JSON frames, across a potentially large number of
 			// concurrent connections — bounding each connection's compression window matters more
@@ -91,6 +93,19 @@ func (h *Hub) ServeWS(opts WSOptions) http.HandlerFunc {
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
+		// Subscribe BEFORE presenceJoin, and BEFORE building the snapshot or running the
+		// ?since= backfill: any event that commits from this point on — including this very
+		// connection's own presenceJoin broadcast just below — reaches this connection through
+		// the live channel even if the snapshot/backfill queries that follow also happen to
+		// observe it too. The CONTRACT block's at-least-once guarantee makes that an accepted,
+		// harmless duplicate, not a correctness problem. Doing this any other way around (join or
+		// backfill before subscribe) reopens a real gap: presenceJoin before subscribe meant a
+		// first-connect client with no ?since= could never learn its own presence count until
+		// some other peer moved (fixed here); snapshot/backfill before subscribe is the residual
+		// gap Task 1 flagged (an event committing in between would be seen by neither).
+		frames, unsubscribe := h.Subscribe(roomKey)
+		defer unsubscribe()
+
 		if opts.Presence {
 			h.presenceJoin(ctx, roomKey)
 			defer func() {
@@ -99,16 +114,6 @@ func (h *Hub) ServeWS(opts WSOptions) http.HandlerFunc {
 				h.presenceLeave(leaveCtx, roomKey)
 			}()
 		}
-
-		// Subscribe BEFORE building the snapshot or running the ?since= backfill: any event that
-		// commits from this point on reaches this connection through the live channel below even
-		// if the snapshot/backfill queries that follow also happen to observe it too — the
-		// CONTRACT block's at-least-once guarantee makes that an accepted, harmless duplicate,
-		// not a correctness problem. Doing it the other way around (snapshot/backfill first,
-		// subscribe after) is exactly the residual gap Task 1 flagged: an event committing in
-		// between would be seen by neither.
-		frames, unsubscribe := h.Subscribe(roomKey)
-		defer unsubscribe()
 
 		if err := h.sendSnapshotAndBackfill(ctx, conn, roomKey, opts.Snapshot, r); err != nil {
 			h.log.Error("rooms: ws snapshot/backfill", "room_key", roomKey, "error", err)
