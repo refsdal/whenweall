@@ -1,6 +1,6 @@
 import {
   expect,
-  pickFirstEnabledDay,
+  pickFirstEnabledDayNotToday,
   signIn,
   test,
   waitForHydration,
@@ -31,12 +31,12 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     await visitorPage.goto(bookPath)
     await waitForHydration(visitorPage)
     await expect(visitorPage.getByTestId('booking-page')).toBeVisible()
-    await pickFirstEnabledDay(visitorPage)
+    await pickFirstEnabledDayNotToday(visitorPage)
 
     await watcherPage.goto(bookPath)
     await waitForHydration(watcherPage)
     await expect(watcherPage.getByTestId('booking-page')).toBeVisible()
-    await pickFirstEnabledDay(watcherPage)
+    await pickFirstEnabledDayNotToday(watcherPage)
 
     const visitorSlotList = visitorPage.getByTestId('slot-list')
     await expect(visitorSlotList).toBeVisible()

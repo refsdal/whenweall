@@ -196,8 +196,9 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
   existing content is a membership change, not a data migration. A booking URL's
   `<handle>` segment is that organization's slug.
 - **A staff-only support console** at `/admin` for the person self-hosting this: user
-  lookup, impersonation, an append-only audit log — see
-  [`docs/admin-console.md`](./docs/admin-console.md).
+  lookup, lock/unlock, delete, and an append-only audit log — see
+  [`docs/admin-console.md`](./docs/admin-console.md). There is no impersonation and no
+  in-console way to grant staff to anyone else — see [Admin bootstrap](#admin-bootstrap).
 
 ## Architecture
 
@@ -383,9 +384,11 @@ The first staff account (access to the `/admin` support console) has no self-ser
 docker compose exec app /whenweall create-staff-user --email you@example.com
 ```
 
-Idempotent: re-running it against an already-staffed e-mail succeeds silently. From
-there, promote further staff from the console itself (audited), or repeat the command.
-Full runbook, including revoking, reading the audit log and incident response, in
+Idempotent: re-running it against an already-staffed e-mail succeeds silently. This
+command is the **only** way to grant staff — there is no in-console promotion, and (per
+[`docs/admin-console.md`](./docs/admin-console.md)) granting it is deliberately never
+audited, unlike everything staff do once they have it. Full runbook, including revoking,
+reading the audit log and incident response, in
 [`docs/admin-console.md`](./docs/admin-console.md).
 
 ## Development
@@ -473,7 +476,7 @@ internal/
   config/                env parsing and validation — the single source of app configuration
   db/                     connection pool, goose migration runner, id generation
   auth/                   Limen-backed sessions, organizations, staff, the create-staff-user path
-  admin/                  the /admin staff console: users, audit log, impersonation
+  admin/                  the /admin staff console: user lookup, lock/unlock, delete, audit log
   polls/                  scheduling polls + sign-up sheets: service layer, HTTP handlers, sqlc queries
   bookings/               1:1 booking pages: availability engine, service layer, HTTP handlers, .ics
   rooms/                  the realtime hub: LISTEN/NOTIFY fan-out, WebSocket routes, PROTOCOL.md

@@ -175,3 +175,57 @@ export async function pickFirstEnabledDay(page: Page): Promise<void> {
 
   await enabledDays.first().click()
 }
+
+/**
+ * Like `pickFirstEnabledDay`, but never picks "today" — deliberately so a caller that books
+ * today's only remaining slot doesn't have to worry about `SlotPicker`'s own documented "no slots
+ * left on this day, jump to the next enabled one" fallback
+ * (`web/src/components/booking/SlotPicker.tsx`) coincidentally matching an analogous same-time
+ * chip on a different day. "Today" is the one day whose slot count can already be partway drained
+ * by the time the suite runs (most of a day's 09:00–17:00 Europe/Oslo weekday window may already
+ * be in the past by wall-clock afternoon) — any OTHER day is always a full, untouched day, so
+ * booking one slot on it can never empty the whole day.
+ *
+ * Picks the LAST enabled day in the currently visible month rather than the first: in the
+ * overwhelmingly common case that's a different day from "today" already, at no extra request
+ * cost over `pickFirstEnabledDay` — booking.spec.ts's own two browser contexts each cost two
+ * loader-driven fetches just to land on this page, against the shared 20-per-minute `bookLimit`
+ * rate limiter (internal/bookings/handlers.go) every visitor-facing booking endpoint shares, so
+ * an unconditional month-forward navigation (an extra fetch pair per context) is a real budget
+ * concern, not a style preference. Only pages forward (same fallback loop as
+ * `pickFirstEnabledDay`) on the rare day the last enabled day in view IS today (e.g. today is the
+ * month's last enabled weekday) — matched via `toLocaleDateString('en-US')` against the
+ * `data-day` attribute (`web/src/components/ui/calendar.tsx`), which reads it from a `Date` in
+ * the SAME locale (Playwright's own context option, `playwright.config.ts`) and system time zone
+ * a plain `new Date()` in this Node process already uses.
+ */
+export async function pickFirstEnabledDayNotToday(page: Page): Promise<void> {
+  const calendar = page.locator('[data-slot="calendar"]')
+  await expect(calendar).toBeVisible()
+
+  const todayKey = new Date().toLocaleDateString('en-US')
+
+  const lastNonTodayDay = async () => {
+    const enabledDays = calendar.locator('button[data-day]:not([disabled])')
+    const count = await enabledDays.count()
+    for (let i = count - 1; i >= 0; i--) {
+      const day = enabledDays.nth(i)
+      if ((await day.getAttribute('data-day')) !== todayKey) return day
+    }
+    return null
+  }
+
+  let target = await lastNonTodayDay()
+  for (let guard = 0; guard < 6 && target === null; guard++) {
+    await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
+    await expect(async () => {
+      const enabledDays = calendar.locator('button[data-day]:not([disabled])')
+      expect(await enabledDays.count()).toBeGreaterThanOrEqual(1)
+    }).toPass({ timeout: 5_000 })
+    target = await lastNonTodayDay()
+  }
+  if (!target) {
+    throw new Error('pickFirstEnabledDayNotToday: no non-today enabled day found within 6 months')
+  }
+  await target.click()
+}
