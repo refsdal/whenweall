@@ -97,6 +97,12 @@ func (s *Server) routes() {
 
 	authHandler := s.authSvc.Handler()
 
+	// LockedSessionMiddleware sits directly around Limen's own handler, inside the rate limit —
+	// see its own doc comment (internal/auth/session.go) for why resolveSession's locked check
+	// alone can't stop a locked user's fresh sign-in from reaching Limen's own routes (invitations,
+	// /me, ...) directly.
+	lockedAuthHandler := s.authSvc.LockedSessionMiddleware(authHandler)
+
 	// The whole mount goes through one middleware that applies the hot, unauthenticated auth
 	// routes' 10/min-per-IP budget (see authRateLimitMiddleware for why this replaced a set of
 	// ServeMux exact-pattern registrations) before ever reaching Limen's own handler, which owns
@@ -104,7 +110,7 @@ func (s *Server) routes() {
 	// internal/auth.buildLimenConfig) unmodified either way. CheckOrigin is applied globally in
 	// Handler() below (scoped to /api/ via APIOnly) rather than per-route here, so it also covers
 	// whatever else RegisterAPI mounts on this same mux — see Handler()'s doc comment.
-	s.mux.Handle("/api/v1/auth/", s.authRateLimitMiddleware(authHandler))
+	s.mux.Handle("/api/v1/auth/", s.authRateLimitMiddleware(lockedAuthHandler))
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.

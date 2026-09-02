@@ -138,6 +138,107 @@ func TestAPIOnlySkipsSessionResolutionOutsideAPI(t *testing.T) {
 	}
 }
 
+// TestLockedSessionMiddleware_BlocksFreshSignInAtLimenButAllowsSignout is C1's own regression
+// test: locks a user, then proves a FRESH sign-in for them (a brand new cookie jar — Limen's
+// credential-password plugin has no concept of a lock, so this succeeds) still can't reach any
+// Limen route except signout, going through the real Server.Handler() (rate limit, both
+// middleware layers, the lot) rather than a hand-built mux — see LockedSessionMiddleware's own
+// doc comment (internal/auth/session.go) for why resolveSession's check alone can't stop this.
+func TestLockedSessionMiddleware_BlocksFreshSignInAtLimenButAllowsSignout(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig()
+	authSvc := testAuthService(t, cfg, d)
+	srv := httpserver.New(cfg, d, authSvc)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	newClient := func() *http.Client {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatalf("cookiejar: %v", err)
+		}
+		return &http.Client{Jar: jar}
+	}
+
+	postJSON := func(client *http.Client, path string, body map[string]any) *http.Response {
+		t.Helper()
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		resp, err := client.Post(ts.URL+path, "application/json", strings.NewReader(string(b)))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		return resp
+	}
+
+	email := "locked-mount-check@example.com"
+	const password = "Str0ngPassw0rd"
+
+	// Sign up and sign in once (unlocked), then lock the user directly — mirroring what
+	// internal/admin.LockUser writes, without pulling in that package (which would import this
+	// one, back around).
+	setupClient := newClient()
+	func() {
+		resp := postJSON(setupClient, "/api/v1/auth/signup/credential", map[string]any{"email": email, "password": password})
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode/100 != 2 {
+			t.Fatalf("signup: status %d", resp.StatusCode)
+		}
+	}()
+
+	var userID int64
+	if err := d.QueryRow(`SELECT id FROM users WHERE email = $1`, email).Scan(&userID); err != nil {
+		t.Fatalf("looking up user id: %v", err)
+	}
+	if _, err := d.Exec(`INSERT INTO locked_users (user_id, reason) VALUES ($1, 'test lock')`, userID); err != nil {
+		t.Fatalf("locking user: %v", err)
+	}
+
+	// A brand new client — a genuinely fresh sign-in Limen itself has no reason to refuse.
+	fresh := newClient()
+	func() {
+		resp := postJSON(fresh, "/api/v1/auth/signin/credential", map[string]any{"credential": email, "password": password})
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode/100 != 2 {
+			t.Fatalf("signin for a locked user: status %d, want success (Limen mints the session anyway)", resp.StatusCode)
+		}
+	}()
+
+	requireForbidden := func(resp *http.Response, what string) {
+		t.Helper()
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusForbidden {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%s: status %d, want 403: %s", what, resp.StatusCode, respBody)
+		}
+		var body map[string]map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&body); err == nil {
+			if code := body["error"]["code"]; code != "forbidden" {
+				t.Errorf("%s: error.code = %q, want forbidden", what, code)
+			}
+		}
+	}
+
+	meResp, err := fresh.Get(ts.URL + "/api/v1/auth/me")
+	if err != nil {
+		t.Fatalf("GET /me: %v", err)
+	}
+	requireForbidden(meResp, "GET /api/v1/auth/me for a locked user's fresh session")
+
+	inviteResp := postJSON(fresh, "/api/v1/auth/organizations/invitations", map[string]any{"email": "someone@example.com"})
+	requireForbidden(inviteResp, "POST /api/v1/auth/organizations/invitations for a locked user's fresh session")
+
+	signoutResp := postJSON(fresh, "/api/v1/auth/signout", map[string]any{})
+	defer func() { _ = signoutResp.Body.Close() }()
+	if signoutResp.StatusCode/100 != 2 {
+		respBody, _ := io.ReadAll(signoutResp.Body)
+		t.Fatalf("POST /api/v1/auth/signout for a locked user: status %d, want success: %s", signoutResp.StatusCode, respBody)
+	}
+}
+
 func TestHealthzDegradedWhenDBDown(t *testing.T) {
 	d := testdb.New(t)
 	cfg := testConfig()

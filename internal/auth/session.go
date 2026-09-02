@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/thecodearcher/limen/plugins/organization"
 )
@@ -54,13 +56,20 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	// mint a brand new, otherwise perfectly valid session — this check is what stops *that* one
 	// too, on every request, for as long as the lock stands.
 	//
+	// This is only half of the containment, though: it controls what auth.FromContext returns for
+	// *this application's own* handlers (everything internal/polls, internal/bookings, internal/admin
+	// etc. register), never what Limen's own mounted routes do — organization's invitations,
+	// Limen's own /me, and every other route under /api/v1/auth/ authenticate against Limen's own
+	// session validation, which never calls FromContext at all. A locked user with a fresh,
+	// Limen-valid session could still call those directly, right past this check. The second half —
+	// LockedSessionMiddleware below, wrapped around the whole /api/v1/auth/ mount by
+	// internal/httpserver — is what closes that gap; see its own doc comment for the full two-layer
+	// picture (also described in migrations/00007_admin_locks.sql).
+	//
 	// Fails closed: a lock control that fails open on its own query error (treating "couldn't
 	// tell" as "not locked") defeats the point of having it, so an error here is treated the same
 	// as "locked" — the request is anonymous — rather than falling through to a normal session.
-	var locked bool
-	if err := s.db.QueryRowContext(r.Context(),
-		"SELECT EXISTS(SELECT 1 FROM locked_users WHERE user_id = $1)", validated.User.ID,
-	).Scan(&locked); err != nil {
+	if locked, err := s.isUserLocked(r.Context(), validated.User.ID); err != nil {
 		s.logger.Error("auth: locked_users check failed; treating session as anonymous", "user_id", fmt.Sprint(validated.User.ID), "error", err)
 		return nil
 	} else if locked {
@@ -124,6 +133,76 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	}
 
 	return sess
+}
+
+// isUserLocked reports whether userID (Limen's `any` user id, same value resolveSession scans
+// off validated.User.ID) has a locked_users row. Shared by resolveSession (which treats a locked
+// user as anonymous for this application's own handlers) and LockedSessionMiddleware below (which
+// blocks a locked user from Limen's own mounted routes directly) — one query, one place that knows
+// its shape, rather than two copies drifting apart. Callers, not this helper, decide how to fail on
+// err != nil; both existing callers fail closed (treat "couldn't tell" as locked).
+func (s *Service) isUserLocked(ctx context.Context, userID any) (bool, error) {
+	var locked bool
+	err := s.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM locked_users WHERE user_id = $1)", userID,
+	).Scan(&locked)
+	return locked, err
+}
+
+// authMountSignoutMethodAndPath is the one exception LockedSessionMiddleware carves out of the
+// auth mount for a locked user: signing out. A locked user has no legitimate reason to reach any
+// other Limen route (see LockedSessionMiddleware's doc comment), but blocking signout too would
+// leave them holding a cookie they can never clear themselves.
+const authMountSignoutMethodAndPath = "POST /api/v1/auth/signout"
+
+// LockedSessionMiddleware wraps Limen's own handler — mounted at /api/v1/auth/ by
+// internal/httpserver — so a locked user's otherwise-valid Limen session cannot reach any route
+// under that mount except signout. This is the second, narrower layer resolveSession's own locked
+// check (above) can't provide on its own: that check only ever controls what auth.FromContext
+// returns for *this application's* handlers, because Limen's own plugin routes (organization's
+// invitations, Limen's own GET /me, magic-link's verify, an OAuth callback, ...) authenticate
+// against Limen's *own* session validation and never call FromContext at all. Concretely: a locked
+// user can still complete a fresh credential sign-in, an OAuth callback, or a magic-link verify —
+// none of Limen's plugins know locked_users exists — minting a brand new, perfectly valid Limen
+// session; without this middleware they could then use that session against any Limen route
+// directly, right past resolveSession's check. Blocking every such route here, unconditionally,
+// is the actual containment: the fresh session still gets minted (there is no hook early enough to
+// stop that part), but it is useless the moment it tries to do anything except sign out.
+//
+// Fails closed like resolveSession: a locked_users query error is treated as "locked" (blocks the
+// request) rather than "couldn't tell, so let it through" — see migrations/00007_admin_locks.sql
+// for the full two-layer picture this middleware and resolveSession's own comment together
+// describe.
+func (s *Service) LockedSessionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cleaned := path.Clean(strings.TrimSuffix(r.URL.Path, "/"))
+		if r.Method+" "+cleaned == authMountSignoutMethodAndPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		validated, err := s.limen.GetSession(r)
+		if err != nil || validated == nil || validated.User == nil {
+			// No valid Limen session at all — nothing for this middleware to block; whatever
+			// happens next (a signin attempt, an anonymous 401 from Limen itself, ...) is
+			// unaffected by locked_users.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		locked, err := s.isUserLocked(r.Context(), validated.User.ID)
+		if err != nil {
+			s.logger.Error("auth: locked_users check failed on auth mount; blocking request", "user_id", fmt.Sprint(validated.User.ID), "error", err)
+			writeErrorEnvelope(w, http.StatusForbidden, "forbidden", "account is locked")
+			return
+		}
+		if locked {
+			writeErrorEnvelope(w, http.StatusForbidden, "forbidden", "account is locked")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // FromContext returns the Session Middleware stashed on ctx, and whether one was present (false
