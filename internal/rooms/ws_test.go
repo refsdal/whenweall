@@ -164,21 +164,30 @@ func TestServeWS_ReconnectReplaysMissedThenLive(t *testing.T) {
 
 	_ = readWSFrame(t, conn2, 5*time.Second) // snapshot, again
 
-	first := readWSFrame(t, conn2, 5*time.Second)
-	second := readWSFrame(t, conn2, 5*time.Second)
-	if first["type"] != "missed1" || second["type"] != "missed2" {
-		t.Fatalf("backfill order = [%v, %v], want [missed1, missed2]", first["type"], second["type"])
-	}
-	seq1, _ := first["seq"].(float64)
-	seq2, _ := second["seq"].(float64)
-	if seq1 >= seq2 {
-		t.Errorf("backfilled seqs not increasing: %v, %v", seq1, seq2)
-	}
-
 	emitCommitted(t, sqlDB, roomKey, "live", nil)
-	third := readWSFrame(t, conn2, 5*time.Second)
-	if third["type"] != "live" {
-		t.Fatalf("frame after backfill = %v, want live (missed events must come before it)", third["type"])
+
+	// Delivery is at-least-once (PROTOCOL.md): a missed event whose LISTEN dispatch is still in
+	// flight when conn2 subscribes arrives twice — once via backfill, once live. Read like a real
+	// client: dedupe by a set of seqs, and judge ordering on first occurrences only.
+	seen := map[float64]bool{}
+	var order []string
+	seqOf := map[string]float64{}
+	for len(order) < 3 {
+		frame := readWSFrame(t, conn2, 5*time.Second)
+		seq, _ := frame["seq"].(float64)
+		if seen[seq] {
+			continue // duplicate delivery — the contract's routine case, a client drops it
+		}
+		seen[seq] = true
+		typ, _ := frame["type"].(string)
+		order = append(order, typ)
+		seqOf[typ] = seq
+	}
+	if order[0] != "missed1" || order[1] != "missed2" || order[2] != "live" {
+		t.Fatalf("first-occurrence order = %v, want [missed1 missed2 live]", order)
+	}
+	if seqOf["missed1"] >= seqOf["missed2"] {
+		t.Errorf("backfilled seqs not increasing: %v, %v", seqOf["missed1"], seqOf["missed2"])
 	}
 }
 
