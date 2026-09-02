@@ -1,50 +1,14 @@
 {
-  "name": "whenweall",
+  "name": "whenweall-e2e",
   "private": true,
   "type": "module",
-  "imports": {
-    "#/*": "./src/*"
-  },
+  "comment": "This root package.json exists ONLY for Playwright's e2e suite (e2e/, playwright.config.ts) — the app itself lives in web/ (the SPA) and cmd/+internal/ (the Go backend), each with its own toolchain. Do not add application dependencies here.",
   "scripts": {
-    "build": "cd web && bun install && bun run build",
-    "preview": "cd web && bun run preview",
-    "test:workers": "vitest run",
     "test:e2e": "playwright test",
-    "screenshots": "SCREENSHOTS=1 playwright test --grep @screenshots",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply whenweall-eu --local",
-    "db:migrate:remote": "wrangler d1 migrations apply whenweall-eu --remote",
-    "db:migrate:remote:test": "wrangler d1 migrations apply whenweall-test-eu --remote --env test",
-    "auth:generate": "auth generate --config src/server/auth/auth.cli.ts --output src/server/db/auth-schema.ts -y"
-  },
-  "dependencies": {
-    "@better-auth/drizzle-adapter": "^1.7.1",
-    "@better-auth/passkey": "^1.7.1",
-    "@better-auth/stripe": "^1.7.1",
-    "@date-fns/tz": "^1.5.0",
-    "@react-email/components": "^1.0.12",
-    "@react-email/render": "^2.1.0",
-    "@tanstack/react-router": "^1.170.31",
-    "better-auth": "^1.7.1",
-    "date-fns": "^4.4.0",
-    "drizzle-orm": "^0.45.2",
-    "nanoid": "^6.0.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "stripe": "^22.5.0",
-    "zod": "^4.4.3"
+    "screenshots": "SCREENSHOTS=1 playwright test --grep @screenshots"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.0.0",
-    "@cloudflare/workers-types": "^5.20260820.1",
-    "@msw/cloudflare": "^0.0.1",
     "@playwright/test": "^1.62.1",
-    "@types/bun": "^1.4.0",
-    "@types/node": "^26.2.0",
-    "auth": "^1.7.1",
-    "drizzle-kit": "^0.31.10",
-    "msw": "^2.15.0",
-    "vitest": "^4.1.11",
-    "wrangler": "^4.125.0"
+    "@types/node": "^26.2.0"
   }
 }

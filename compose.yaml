@@ -52,7 +52,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       EMAIL_FROM: ${EMAIL_FROM:-whenweall <no-reply@localhost>}
-      # Optional. Each is off unless fully configured; see src/config.ts.
+      # Optional. Each is off unless fully configured; see internal/config.
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
