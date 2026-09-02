@@ -8,6 +8,7 @@ package bookings_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -179,6 +180,44 @@ func TestGoogleSyncBusyMergesGoogleFreebusyIntoAvailability(t *testing.T) {
 	}
 	if !foundOpen {
 		t.Errorf("openSlot %s missing from availability", openSlot)
+	}
+}
+
+// TestRescheduleRejectsSlotBlockedByGoogleFreebusy is I1's own regression coverage for
+// Reschedule's Google Calendar busy merge: the freebusy lookup moved to a read-only prefetch
+// BEFORE Reschedule ever opens its transaction/takes the page lock (bookings.go), so this proves
+// the merge still reaches IsSlotAvailable correctly after that refactor, not just that Book's
+// (sibling, but separately hoisted) prefetch does.
+func TestRescheduleRejectsSlotBlockedByGoogleFreebusy(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	original := futureUTCSlot(3, 9, 0)
+	blockedSlot := futureUTCSlot(3, 10, 0)
+	openSlot := futureUTCSlot(3, 11, 0)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w,
+			`{"calendars":{"primary":{"busy":[{"start":%q,"end":%q}]}}}`,
+			blockedSlot.Format(time.RFC3339), blockedSlot.Add(30*time.Minute).Format(time.RFC3339),
+		)
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(original, "a@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, blockedSlot); !errors.Is(err, bookings.ErrSlotTaken) {
+		t.Errorf("reschedule onto Google-busy slot: err = %v, want ErrSlotTaken", err)
+	}
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, openSlot); err != nil {
+		t.Errorf("reschedule onto an open slot: err = %v, want nil", err)
 	}
 }
 

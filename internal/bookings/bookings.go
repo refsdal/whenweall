@@ -8,19 +8,35 @@
 //
 // Book's and Reschedule's invariant is per-page: no two confirmed bookings on the same page may
 // have overlapping [start, end) intervals (once each candidate's own buffer padding is applied).
-// Both methods run entirely inside one transaction and take exactly ONE row lock — the page's own
-// row (`SELECT ... FROM booking_pages WHERE ... FOR UPDATE`, queries.GetBookingPageByOrgSlugForUpdate/
-// GetBookingPageForUpdate) — taken BEFORE recomputing the candidate slot's validity, and held until
-// the winning booking's INSERT/UPDATE and the transaction commits. Every other concurrent
-// book/reschedule attempt against THE SAME PAGE blocks on that same row lock, so the
-// "read-live-bookings, check-availability, write" sequence below can never interleave across two
-// transactions: whichever transaction acquires the lock first sees every booking the other has
-// already committed, and the loser's own re-check (against that now-current busy list) correctly
-// fails with ErrSlotTaken. See TestBookRacingClaimsExactlyOneWinner (bookings_test.go) for the
-// proof. Only one lock is ever taken (unlike Claim's two, option-then-participant) because there is
-// only one invariant to protect here — a booking has no per-visitor budget to serialize
+// The DB-backed half of that invariant — the actual availability recheck and the winning
+// booking's INSERT/UPDATE — runs entirely inside one transaction and takes exactly ONE row lock —
+// the page's own row (`SELECT ... FROM booking_pages WHERE ... FOR UPDATE`,
+// queries.GetBookingPageByOrgSlugForUpdate/GetBookingPageForUpdate) — taken BEFORE recomputing the
+// candidate slot's validity, and held until the winning booking's write and the transaction
+// commits. Every other concurrent book/reschedule attempt against THE SAME PAGE blocks on that
+// same row lock, so the "read-live-bookings, check-availability, write" sequence below can never
+// interleave across two transactions: whichever transaction acquires the lock first sees every
+// booking the other has already committed, and the loser's own re-check (against that now-current
+// busy list, read fresh via q — the tx-bound *queries.Queries, never the pre-lock snapshot below)
+// correctly fails with ErrSlotTaken. See TestBookRacingClaimsExactlyOneWinner (bookings_test.go)
+// for the proof. Only one lock is ever taken (unlike Claim's two, option-then-participant) because
+// there is only one invariant to protect here — a booking has no per-visitor budget to serialize
 // separately — so there is no fixed lock ORDER to reason about, and no deadlock risk between
 // Book/Reschedule calls on different pages (each only ever locks its own page row).
+//
+// I1: a page's Google Calendar freebusy (googleBusyForPage, google.go) is best-effort and, unlike
+// a live booking row, never itself protected by the page lock — merging it in is cheap CPU work,
+// but *producing* it is one outbound HTTPS call that could stall for the full 15s
+// googleHTTPClient timeout. Both methods therefore resolve the page read-only and call
+// googleBusyForPage BEFORE ever opening the transaction that takes the lock: the slow network hop
+// happens with no lock held at all (so it can never make every other concurrent booking attempt
+// against this page queue up behind it), and only the fast part — re-reading the page, the live
+// bookings, and checking the merged busy list — happens once the lock is held. A page/booking
+// that changed between this pre-lock read and the lock itself (paused, googleSync toggled,
+// rescheduled again) is never a correctness problem: the pre-lock read only ever feeds the
+// best-effort Google half of the busy list, and the DB-authoritative half (live bookings, the
+// page's own current rules, PAGE_PAUSED/BOOKING_PAST) is always re-read fresh, in-lock, exactly as
+// this doc comment's own proof above requires.
 package bookings
 
 import (
@@ -224,6 +240,34 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 		return nil, err
 	}
 
+	// I1: resolve the org/page read-only, and run the (network-bound) Google Calendar freebusy
+	// lookup, BEFORE ever opening the transaction that takes the page row lock below — see this
+	// file's package doc comment for why. org.ID is reused as-is once the lock is taken (an org's
+	// own id never changes for a live slug); everything else read here is only ever used to
+	// decide whether/how to call Google — the authoritative page/status/rules checks all re-run
+	// against a fresh, LOCKED read a few lines down.
+	org, err := s.q.GetOrganizationBySlug(ctx, orgSlug)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	preLockPage, err := s.q.GetBookingPageByOrgSlug(ctx, queries.GetBookingPageByOrgSlugParams{
+		OrganizationID: org.ID, Slug: pageSlug,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	from, to := bookingWindow(in.StartAt)
+	var googleBusy []Interval
+	if preLockPage.Status != "paused" {
+		googleBusy = googleBusyForPage(ctx, s.google, preLockPage, from, to, nil)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -231,16 +275,10 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 	defer func() { _ = tx.Rollback() }()
 	q := queries.New(tx)
 
-	org, err := q.GetOrganizationBySlug(ctx, orgSlug)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-
 	// Lock the page row now, before recomputing the candidate slot's validity below — see this
-	// file's package doc comment for why the ordering matters.
+	// file's package doc comment for why the ordering matters. Re-read fresh (never the
+	// preLockPage snapshot above): this is the authoritative row every DB-backed check from here
+	// on is checked against.
 	page, err := q.GetBookingPageByOrgSlugForUpdate(ctx, queries.GetBookingPageByOrgSlugForUpdateParams{
 		OrganizationID: org.ID, Slug: pageSlug,
 	})
@@ -263,15 +301,14 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 	if err != nil {
 		return nil, err
 	}
-	from, to := bookingWindow(in.StartAt)
 	existing, err := bookedIntervalsForPage(ctx, q, page.ID, from, to, "")
 	if err != nil {
 		return nil, err
 	}
-	existing = googleBusyForPage(ctx, s.google, page, from, to, existing)
-	busy := make([]Interval, 0, len(in.Busy)+len(existing))
+	busy := make([]Interval, 0, len(in.Busy)+len(existing)+len(googleBusy))
 	busy = append(busy, in.Busy...)
 	busy = append(busy, existing...)
+	busy = append(busy, googleBusy...)
 
 	if !IsSlotAvailable(rules, in.StartAt, now, busy) {
 		return nil, ErrSlotTaken
@@ -414,10 +451,38 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 // port's fixed signature carries no byOrganiser flag the way Cancel's does, so there is no
 // separate owner-forced path here; an owner-initiated reschedule (were one ever added) would need
 // its own method, the same way UnclaimFor sits beside Unclaim in internal/polls/claims.go. Unlike
-// createBooking's own busy parameter, this port's fixed signature has no caller-supplied
-// Google-freebusy list either — only the page's own live bookings are checked (a deviation noted
-// here rather than hidden).
+// createBooking's own busy parameter, this port's fixed signature takes no caller-supplied
+// Google-freebusy list — there is no external caller here the way Book's HTTP handler is; instead
+// this method does its own internal prefetch (see this file's package doc comment's own I1 note)
+// of the page's Google Calendar freebusy, merged in alongside the page's own live bookings.
 func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string, newStart time.Time) (*BookingResult, error) {
+	// I1: resolve the booking/page read-only, and run the Google Calendar freebusy lookup, BEFORE
+	// ever opening the transaction that takes the page row lock below — see Book's identical
+	// prefetch, and this file's package doc comment, for why. Every value read in this pass is
+	// used only to decide whether/how to call Google; the authoritative token/status/page checks
+	// all re-run against a fresh, LOCKED read a few lines down.
+	preLockBooking, err := s.q.GetBooking(ctx, bookingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !tokenMatches(manageToken, preLockBooking.ManageTokenHash) {
+		return nil, ErrInvalidToken
+	}
+	from, to := bookingWindow(newStart)
+	var googleBusy []Interval
+	if preLockBooking.Status != "cancelled" {
+		preLockPage, pageErr := s.q.GetBookingPage(ctx, preLockBooking.PageID)
+		if pageErr != nil && !errors.Is(pageErr, sql.ErrNoRows) {
+			return nil, pageErr
+		}
+		if pageErr == nil && preLockPage.Status != "paused" {
+			googleBusy = googleBusyForPage(ctx, s.google, preLockPage, from, to, nil)
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -440,7 +505,9 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	}
 
 	// Lock the page row now, before recomputing the candidate slot's validity below — see this
-	// file's package doc comment for why the ordering matters.
+	// file's package doc comment for why the ordering matters. Re-read fresh (never the
+	// preLockPage snapshot above): this is the authoritative row every DB-backed check from here
+	// on is checked against.
 	page, err := q.GetBookingPageForUpdate(ctx, booking.PageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -461,7 +528,6 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
-	from, to := bookingWindow(newStart)
 	// excludeBookingID drops this booking's own prior interval so a reschedule to a slot it
 	// already occupies (or one abutting it) doesn't self-block — see bookedIntervalsForPage's
 	// doc comment, and the "rescheduling to the exact same slot succeeds" case this ports.
@@ -469,9 +535,11 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
-	existing = googleBusyForPage(ctx, s.google, page, from, to, existing)
+	busy := make([]Interval, 0, len(existing)+len(googleBusy))
+	busy = append(busy, existing...)
+	busy = append(busy, googleBusy...)
 
-	if !IsSlotAvailable(rules, newStart, now, existing) {
+	if !IsSlotAvailable(rules, newStart, now, busy) {
 		return nil, ErrSlotTaken
 	}
 
