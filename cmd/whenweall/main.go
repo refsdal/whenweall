@@ -17,6 +17,7 @@ import (
 	_ "time/tzdata" // scratch has no /usr/share/zoneinfo; scheduling needs real tz data.
 
 	"github.com/refsdal/whenweall/internal/auth"
+	"github.com/refsdal/whenweall/internal/bookings"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/httpserver"
@@ -101,6 +102,16 @@ func serve() int {
 	pollsSvc := polls.NewService(sqlDB)
 	pollsSvc.RegisterJobs(worker, m)
 
+	// bookingsSvc owns the booking-page domain: its HTTP surface (Register, below) and its own
+	// three scheduled job kinds (booking.reminder/mail:booking/google:sync — RegisterJobs) share
+	// this one instance, the same shape pollsSvc uses above. SetGoogleSync wires in a real Google
+	// Calendar client (nil — sync off — when the capability itself isn't configured; see
+	// NewGoogleSync's own doc comment), BEFORE RegisterJobs so "google:sync" jobs the worker picks
+	// up immediately after Run starts see a fully wired Service, never a half-built one.
+	bookingsSvc := bookings.NewService(sqlDB)
+	bookingsSvc.SetGoogleSync(bookings.NewGoogleSync(cfg, sqlDB))
+	bookingsSvc.RegisterJobs(worker, m)
+
 	if err := jobs.EnsureScheduled(ctx, sqlDB); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -114,7 +125,10 @@ func serve() int {
 	}
 
 	srv := httpserver.New(cfg, sqlDB, authSvc)
-	srv.RegisterAPI(func(mux *http.ServeMux) { pollsSvc.Register(mux, authSvc, cfg) })
+	srv.RegisterAPI(func(mux *http.ServeMux) {
+		pollsSvc.Register(mux, authSvc, cfg)
+		bookingsSvc.Register(mux, authSvc, cfg)
+	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
