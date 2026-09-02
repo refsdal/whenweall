@@ -35,8 +35,8 @@ describe('PrivacyPage', () => {
   it('names the processors used by the service', () => {
     render(<PrivacyPage />)
 
-    expect(screen.getAllByText(/Stripe/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Cloudflare/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/self-hosted/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/SMTP/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Google/).length).toBeGreaterThan(0)
   })
 })

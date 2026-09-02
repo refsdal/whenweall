@@ -66,17 +66,12 @@ export function AdminBar({
   onShare,
   locale,
   timeZone,
-  pushAvailable = false,
 }: {
   poll: PollView
   onChanged: () => void | Promise<void>
   onShare: () => void
   locale: AppLocale
   timeZone: string
-  /** Always `false` for now — billing/entitlements are gone from this rewrite, so there is no
-   * more Premium-gated push tier to read; kept as a prop (rather than deleted outright) so a
-   * later push-notification feature only needs to change what the caller passes in. */
-  pushAvailable?: boolean
 }) {
   const navigate = useNavigate()
   const defaultChannels = poll.notifications?.defaults ?? null
@@ -237,7 +232,6 @@ export function AdminBar({
                 events={POLL_NOTIFICATION_EVENTS}
                 value={channels}
                 defaults={defaultChannels}
-                pushAvailable={pushAvailable}
                 disabled={!following}
                 onChange={(next) => void savePrefs(next)}
               />

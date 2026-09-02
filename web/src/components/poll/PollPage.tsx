@@ -276,10 +276,6 @@ export function PollPage({
           onShare={() => setShareOpen(true)}
           locale={locale}
           timeZone={timeZone}
-          // Billing/entitlements are gone from this rewrite (no more Premium-gated push column) —
-          // push notifications are a separate, not-yet-built feature (see spike/web-push-crypto),
-          // so this is unconditionally false rather than reading a tier that no longer exists.
-          pushAvailable={false}
         />
       )}
 

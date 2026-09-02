@@ -31,10 +31,10 @@ describe('TermsPage', () => {
     }
   })
 
-  it('describes Premium billing via Stripe in NOK', () => {
+  it('states the service is free and open source, with no billing', () => {
     render(<TermsPage />)
 
-    expect(screen.getByText(/Stripe/)).toBeInTheDocument()
-    expect(screen.getByText(/NOK/)).toBeInTheDocument()
+    expect(screen.getByText(/free to use/)).toBeInTheDocument()
+    expect(screen.getByText(/open source/)).toBeInTheDocument()
   })
 })

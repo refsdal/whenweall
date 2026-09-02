@@ -63,8 +63,6 @@ export type NotificationGridProps = {
   value: Grid | null
   /** The user's account defaults, used as the middle rung of the fallback chain. */
   defaults: Grid | null
-  /** False on a Free org: the push column renders disabled with an upgrade hint. */
-  pushAvailable: boolean
   disabled?: boolean
   onChange: (next: Grid) => void
 }
@@ -73,7 +71,6 @@ export function NotificationGrid({
   events,
   value,
   defaults,
-  pushAvailable,
   disabled = false,
   onChange,
 }: NotificationGridProps) {
@@ -91,10 +88,9 @@ export function NotificationGrid({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 text-xs text-muted-foreground">
+      <div className="grid grid-cols-[1fr_auto] items-center gap-x-4 text-xs text-muted-foreground">
         <span />
         <span className="w-12 text-center">{m.notif_channel_email()}</span>
-        <span className="w-12 text-center">{m.notif_channel_push()}</span>
       </div>
 
       {visible.map((group) => (
@@ -105,10 +101,7 @@ export function NotificationGrid({
           {group.events.map((event) => {
             const channels = resolveChannels(event, value, defaults)
             return (
-              <div
-                key={event}
-                className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 text-sm"
-              >
+              <div key={event} className="grid grid-cols-[1fr_auto] items-center gap-x-4 text-sm">
                 <span>{eventLabel(event)}</span>
                 <span className="flex w-12 justify-center">
                   <Checkbox
@@ -118,14 +111,6 @@ export function NotificationGrid({
                     onCheckedChange={(checked) => toggle(event, 'email', checked === true)}
                   />
                 </span>
-                <span className="flex w-12 justify-center">
-                  <Checkbox
-                    checked={pushAvailable && channels.push}
-                    disabled={disabled || !pushAvailable}
-                    aria-label={`${eventLabel(event)} — ${m.notif_channel_push()}`}
-                    onCheckedChange={(checked) => toggle(event, 'push', checked === true)}
-                  />
-                </span>
               </div>
             )
           })}
@@ -133,9 +118,6 @@ export function NotificationGrid({
       ))}
 
       <p className="text-xs text-muted-foreground">{m.notif_email_cadence_hint()}</p>
-      {!pushAvailable ? (
-        <p className="text-xs text-muted-foreground">{m.notif_push_premium_hint()}</p>
-      ) : null}
     </div>
   )
 }
