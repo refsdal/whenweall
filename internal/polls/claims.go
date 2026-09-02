@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -83,7 +82,7 @@ func prepareNewParticipant(ctx context.Context, q *queries.Queries, pollID strin
 		trimmedEmail = strings.TrimSpace(*email)
 	}
 	if poll.RequireParticipantEmail && trimmedEmail == "" {
-		return preparedParticipant{}, newValidationError("email", "email is required (TS: EMAIL_REQUIRED)")
+		return preparedParticipant{}, ErrEmailRequired
 	}
 
 	existing, err := q.ListParticipantsByPoll(ctx, pollID)
@@ -91,7 +90,7 @@ func prepareNewParticipant(ctx context.Context, q *queries.Queries, pollID strin
 		return preparedParticipant{}, err
 	}
 	if len(existing) >= LimitParticipants {
-		return preparedParticipant{}, fmt.Errorf("%w: participant limit reached (TS: LIMIT_REACHED)", ErrConflict)
+		return preparedParticipant{}, ErrLimitReached
 	}
 
 	p := preparedParticipant{id: db.NewID(), name: trimmedName}
@@ -106,7 +105,7 @@ func prepareNewParticipant(ctx context.Context, q *queries.Queries, pollID strin
 
 // requireSignupPollTx fetches pollID and requires poll.Type == "signup", ported from
 // requireSignupPoll (claims.ts/claim-auth.ts). When allowClosed is false, also requires
-// poll.Status == "open" (TS: POLL_CLOSED, collapsed onto ErrConflict — see errors.go).
+// poll.Status == "open" — returns ErrPollClosed (TS: POLL_CLOSED) otherwise; see errors.go.
 func requireSignupPollTx(ctx context.Context, q *queries.Queries, pollID string, allowClosed bool) (queries.Poll, error) {
 	poll, err := q.GetPoll(ctx, pollID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -119,7 +118,7 @@ func requireSignupPollTx(ctx context.Context, q *queries.Queries, pollID string,
 		return queries.Poll{}, newValidationError("type", "poll must be a sign-up sheet")
 	}
 	if !allowClosed && poll.Status != "open" {
-		return queries.Poll{}, fmt.Errorf("%w: poll is not open (TS: POLL_CLOSED)", ErrConflict)
+		return queries.Poll{}, ErrPollClosed
 	}
 	return poll, nil
 }
@@ -231,7 +230,7 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 	}
 
 	if !alreadyClaimed && len(claimedOptionIDs) >= int(poll.SignupMaxClaims) {
-		return nil, fmt.Errorf("%w: claim limit reached (TS: CLAIM_LIMIT_REACHED)", ErrConflict)
+		return nil, ErrClaimLimitReached
 	}
 	if !alreadyClaimed && option.Capacity.Valid {
 		count, cerr := q.CountYesVotesForOption(ctx, optionID)
@@ -397,7 +396,7 @@ func (s *Service) unclaim(ctx context.Context, pollID, optionID, targetParticipa
 	}
 
 	if !canManage && poll.Status != "open" {
-		return fmt.Errorf("%w: poll is not open (TS: POLL_CLOSED)", ErrConflict)
+		return ErrPollClosed
 	}
 
 	if err := q.DeleteVote(ctx, queries.DeleteVoteParams{ParticipantID: participantID, OptionID: optionID}); err != nil {

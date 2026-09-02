@@ -155,7 +155,7 @@ func TestClaim(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (CLAIM_LIMIT_REACHED) for a signed-in caller who never passes ParticipantID", func(t *testing.T) {
+	t.Run("ErrClaimLimitReached for a signed-in caller who never passes ParticipantID", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -166,12 +166,12 @@ func TestClaim(t *testing.T) {
 		if _, err := s.Claim(ctx, created.ID, slot1.ID, polls.ClaimInput{Name: "Voter"}, polls.Viewer{UserID: claimantID}); err != nil {
 			t.Fatalf("Claim (1): %v", err)
 		}
-		if _, err := s.Claim(ctx, created.ID, slot2.ID, polls.ClaimInput{Name: "Voter"}, polls.Viewer{UserID: claimantID}); !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if _, err := s.Claim(ctx, created.ID, slot2.ID, polls.ClaimInput{Name: "Voter"}, polls.Viewer{UserID: claimantID}); !errors.Is(err, polls.ErrClaimLimitReached) {
+			t.Errorf("err = %v, want ErrClaimLimitReached", err)
 		}
 	})
 
-	t.Run("ErrConflict (CLAIM_LIMIT_REACHED), then succeeds after signupMaxClaims is raised", func(t *testing.T) {
+	t.Run("ErrClaimLimitReached, then succeeds after signupMaxClaims is raised", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -183,8 +183,8 @@ func TestClaim(t *testing.T) {
 			t.Fatalf("Claim (1): %v", err)
 		}
 		_, err = s.Claim(ctx, created.ID, slot2.ID, polls.ClaimInput{ParticipantID: first.ParticipantID}, polls.Viewer{GuestParticipantID: first.ParticipantID})
-		if !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if !errors.Is(err, polls.ErrClaimLimitReached) {
+			t.Errorf("err = %v, want ErrClaimLimitReached", err)
 		}
 
 		two := 2
@@ -235,7 +235,7 @@ func TestClaim(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_CLOSED) when the poll is not open", func(t *testing.T) {
+	t.Run("ErrPollClosed when the poll is not open", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -245,8 +245,8 @@ func TestClaim(t *testing.T) {
 			t.Fatalf("SetStatus: %v", err)
 		}
 
-		if _, err := s.Claim(ctx, created.ID, slot.ID, polls.ClaimInput{Name: "Alice"}, polls.Viewer{}); !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if _, err := s.Claim(ctx, created.ID, slot.ID, polls.ClaimInput{Name: "Alice"}, polls.Viewer{}); !errors.Is(err, polls.ErrPollClosed) {
+			t.Errorf("err = %v, want ErrPollClosed", err)
 		}
 	})
 
@@ -298,15 +298,15 @@ func TestClaim(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrValidation (EMAIL_REQUIRED) when the poll requires an email and none is given", func(t *testing.T) {
+	t.Run("ErrEmailRequired when the poll requires an email and none is given", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 		created := createSignupPollWithEmail(t, ctx, s, orgID, ownerID, []*int{nil})
 		slot := created.Options[0]
 
-		if _, err := s.Claim(ctx, created.ID, slot.ID, polls.ClaimInput{Name: "Alice"}, polls.Viewer{}); !errors.Is(err, polls.ErrValidation) {
-			t.Errorf("err = %v, want ErrValidation", err)
+		if _, err := s.Claim(ctx, created.ID, slot.ID, polls.ClaimInput{Name: "Alice"}, polls.Viewer{}); !errors.Is(err, polls.ErrEmailRequired) {
+			t.Errorf("err = %v, want ErrEmailRequired", err)
 		}
 	})
 }
@@ -509,7 +509,7 @@ func TestUnclaim(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_CLOSED) when the poll is not open", func(t *testing.T) {
+	t.Run("ErrPollClosed when the poll is not open", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -524,8 +524,8 @@ func TestUnclaim(t *testing.T) {
 		}
 
 		err = s.Unclaim(ctx, created.ID, slot.ID, polls.Viewer{GuestParticipantID: claim.ParticipantID})
-		if !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if !errors.Is(err, polls.ErrPollClosed) {
+			t.Errorf("err = %v, want ErrPollClosed", err)
 		}
 	})
 

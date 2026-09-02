@@ -186,11 +186,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // writeServiceError maps every sentinel this package's Service methods can return to the standard
 // HTTP error envelope. *ValidationError -> 422 "invalid" (carrying Fields); ErrCapacityFull -> 409
-// "capacity_full" (checked before the more general ErrConflict, though the two sentinels never
-// overlap); ErrConflict -> 409 "conflict"; ErrNotFound -> 404 "not_found" (this is where
-// requireOrgPoll's wrong-org -> ErrNotFound mapping, and RequireManageable's own NOT_FOUND half,
-// surface as a real 404 — see this file's package doc comment, item (c)); ErrForbidden -> 403
-// "forbidden". Anything else is logged and reported as a generic 500.
+// "capacity_full"; each of the six ErrConflict-wrapping sentinels (errors.go) -> 409 with its own
+// snake_case envelope code (poll_closed, poll_finalized, limit_reached, claim_limit_reached,
+// capacity_below_claims, email_required) — checked before the plain ErrConflict case, since every
+// one of them also satisfies errors.Is(err, ErrConflict); a bare ErrConflict (none of the six) ->
+// 409 "conflict"; ErrNotFound -> 404 "not_found" (this is where requireOrgPoll's wrong-org ->
+// ErrNotFound mapping, and RequireManageable's own NOT_FOUND half, surface as a real 404 — see
+// this file's package doc comment, item (c)); ErrForbidden -> 403 "forbidden". Anything else is
+// logged and reported as a generic 500.
+//
+// The envelope codes below are this Go service's own vocabulary, not the TS frontend's — the TS
+// AppError codes are SCREAMING_CASE (src/lib/errors.ts's ERROR_CODES) and the frontend's error
+// switches (src/lib/use-claims.ts, src/components/poll/use-answer-draft.ts,
+// src/routes/p/$id/edit.tsx) match on those directly; translating this envelope's snake_case codes
+// into that shape is plan 8's job, not this handler's.
 func writeServiceError(w http.ResponseWriter, err error) {
 	var verr *ValidationError
 	switch {
@@ -198,6 +207,18 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httpserver.Err(w, http.StatusUnprocessableEntity, "invalid", "validation failed", verr.Fields)
 	case errors.Is(err, ErrCapacityFull):
 		httpserver.Err(w, http.StatusConflict, "capacity_full", "this slot is full", nil)
+	case errors.Is(err, ErrPollClosed):
+		httpserver.Err(w, http.StatusConflict, "poll_closed", "this poll is closed", nil)
+	case errors.Is(err, ErrPollFinalized):
+		httpserver.Err(w, http.StatusConflict, "poll_finalized", "this poll has been finalized", nil)
+	case errors.Is(err, ErrLimitReached):
+		httpserver.Err(w, http.StatusConflict, "limit_reached", "this poll has reached its participant limit", nil)
+	case errors.Is(err, ErrClaimLimitReached):
+		httpserver.Err(w, http.StatusConflict, "claim_limit_reached", "you have reached this poll's claim limit", nil)
+	case errors.Is(err, ErrCapacityBelowClaims):
+		httpserver.Err(w, http.StatusConflict, "capacity_below_claims", "capacity cannot be set below the current number of claims", nil)
+	case errors.Is(err, ErrEmailRequired):
+		httpserver.Err(w, http.StatusConflict, "email_required", "an email address is required for this poll", nil)
 	case errors.Is(err, ErrConflict):
 		httpserver.Err(w, http.StatusConflict, "conflict", "the poll's current state does not allow this", nil)
 	case errors.Is(err, ErrNotFound):

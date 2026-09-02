@@ -79,10 +79,8 @@ type Comment struct {
 }
 
 // requireOpenPollTx fetches pollID (queries.GetPoll already excludes soft-deleted rows) and
-// requires its status to be "open" — ports requireOpenPoll (participants.ts). ErrConflict wraps
-// the TS POLL_CLOSED code, extending the same collapse errors.go documents for ErrConflict
-// (POLL_FINALIZED/CONFLICT/CAPACITY_BELOW_CLAIMS in Task 2; POLL_CLOSED/LIMIT_REACHED/
-// CLAIM_LIMIT_REACHED added here in Task 3 — every call site names which TS code it is).
+// requires its status to be "open" — ports requireOpenPoll (participants.ts), returning
+// ErrPollClosed (TS: POLL_CLOSED) otherwise; see errors.go for the full sentinel/code table.
 func requireOpenPollTx(ctx context.Context, q *queries.Queries, pollID string) (queries.Poll, error) {
 	poll, err := q.GetPoll(ctx, pollID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -92,7 +90,7 @@ func requireOpenPollTx(ctx context.Context, q *queries.Queries, pollID string) (
 		return queries.Poll{}, err
 	}
 	if poll.Status != "open" {
-		return queries.Poll{}, fmt.Errorf("%w: poll is not open (TS: POLL_CLOSED)", ErrConflict)
+		return queries.Poll{}, ErrPollClosed
 	}
 	return poll, nil
 }
@@ -201,7 +199,7 @@ func (s *Service) AddParticipant(ctx context.Context, pollID string, in Particip
 		trimmedEmail = strings.TrimSpace(*in.Email)
 	}
 	if poll.RequireParticipantEmail && trimmedEmail == "" {
-		return nil, newValidationError("email", "email is required (TS: EMAIL_REQUIRED)")
+		return nil, ErrEmailRequired
 	}
 
 	existing, err := q.ListParticipantsByPoll(ctx, pollID)
@@ -209,7 +207,7 @@ func (s *Service) AddParticipant(ctx context.Context, pollID string, in Particip
 		return nil, err
 	}
 	if len(existing) >= LimitParticipants {
-		return nil, fmt.Errorf("%w: participant limit reached (TS: LIMIT_REACHED)", ErrConflict)
+		return nil, ErrLimitReached
 	}
 
 	if err := validateAnswersTx(ctx, q, pollID, in.Answers, poll.AllowIfNeedBe); err != nil {
@@ -344,7 +342,7 @@ func (s *Service) RemoveParticipant(ctx context.Context, pollID, participantID s
 		return err
 	}
 	if !canManage && poll.Status != "open" {
-		return fmt.Errorf("%w: poll is not open (TS: POLL_CLOSED)", ErrConflict)
+		return ErrPollClosed
 	}
 	if !participantAuthorized(participant, viewer, canManage) {
 		return ErrForbidden

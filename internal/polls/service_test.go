@@ -568,7 +568,7 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_FINALIZED) when editing options on a finalized poll", func(t *testing.T) {
+	t.Run("ErrPollFinalized when editing options on a finalized poll", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -581,8 +581,8 @@ func TestUpdate(t *testing.T) {
 		_, err := s.Update(ctx, created.ID, orgID, polls.UpdatePollInput{
 			Options: []polls.OptionInput{{ID: opt1.ID, Kind: polls.OptionKindDatetime, StartAt: *opt1.StartAt}},
 		})
-		if !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("Update on finalized poll's options: err = %v, want ErrConflict", err)
+		if !errors.Is(err, polls.ErrPollFinalized) {
+			t.Errorf("Update on finalized poll's options: err = %v, want ErrPollFinalized", err)
 		}
 	})
 
@@ -620,7 +620,7 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (CAPACITY_BELOW_CLAIMS) when lowering a slot's capacity under its claim count", func(t *testing.T) {
+	t.Run("ErrCapacityBelowClaims when lowering a slot's capacity under its claim count", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -632,8 +632,8 @@ func TestUpdate(t *testing.T) {
 		_, err := s.Update(ctx, created.ID, orgID, polls.UpdatePollInput{
 			Options: []polls.OptionInput{withCapacity(polls.OptionInput{ID: slot.ID, Kind: polls.OptionKindText, Label: *slot.Label}, intPtr(1))},
 		})
-		if !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if !errors.Is(err, polls.ErrCapacityBelowClaims) {
+			t.Errorf("err = %v, want ErrCapacityBelowClaims", err)
 		}
 	})
 
@@ -731,7 +731,7 @@ func TestSetStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_FINALIZED) for a finalized poll", func(t *testing.T) {
+	t.Run("ErrPollFinalized for a finalized poll", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -740,8 +740,8 @@ func TestSetStatus(t *testing.T) {
 			t.Fatalf("Finalize: %v", err)
 		}
 
-		if err := s.SetStatus(ctx, created.ID, orgID, "closed"); !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if err := s.SetStatus(ctx, created.ID, orgID, "closed"); !errors.Is(err, polls.ErrPollFinalized) {
+			t.Errorf("err = %v, want ErrPollFinalized", err)
 		}
 	})
 }
@@ -789,8 +789,14 @@ func TestFinalize(t *testing.T) {
 			t.Fatalf("Finalize: %v", err)
 		}
 
-		if err := s.Finalize(ctx, created.ID, orgID, created.Options[1].ID, ownerID); !errors.Is(err, polls.ErrConflict) {
+		err := s.Finalize(ctx, created.ID, orgID, created.Options[1].ID, ownerID)
+		if !errors.Is(err, polls.ErrConflict) {
 			t.Errorf("err = %v, want ErrConflict", err)
+		}
+		// Deliberately the plain CONFLICT code, not POLL_FINALIZED — see errors.go / Finalize's
+		// own call site comment for why these two near-identical English messages differ.
+		if errors.Is(err, polls.ErrPollFinalized) {
+			t.Errorf("err = %v, should NOT be ErrPollFinalized (TS: plain CONFLICT here)", err)
 		}
 	})
 

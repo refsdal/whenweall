@@ -214,7 +214,7 @@ func TestAddParticipant(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_CLOSED) when the poll is not open", func(t *testing.T) {
+	t.Run("ErrPollClosed when the poll is not open", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -223,12 +223,12 @@ func TestAddParticipant(t *testing.T) {
 			t.Fatalf("SetStatus: %v", err)
 		}
 
-		if _, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Alice", Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if _, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Alice", Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrPollClosed) {
+			t.Errorf("err = %v, want ErrPollClosed", err)
 		}
 	})
 
-	t.Run("ErrValidation (EMAIL_REQUIRED) when the poll requires an email and none (or blank) is given", func(t *testing.T) {
+	t.Run("ErrEmailRequired when the poll requires an email and none (or blank) is given", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -241,12 +241,12 @@ func TestAddParticipant(t *testing.T) {
 			t.Fatalf("Create: %v", err)
 		}
 
-		if _, err := s.AddParticipant(ctx, view.ID, polls.ParticipantInput{Name: "Alice", Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrValidation) {
-			t.Errorf("err (no email) = %v, want ErrValidation", err)
+		if _, err := s.AddParticipant(ctx, view.ID, polls.ParticipantInput{Name: "Alice", Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrEmailRequired) {
+			t.Errorf("err (no email) = %v, want ErrEmailRequired", err)
 		}
 		blank := "   "
-		if _, err := s.AddParticipant(ctx, view.ID, polls.ParticipantInput{Name: "Alice", Email: &blank, Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrValidation) {
-			t.Errorf("err (blank email) = %v, want ErrValidation", err)
+		if _, err := s.AddParticipant(ctx, view.ID, polls.ParticipantInput{Name: "Alice", Email: &blank, Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrEmailRequired) {
+			t.Errorf("err (blank email) = %v, want ErrEmailRequired", err)
 		}
 	})
 
@@ -302,7 +302,7 @@ func TestAddParticipant(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (LIMIT_REACHED) once the poll has 500 participants", func(t *testing.T) {
+	t.Run("ErrLimitReached once the poll has 500 participants", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -312,8 +312,8 @@ func TestAddParticipant(t *testing.T) {
 			seedParticipant(t, d, created.ID, fmt.Sprintf("P%d", i), nil, "")
 		}
 
-		if _, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Overflow", Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if _, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{Name: "Overflow", Answers: map[string]string{}}, polls.Viewer{}); !errors.Is(err, polls.ErrLimitReached) {
+			t.Errorf("err = %v, want ErrLimitReached", err)
 		}
 	})
 }
@@ -452,7 +452,7 @@ func TestUpdateParticipant(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_CLOSED) once the poll is no longer open, even for a manager", func(t *testing.T) {
+	t.Run("ErrPollClosed once the poll is no longer open, even for a manager", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -469,8 +469,8 @@ func TestUpdateParticipant(t *testing.T) {
 		err = s.UpdateParticipant(ctx, created.ID, result.ParticipantID, polls.ParticipantInput{
 			Answers: map[string]string{opt1.ID: "no"},
 		}, polls.Viewer{UserID: ownerID})
-		if !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if !errors.Is(err, polls.ErrPollClosed) {
+			t.Errorf("err = %v, want ErrPollClosed", err)
 		}
 	})
 
@@ -639,7 +639,7 @@ func TestRemoveParticipant(t *testing.T) {
 		}
 	})
 
-	t.Run("ErrConflict (POLL_CLOSED) for a non-manager once the poll is no longer open", func(t *testing.T) {
+	t.Run("ErrPollClosed for a non-manager once the poll is no longer open", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
@@ -654,8 +654,8 @@ func TestRemoveParticipant(t *testing.T) {
 		}
 
 		err = s.RemoveParticipant(ctx, created.ID, result.ParticipantID, polls.Viewer{GuestParticipantID: result.ParticipantID})
-		if !errors.Is(err, polls.ErrConflict) {
-			t.Errorf("err = %v, want ErrConflict", err)
+		if !errors.Is(err, polls.ErrPollClosed) {
+			t.Errorf("err = %v, want ErrPollClosed", err)
 		}
 	})
 

@@ -273,7 +273,7 @@ func (s *Service) Update(ctx context.Context, pollID, orgID string, in UpdatePol
 		return nil, err
 	}
 	if poll.Status == pollFinalizedStatus && in.Options != nil {
-		return nil, fmt.Errorf("%w: poll is finalized, options cannot be edited (TS: POLL_FINALIZED)", ErrConflict)
+		return nil, ErrPollFinalized
 	}
 
 	merged := poll
@@ -369,8 +369,8 @@ func (s *Service) Update(ctx context.Context, pollID, orgID string, in UpdatePol
 // options, and existing options not named in options are deleted (poll_options' ON DELETE CASCADE
 // on votes.option_id removes their votes as a side effect — matching the TS test "removing an
 // option deletes its votes"). For a signup poll, lowering a retained option's capacity below its
-// current claim count is rejected (ErrConflict — TS: CAPACITY_BELOW_CLAIMS) before any row is
-// touched.
+// current claim count is rejected (ErrCapacityBelowClaims — TS: CAPACITY_BELOW_CLAIMS) before
+// any row is touched.
 func replaceOptions(ctx context.Context, q *queries.Queries, pollID string, pollType PollType, options []OptionInput) error {
 	existing, err := q.ListOptionsByPoll(ctx, pollID)
 	if err != nil {
@@ -406,7 +406,7 @@ func replaceOptions(ctx context.Context, q *queries.Queries, pollID string, poll
 				}
 			}
 			if newCapacity.Valid && int(newCapacity.Int32) < counts[opt.ID] {
-				return fmt.Errorf("%w: capacity below current claims (TS: CAPACITY_BELOW_CLAIMS)", ErrConflict)
+				return ErrCapacityBelowClaims
 			}
 		}
 	}
@@ -477,7 +477,7 @@ func (s *Service) SetStatus(ctx context.Context, pollID, orgID, status string) e
 		return err
 	}
 	if poll.Status == pollFinalizedStatus {
-		return fmt.Errorf("%w: poll is finalized (TS: POLL_FINALIZED)", ErrConflict)
+		return ErrPollFinalized
 	}
 
 	if err := q.SetPollStatus(ctx, queries.SetPollStatusParams{
@@ -514,6 +514,10 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		return newValidationError("type", "signup polls cannot be finalized")
 	}
 	if poll.Status == pollFinalizedStatus {
+		// Plain ErrConflict, deliberately not ErrPollFinalized: finalizePoll's own "already
+		// finalized" guard (service.ts) throws the plain CONFLICT code, not POLL_FINALIZED — see
+		// errors.go's package doc comment for why the two near-identical English messages carry
+		// different TS codes.
 		return fmt.Errorf("%w: poll is already finalized", ErrConflict)
 	}
 
