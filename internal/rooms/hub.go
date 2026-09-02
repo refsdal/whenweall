@@ -7,9 +7,37 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/refsdal/whenweall/internal/db"
 )
+
+// CONTRACT — read this before writing anything that consumes a Hub's frames (a WS handler, a
+// frontend client, Task 2's backfill).
+//
+//   - Delivery is AT-LEAST-ONCE, never exactly-once. The hub may deliver the same room_events row
+//     more than once (deliberately, in the routine case: see deliverSince's pendingNotify
+//     bookkeeping in listener.go, which suppresses the common duplicate but is a best-effort
+//     optimization, not a promise — do not build correctness on top of it). A consumer MUST
+//     dedupe by keeping a SET of every "seq" (a frame's event id) it has already applied.
+//   - "seq" is NOT monotonically increasing in delivery order. room_events.id is allocated before
+//     its transaction commits, while pg_notify only fires after — so a client can, and under load
+//     will, receive a lower seq strictly after a higher one (a "late committer": see
+//     handleNotify in listener.go). A consumer that dedupes or filters with `seq <= lastSeenSeq`
+//     will silently and permanently discard exactly the events this whole design exists to
+//     deliver — that is the cursor-visibility hazard reopened at the client. Dedupe by set
+//     membership only; if a catch-up cursor is kept at all (for EventsSince), advance it by the
+//     MAXIMUM seq observed so far, never by "the last one that arrived".
+//   - On {"type":"resync"} (sent at most once per reconnect — see Run), the client MUST refetch a
+//     full snapshot of the affected view from its normal REST source. Never call EventsSince to
+//     "catch up" a resync: while disconnected, an arbitrary and unknown set of NOTIFYs were lost
+//     forever (Postgres does not queue notifications for an absent listener), so no id-ordered
+//     query — EventsSince included — can be trusted to know what was missed; only a fresh read of
+//     current state can. See EventsSince's doc comment for the narrower, but still real, hazard
+//     that remains even outside a resync.
+//   - A frame handed to a subscriber's channel is a read-only shared []byte: a consumer must not
+//     mutate it after receiving it. (At-least-once delivery does not imply distinct copies —
+//     the same slice can be handed to more than one local subscriber.)
 
 // Event is one row of room_events, decoded into typed fields.
 type Event struct {
@@ -17,6 +45,15 @@ type Event struct {
 	RoomKey string
 	Type    string
 	Data    json.RawMessage
+}
+
+// Frame renders e as the flat wire frame a client receives: {"type":..., "seq":..., <Data's
+// fields flattened at the top level>}. It routes through the exact same unwrap logic
+// (buildFrameFromParts) that the hub's own live dispatch uses, so a row backfilled through
+// EventsSince (Task 2's job) and the same row delivered live are byte-for-byte identical in
+// shape — see the CONTRACT block above for what a consumer must do with the result.
+func (e Event) Frame() ([]byte, error) {
+	return buildFrameFromParts(e.ID, e.Type, e.Data)
 }
 
 // subscriberBufferSize bounds every subscriber's outgoing frame channel.
@@ -31,8 +68,8 @@ const subscriberBufferSize = 64
 
 // resyncFrame is sent to every live subscriber right after the hub's LISTEN connection comes back
 // from a reconnect. It carries no seq: it isn't a room_events row, it's a nudge telling the client
-// "you may have missed something while we were disconnected — go re-fetch your snapshot" (the
-// frontend's response to it is a plan-8 concern).
+// "you may have missed something while we were disconnected — go re-fetch your snapshot" (see the
+// CONTRACT block above; the frontend's response to it is a plan-8 concern).
 var resyncFrame = []byte(`{"type":"resync"}`)
 
 // subscriber is one local (in this replica's process) consumer of a room's frames.
@@ -56,9 +93,20 @@ type Hub struct {
 	subs map[string]map[*subscriber]struct{}
 
 	// watermark holds, per room, the highest room_events.id this hub has confirmed delivered
-	// (directly or via a batched catch-up fetch) to its current and former local subscribers.
-	// See handleNotify for why this is not simply "the highest id notified".
+	// (directly, or by folding it into a batched catch-up fetch) to its current and former local
+	// subscribers. A room absent from this map is "unseen" — see handleNotify and Subscribe's
+	// initWatermarkFloor for why that is a distinct state from "watermark 0", and never mix the
+	// two up: 0 means "everything since id 0 is wanted", unseen means "start from now".
 	watermark map[string]int64
+
+	// pendingNotify holds, per room, the set of ids that were delivered early by a deliverSince
+	// sweep (see its doc comment) but whose own NOTIFY hasn't been processed yet. It exists
+	// purely to suppress the routine duplicate that would otherwise occur when that NOTIFY does
+	// arrive; see deliverSince and deliverLateCommitter in listener.go. Self-draining: every id
+	// added here is removed either when its own NOTIFY arrives (the common case) or when the
+	// room's last local subscriber leaves (Subscribe's unsubscribe closure prunes it alongside
+	// watermark, since neither means anything once nobody's listening).
+	pendingNotify map[string]map[int64]struct{}
 
 	sqlDB     *sql.DB
 	listenURL string
@@ -74,29 +122,47 @@ func NewHub(listenURL string, sqlDB *sql.DB, log *slog.Logger) *Hub {
 		log = slog.Default()
 	}
 	return &Hub{
-		subs:      make(map[string]map[*subscriber]struct{}),
-		watermark: make(map[string]int64),
-		sqlDB:     sqlDB,
-		listenURL: listenURL,
-		log:       log,
-		replicaID: db.NewID(),
+		subs:          make(map[string]map[*subscriber]struct{}),
+		watermark:     make(map[string]int64),
+		pendingNotify: make(map[string]map[int64]struct{}),
+		sqlDB:         sqlDB,
+		listenURL:     listenURL,
+		log:           log,
+		replicaID:     db.NewID(),
 	}
 }
 
 // Subscribe registers a local subscriber for roomKey and returns a buffered channel of
-// marshalled frames (see buildFrame for their shape) plus an idempotent unsubscribe func.
+// marshalled frames (see the CONTRACT block above for what a consumer must do with them) plus an
+// idempotent unsubscribe func.
 //
 // Subscribe is exported (other packages in this module can call it) but is not the public API a
 // client talks to — Task 2's ServeWS wraps it and is the actual public face.
+//
+// A room's first local subscriber (on this hub, since its process started) triggers
+// initWatermarkFloor: without it, a brand new subscriber to a room with a long history would
+// have its very first NOTIFY treat "no watermark yet" as "start from id 0", sweep the room's
+// entire history in one deliverSince call, and very likely blow straight through the subscriber's
+// bounded channel and get dropped before a single live event arrives — that's a cold start, not a
+// slow consumer, and dropping it would be wrong. Catching a subscriber up on history that
+// predates it is EventsSince's job, not Subscribe's.
 func (h *Hub) Subscribe(roomKey string) (<-chan []byte, func()) {
 	sub := &subscriber{ch: make(chan []byte, subscriberBufferSize)}
 
 	h.mu.Lock()
-	if h.subs[roomKey] == nil {
-		h.subs[roomKey] = make(map[*subscriber]struct{})
+	room := h.subs[roomKey]
+	if room == nil {
+		room = make(map[*subscriber]struct{})
+		h.subs[roomKey] = room
 	}
-	h.subs[roomKey][sub] = struct{}{}
+	room[sub] = struct{}{}
+	firstLocalSubscriber := len(room) == 1
+	_, watermarkKnown := h.watermark[roomKey]
 	h.mu.Unlock()
+
+	if firstLocalSubscriber && !watermarkKnown {
+		h.initWatermarkFloor(roomKey)
+	}
 
 	unsubscribe := func() {
 		h.mu.Lock()
@@ -104,12 +170,56 @@ func (h *Hub) Subscribe(roomKey string) (<-chan []byte, func()) {
 			delete(room, sub)
 			if len(room) == 0 {
 				delete(h.subs, roomKey)
+				// Neither means anything with nobody listening: pruning them means a future
+				// resubscribe gets a fresh initWatermarkFloor rather than trusting stale state,
+				// and handleNotify's short-circuit (no local subscribers) re-derives a floor from
+				// whatever NOTIFYs arrive in the meantime — see its doc comment.
+				delete(h.watermark, roomKey)
+				delete(h.pendingNotify, roomKey)
 			}
 		}
 		h.mu.Unlock()
 		sub.close()
 	}
 	return sub.ch, unsubscribe
+}
+
+// initWatermarkFloor establishes a cold-start floor for a room at (approximately) "now": the
+// room's current max(id), so this hub's first NOTIFY for it doesn't get treated as "replay
+// everything since id 0" — see Subscribe's doc comment for why that matters.
+//
+// A bounded timeout keeps Subscribe from blocking indefinitely if the database is slow or
+// unreachable. If the query errors or times out, the floor is simply left unestablished here:
+// handleNotify's "unseen room" branch provides the exact same protection reactively, on this
+// room's next NOTIFY, so a failure here is degraded (that one notify's row is all a subscriber
+// gets rather than everything since "now"), not unsafe.
+func (h *Hub) initWatermarkFloor(roomKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var floor int64
+	err := h.sqlDB.QueryRowContext(ctx,
+		`SELECT coalesce(max(id), 0) FROM room_events WHERE room_key = $1`, roomKey,
+	).Scan(&floor)
+	if err != nil {
+		h.log.Error("rooms: establishing cold-start watermark floor", "room_key", roomKey, "error", err)
+		return
+	}
+	h.establishWatermarkFloor(roomKey, floor)
+}
+
+// establishWatermarkFloor raises watermark[roomKey] to floor, unless it is already at or past
+// floor — it never moves a room's watermark backwards. Used by both initWatermarkFloor and
+// handleNotify's "unseen room" and "no local subscribers" branches (listener.go), which can race
+// each other arbitrarily; taking the max of whatever each proposes is what makes that safe
+// (over-advancing is, at worst, an extra standalone late-committer fetch later — see
+// deliverLateCommitter — never a silent loss).
+func (h *Hub) establishWatermarkFloor(roomKey string, floor int64) {
+	h.mu.Lock()
+	if current, ok := h.watermark[roomKey]; !ok || floor > current {
+		h.watermark[roomKey] = floor
+	}
+	h.mu.Unlock()
 }
 
 // dispatchLocal delivers frame to every subscriber currently registered for roomKey. A
@@ -143,7 +253,8 @@ func (h *Hub) dispatchLocal(roomKey string, frame []byte) {
 // once after Run re-establishes its LISTEN session following a connection loss, because
 // notifications that fired while disconnected are gone forever (Postgres does not queue NOTIFYs
 // for a session that isn't listening) — the client-side fix is a full snapshot refetch, not
-// event replay, so the nudge alone is the whole story from the hub's side.
+// event replay (see the CONTRACT block above), so the nudge alone is the whole story from the
+// hub's side.
 func (h *Hub) resyncAll() {
 	h.mu.Lock()
 	roomKeys := make([]string, 0, len(h.subs))
@@ -166,7 +277,8 @@ func (h *Hub) resyncAll() {
 // is not closed by this function alone — the accepted mitigation (and the residual risk) is
 // documented at length in the task report; the short version is that a reconnecting client should
 // Subscribe (live) before calling EventsSince, so any such row still reaches it through the
-// live/late-committer path even though the catch-up query alone would miss it.
+// live/late-committer path even though the catch-up query alone would miss it. It is never a
+// substitute for a resync's full snapshot refetch — see the CONTRACT block above.
 func (h *Hub) EventsSince(ctx context.Context, roomKey string, sinceID int64) ([]Event, error) {
 	rows, err := h.sqlDB.QueryContext(ctx,
 		`SELECT id, room_key, event FROM room_events WHERE room_key = $1 AND id > $2 ORDER BY id`,
@@ -209,18 +321,26 @@ func unmarshalEnvelope(raw []byte) (eventType string, data json.RawMessage, err 
 	return envelope.Type, envelope.Data, nil
 }
 
-// buildFrame is the ONE place the durable {"type","data"} envelope (what Emit writes) is
-// unwrapped into the flat wire frame WS clients receive: {"type":..., "seq":..., <data's fields
-// flattened at the top level>}. data == null (or empty) yields just {"type","seq"}.
-//
-// "type" and "seq" always win if a data field happens to collide with either name — they are
-// protocol-level, not domain data.
+// buildFrame unwraps the raw room_events.event column bytes (the {"type","data"} envelope Emit
+// wrote) into a frame, via buildFrameFromParts. Used by the hub's own live dispatch, which only
+// ever has the raw column bytes on hand (see deliverExact/deliverSince in listener.go); Event.Frame
+// is the equivalent entry point for callers (Task 2's backfill) that already have it decoded.
 func buildFrame(id int64, raw []byte) ([]byte, error) {
 	eventType, data, err := unmarshalEnvelope(raw)
 	if err != nil {
 		return nil, err
 	}
+	return buildFrameFromParts(id, eventType, data)
+}
 
+// buildFrameFromParts is the ONE place the durable {"type","data"} envelope is unwrapped into the
+// flat wire frame a client receives: {"type":..., "seq":..., <data's fields flattened at the top
+// level>}. data == null (or empty) yields just {"type","seq"}. See the CONTRACT block above for
+// what a consumer must (and must not) assume about the "seq" this produces.
+//
+// "type" and "seq" always win if a data field happens to collide with either name — they are
+// protocol-level, not domain data.
+func buildFrameFromParts(id int64, eventType string, data json.RawMessage) ([]byte, error) {
 	fields := map[string]any{}
 	if len(data) > 0 && string(data) != "null" {
 		if err := json.Unmarshal(data, &fields); err != nil {

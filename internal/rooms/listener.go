@@ -3,6 +3,7 @@ package rooms
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -12,10 +13,14 @@ import (
 
 // initialBackoff and maxBackoff bound Run's reconnect delay: it starts short (a dropped
 // connection is often transient) and backs off exponentially, capped, so a genuinely down
-// database doesn't get hammered with reconnect attempts.
+// database doesn't get hammered with reconnect attempts. healthyConnectionDuration gates when
+// the backoff is allowed to reset back to initialBackoff — see Run: a connection that keeps
+// flapping (dies again within moments of reconnecting) must not get to retry at the fast initial
+// rate forever, or a struggling database gets hammered exactly when it can least afford it.
 const (
-	initialBackoff = 250 * time.Millisecond
-	maxBackoff     = 10 * time.Second
+	initialBackoff            = 250 * time.Millisecond
+	maxBackoff                = 10 * time.Second
+	healthyConnectionDuration = 30 * time.Second
 )
 
 // Run owns the hub's LISTEN connection for as long as ctx is alive. It dials its own dedicated
@@ -23,10 +28,19 @@ const (
 // separate checkouts), issues LISTEN room_events, and processes notifications one at a time until
 // the connection is lost or ctx is done, reconnecting with backoff in between.
 //
-// Every reconnect after the first is followed by a resync nudge to every live local subscriber
-// (see resyncAll): notifications that fired while this hub was disconnected are gone for good
-// (Postgres does not queue NOTIFYs for an absent listener), so the client-side recovery is a full
-// snapshot refetch rather than trying to replay the gap from here.
+// Every reconnect — including recovering from a failed dial or a failed LISTEN, not only losing
+// an already-established session — is followed by a resync nudge to every live local subscriber
+// (see resyncAll). This exists because of a real, permanent loss mode distinct from the
+// cursor-visibility hazard handleNotify closes: Postgres does not queue NOTIFYs for a session
+// that isn't listening, so anything that fired while this hub was disconnected (or never yet
+// connected) is gone for good — including a late committer whose id was at or below whatever
+// this hub's watermark for that room happened to be. Once that NOTIFY is lost, no future
+// "id > watermark" sweep will find that row either (its id is behind the watermark, permanently),
+// so the ONLY way such a row is ever recovered after a disconnect is the client's own full
+// snapshot refetch, triggered by this nudge — not any DB-side replay from here.
+//
+// Run always returns ctx.Err() (nil is never a possible return): the only way out of its loop is
+// ctx ending, whether that happens before the first connection attempt or in the middle of one.
 func (h *Hub) Run(ctx context.Context) error {
 	backoff := initialBackoff
 	reconnecting := false
@@ -39,6 +53,10 @@ func (h *Hub) Run(ctx context.Context) error {
 		conn, err := pgx.Connect(ctx, h.listenURL)
 		if err != nil {
 			h.log.Error("rooms: hub listener connect failed", "replica_id", h.replicaID, "error", err)
+			// A subscriber that joined while every dial attempt so far has failed has never once
+			// had a working LISTEN session behind it; treat the eventual success exactly like a
+			// reconnect (a resync nudge) rather than staying silent about the gap.
+			reconnecting = true
 			if !h.sleepBackoff(ctx, &backoff) {
 				return ctx.Err()
 			}
@@ -48,18 +66,19 @@ func (h *Hub) Run(ctx context.Context) error {
 		if _, err := conn.Exec(ctx, "LISTEN room_events"); err != nil {
 			h.log.Error("rooms: hub LISTEN failed", "replica_id", h.replicaID, "error", err)
 			_ = conn.Close(context.WithoutCancel(ctx))
+			reconnecting = true
 			if !h.sleepBackoff(ctx, &backoff) {
 				return ctx.Err()
 			}
 			continue
 		}
 
-		backoff = initialBackoff
 		h.log.Info("rooms: hub listening for room_events", "replica_id", h.replicaID, "reconnect", reconnecting)
 		if reconnecting {
 			h.resyncAll()
 		}
 
+		connectedAt := time.Now()
 		listenErr := h.listenLoop(ctx, conn)
 		_ = conn.Close(context.WithoutCancel(ctx))
 
@@ -68,6 +87,11 @@ func (h *Hub) Run(ctx context.Context) error {
 		}
 		h.log.Warn("rooms: hub listener connection lost, reconnecting", "replica_id", h.replicaID, "error", listenErr)
 		reconnecting = true
+		if time.Since(connectedAt) >= healthyConnectionDuration {
+			// Only a genuinely stable stretch earns the fast retry rate back; a connection that
+			// dies again almost immediately keeps climbing the backoff instead.
+			backoff = initialBackoff
+		}
 		if !h.sleepBackoff(ctx, &backoff) {
 			return ctx.Err()
 		}
@@ -122,26 +146,42 @@ func parseNotifyPayload(payload string) (roomKey string, id int64, err error) {
 // numerically behind the cursor forever, even though the hub had never actually seen or
 // delivered it. The event is silently and permanently lost.
 //
-// The fix kept here is a per-room watermark plus a "late committer" escape hatch:
+// The fix kept here is a per-room watermark plus a "late committer" escape hatch, with two extra
+// branches for the states a room can be in before it has ever been swept:
 //
-//   - watermark[room] is the highest id this hub has confirmed delivered, directly or via a
-//     batched fetch, for that room.
-//   - On a NOTIFY for id N:
-//   - If N > watermark: fetch every row with id > watermark (not just N) and deliver them in
-//     id order, then raise watermark to the highest id just fetched. Fetching everything
-//     newer than the watermark, rather than only row N, is what actually closes the gap: any
-//     lower id that had committed in between the last check and now (but hadn't fired its own
-//     NOTIFY yet, or fired one this hub hasn't processed yet) is picked up here too, because a
-//     NOTIFY is only ever queued for delivery once its sending transaction commits — so by
-//     construction, everything this query can see has already committed and is safe to
-//     deliver and count towards the watermark.
-//   - If N <= watermark: this is exactly the late-committer case above. The watermark has
-//     already moved past N without N ever being delivered, because N's row was not yet
-//     visible (its transaction hadn't committed) at the time the watermark advanced. N's own
-//     commit — the NOTIFY we're handling right now — is the *only* notification this hub will
-//     ever receive for it: a future "id > watermark" fetch will never surface it, since its id
-//     is permanently behind the watermark. So it is fetched by its own exact id, standalone,
-//     and delivered without touching the watermark (which is already correctly ahead of it).
+//   - No local subscribers for roomKey right now: there is nothing to deliver to, so skip the
+//     fetch entirely, but still fold this id into the room's watermark (via
+//     establishWatermarkFloor, which only ever raises it) so it doesn't fall stale. This composes
+//     directly with Subscribe's cold-start floor: when a subscriber eventually joins,
+//     initWatermarkFloor's own max(id) query will already reflect at least this id, and if a
+//     NOTIFY and a fresh Subscribe race each other, establishWatermarkFloor's monotonic-max merge
+//     resolves it safely regardless of which runs first.
+//   - watermark[room] is unset (this hub has never processed a NOTIFY for this room before, and
+//     Subscribe's cold-start floor query either hasn't run yet or came back empty/failed): if
+//     there IS a local subscriber, treat this NOTIFY's id as the floor itself — deliver exactly
+//     this one row and set the watermark to it, rather than sweeping "id > 0" and replaying the
+//     room's entire history at this subscriber the moment it happens to be present for the first
+//     NOTIFY. This is the same cold-start protection Subscribe provides proactively, provided
+//     reactively for whichever race gets there first.
+//   - watermark[room] is known, and N > watermark: fetch every row with id > watermark (not just
+//     N) and deliver them in id order, then raise watermark to the highest id just fetched.
+//     Fetching everything newer than the watermark, rather than only row N, is what actually
+//     closes the gap: any lower id that had committed in between the last check and now (but
+//     hadn't fired its own NOTIFY yet, or fired one this hub hasn't processed yet) is picked up
+//     here too, because a NOTIFY is only ever queued for delivery once its sending transaction
+//     commits — so by construction, everything this query can see has already committed and is
+//     safe to deliver and count towards the watermark.
+//   - watermark[room] is known, and N <= watermark: this is the late-committer case. The
+//     watermark has already moved past N without N ever being delivered, because N's row was not
+//     yet visible (its transaction hadn't committed) at the time the watermark advanced — UNLESS
+//     N was already delivered as part of an earlier deliverSince sweep that ran ahead of N's own
+//     NOTIFY (see deliverSince's pendingNotify bookkeeping): deliverLateCommitter checks for that
+//     first and, if so, treats this as the routine, harmless duplicate-notify case and skips
+//     delivering again. Otherwise N's own commit — the NOTIFY being handled right now — is the
+//     *only* notification this hub will ever receive for it: a future "id > watermark" fetch will
+//     never surface it, since its id is permanently behind the watermark. So it is fetched by its
+//     own exact id, standalone, and delivered without touching the watermark (which is already
+//     correctly ahead of it).
 //
 // This requires notifications for one room to be handled one at a time, in the order Postgres
 // delivers them (which matches commit order) — true here because listenLoop processes them
@@ -149,45 +189,104 @@ func parseNotifyPayload(payload string) (roomKey string, id int64, err error) {
 // reopen the same class of race between two overlapping "id > watermark" fetches.
 //
 // Residual, honestly stated: this closes the gap for every subscriber that stays live-subscribed
-// to the hub. It does NOT, by itself, fix EventsSince (the REST catch-up path) — see that
-// function's doc comment for the client-side mitigation and the residual window that remains
-// there regardless.
+// to the hub while it stays connected. It does not, by itself, fix EventsSince (the REST
+// catch-up path — see its own doc comment), and it does not recover a NOTIFY that was lost
+// entirely to a disconnect (see Run's doc comment) — that recovery is the resync nudge's job, not
+// this function's.
 func (h *Hub) handleNotify(ctx context.Context, roomKey string, id int64) {
 	h.mu.Lock()
-	watermark := h.watermark[roomKey]
+	watermark, known := h.watermark[roomKey]
+	hasSubscribers := len(h.subs[roomKey]) > 0
 	h.mu.Unlock()
+
+	if !hasSubscribers {
+		h.establishWatermarkFloor(roomKey, id)
+		return
+	}
+
+	if !known {
+		h.deliverExact(ctx, roomKey, id)
+		h.establishWatermarkFloor(roomKey, id)
+		return
+	}
 
 	if id <= watermark {
 		h.deliverLateCommitter(ctx, roomKey, id)
 		return
 	}
-	h.deliverSince(ctx, roomKey, watermark)
+	h.deliverSince(ctx, roomKey, watermark, id)
 }
 
-// deliverLateCommitter fetches and delivers exactly one row by id — the late-committer path
-// documented on handleNotify. It does not touch the watermark.
-func (h *Hub) deliverLateCommitter(ctx context.Context, roomKey string, id int64) {
+// deliverExact fetches and delivers exactly one row by id, unconditionally. It's the primitive
+// both the "unseen room" cold-start branch and (via deliverLateCommitter) the genuine
+// late-committer path build on.
+func (h *Hub) deliverExact(ctx context.Context, roomKey string, id int64) {
 	var raw []byte
 	err := h.sqlDB.QueryRowContext(ctx,
 		`SELECT event FROM room_events WHERE room_key = $1 AND id = $2`, roomKey, id,
 	).Scan(&raw)
 	if err != nil {
-		h.log.Error("rooms: fetch late-committed event", "room_key", roomKey, "id", id, "error", err)
+		h.log.Error("rooms: fetch event", "room_key", roomKey, "id", id, "error", err)
 		return
 	}
 
 	frame, err := buildFrame(id, raw)
 	if err != nil {
-		h.log.Error("rooms: build frame for late-committed event", "room_key", roomKey, "id", id, "error", err)
+		h.log.Error("rooms: build frame", "room_key", roomKey, "id", id, "error", err)
 		return
 	}
 	h.dispatchLocal(roomKey, frame)
 }
 
+// deliverLateCommitter handles a NOTIFY for an id at or below the room's watermark. Most such
+// ids were already delivered by an earlier deliverSince sweep (tracked in h.pendingNotify) and
+// this is just that id's own, now-redundant, notification catching up — see deliverSince's doc
+// comment for exactly when that happens (routinely: e.g. two Emits in one transaction) — and
+// that case is suppressed here via consumePending. A genuine late committer (its id was invisible
+// to every sweep so far, hence never tracked) falls through to deliverExact.
+func (h *Hub) deliverLateCommitter(ctx context.Context, roomKey string, id int64) {
+	if h.consumePending(roomKey, id) {
+		return
+	}
+	h.deliverExact(ctx, roomKey, id)
+}
+
+// consumePending reports whether id was pending delivery-confirmation for roomKey (i.e. already
+// delivered by a deliverSince sweep, awaiting only its own NOTIFY to arrive) and, if so, removes
+// it — see h.pendingNotify's doc comment on Hub.
+func (h *Hub) consumePending(roomKey string, id int64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	pending, ok := h.pendingNotify[roomKey]
+	if !ok {
+		return false
+	}
+	if _, present := pending[id]; !present {
+		return false
+	}
+	delete(pending, id)
+	if len(pending) == 0 {
+		delete(h.pendingNotify, roomKey)
+	}
+	return true
+}
+
 // deliverSince fetches every row for roomKey with id > watermark, delivers them in id order, and
 // raises the room's watermark to the highest id it just saw. See handleNotify for why this must
 // re-query "since the watermark" rather than trust the notified id alone.
-func (h *Hub) deliverSince(ctx context.Context, roomKey string, watermark int64) {
+//
+// triggeringID is the id of the NOTIFY that caused this call. Every OTHER id in the swept batch
+// (there can be more than one — e.g. two Emits inside a single transaction produce two rows and
+// two NOTIFYs, and by the time the first is processed both rows are already committed and visible
+// to this query) is recorded in h.pendingNotify: its own NOTIFY hasn't been processed by
+// listenLoop yet, and without this bookkeeping that later NOTIFY would hit the id<=watermark
+// branch and deliverLateCommitter would fetch and deliver it a second time. triggeringID itself
+// is never recorded — this is the one and only NOTIFY it will ever get, so there is nothing later
+// to suppress and recording it would just leak. This makes routine duplicate delivery from this
+// specific, common interleaving disappear in practice, but it is NOT a general exactly-once
+// guarantee — see the CONTRACT block in hub.go: a consumer still must dedupe by seq.
+func (h *Hub) deliverSince(ctx context.Context, roomKey string, watermark, triggeringID int64) {
 	rows, err := h.sqlDB.QueryContext(ctx,
 		`SELECT id, event FROM room_events WHERE room_key = $1 AND id > $2 ORDER BY id`,
 		roomKey, watermark,
@@ -211,6 +310,9 @@ func (h *Hub) deliverSince(ctx context.Context, roomKey string, watermark int64)
 		if id > highest {
 			highest = id
 		}
+		if id != triggeringID {
+			h.trackPending(roomKey, id)
+		}
 
 		frame, err := buildFrame(id, raw)
 		if err != nil {
@@ -226,18 +328,28 @@ func (h *Hub) deliverSince(ctx context.Context, roomKey string, watermark int64)
 	}
 
 	if highest > watermark {
-		h.mu.Lock()
-		if highest > h.watermark[roomKey] {
-			h.watermark[roomKey] = highest
-		}
-		h.mu.Unlock()
+		h.establishWatermarkFloor(roomKey, highest)
 	}
 }
 
-// sleepBackoff waits out *backoff (or until ctx is done, whichever comes first) and then doubles
-// it, capped at maxBackoff, for next time. Returns false if ctx ended the wait.
+// trackPending records that id was just delivered by a deliverSince sweep ahead of its own
+// NOTIFY — see deliverSince's doc comment and h.pendingNotify on Hub.
+func (h *Hub) trackPending(roomKey string, id int64) {
+	h.mu.Lock()
+	if h.pendingNotify[roomKey] == nil {
+		h.pendingNotify[roomKey] = make(map[int64]struct{})
+	}
+	h.pendingNotify[roomKey][id] = struct{}{}
+	h.mu.Unlock()
+}
+
+// sleepBackoff waits out a random duration in [0, *backoff) — full jitter, not the backoff value
+// itself, so that many replicas recovering from a shared outage (the DB blipping) don't all retry
+// in lockstep — or until ctx is done, whichever comes first, then doubles *backoff, capped at
+// maxBackoff, for next time. Returns false if ctx ended the wait.
 func (h *Hub) sleepBackoff(ctx context.Context, backoff *time.Duration) bool {
-	timer := time.NewTimer(*backoff)
+	wait := rand.N(*backoff)
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
 	select {

@@ -422,3 +422,143 @@ func TestReconnectSendsResyncAndResumesDelivery(t *testing.T) {
 		t.Fatalf("frame after reconnect delivery = %v, want poll.changed", after)
 	}
 }
+
+// TestColdStartDoesNotReplayHistory is the regression test for the cold-start critical: a room
+// with a long pre-existing history must not get swept and replayed at a subscriber the moment it
+// joins (which would very likely blow through the subscriber's bounded channel — cap 64 — and get
+// it dropped before a single live event ever arrived). Subscribe's initWatermarkFloor is what
+// prevents this; see its doc comment and handleNotify's "unseen room" branch, its reactive
+// fallback.
+func TestColdStartDoesNotReplayHistory(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	const roomKey = "poll:coldstart"
+
+	// A substantial history, written before any hub or subscriber for this room exists.
+	for i := 0; i < 100; i++ {
+		emitCommitted(t, sqlDB, roomKey, "stale", map[string]any{"n": i})
+	}
+
+	hub := startHub(t, url, sqlDB) // fresh hub: its watermark map starts out empty.
+	frames, unsubscribe := hub.Subscribe(roomKey)
+	defer unsubscribe()
+
+	emitCommitted(t, sqlDB, roomKey, "fresh", nil)
+
+	got := mustReceiveFrame(t, frames, 5*time.Second)
+	if got["type"] != "fresh" {
+		t.Fatalf("first frame delivered = %v, want type fresh (no history replay)", got)
+	}
+
+	// Nothing else should trickle in afterward — exactly the new event, not history-then-new.
+	select {
+	case frame := <-frames:
+		t.Fatalf("unexpected extra frame after cold start (history leaked through): %s", frame)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// TestTwoEmitsInOneTxDeliverExactlyTwoFrames covers the routine (not the mandatory hazard test's
+// deliberately-held-open-transaction) duplicate-delivery case: two Emits inside ONE transaction
+// produce two rows and two NOTIFYs from a single commit. Processing the first NOTIFY sweeps both
+// rows (both are already committed and visible by the time either NOTIFY is delivered); the
+// second NOTIFY, for a row already delivered, must be recognized and suppressed rather than
+// redelivering it — see deliverSince's pendingNotify bookkeeping.
+func TestTwoEmitsInOneTxDeliverExactlyTwoFrames(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	hub := startHub(t, url, sqlDB)
+	const roomKey = "poll:duptx"
+
+	frames, unsubscribe := hub.Subscribe(roomKey)
+	defer unsubscribe()
+
+	ctx := context.Background()
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rooms.Emit(ctx, tx, roomKey, "first", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := rooms.Emit(ctx, tx, roomKey, "second", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(map[string]bool)
+	for i := 0; i < 2; i++ {
+		got := mustReceiveFrame(t, frames, 5*time.Second)
+		if s, ok := got["type"].(string); ok {
+			seen[s] = true
+		}
+	}
+	if !seen["first"] || !seen["second"] {
+		t.Fatalf("expected both events delivered exactly once, got %v", seen)
+	}
+
+	// A third frame arriving here would be the routine duplicate this test guards against.
+	select {
+	case frame := <-frames:
+		t.Fatalf("unexpected extra frame (a duplicate delivery): %s", frame)
+	case <-time.After(1 * time.Second):
+	}
+}
+
+// TestEventFrame_WithData and TestEventFrame_NullData exercise Event.Frame directly — the entry
+// point Task 2's EventsSince-backed backfill uses — through both envelope shapes buildFrame's
+// integration-level siblings (TestFrameUnwrapsEntityFields, TestFrameNullDataYieldsTypeAndSeqOnly)
+// already cover via the live path. Both routes share the exact same unwrap implementation
+// (buildFrameFromParts), so a backfilled frame and a live one are byte-for-byte identical in
+// shape for the same row.
+func TestEventFrame_WithData(t *testing.T) {
+	ev := rooms.Event{
+		ID:      42,
+		RoomKey: "poll:p1",
+		Type:    "poll.changed",
+		Data:    json.RawMessage(`{"pollId":"p1","status":"closed"}`),
+	}
+	frame, err := ev.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(frame, &got); err != nil {
+		t.Fatalf("unmarshal frame %s: %v", frame, err)
+	}
+	if got["type"] != "poll.changed" {
+		t.Errorf("type = %v, want poll.changed", got["type"])
+	}
+	if seq, ok := got["seq"].(float64); !ok || int64(seq) != 42 {
+		t.Errorf("seq = %v, want 42", got["seq"])
+	}
+	if got["pollId"] != "p1" || got["status"] != "closed" {
+		t.Errorf("frame = %v, want pollId=p1 status=closed", got)
+	}
+	if _, ok := got["data"]; ok {
+		t.Errorf("frame should not carry a nested data envelope, got %v", got)
+	}
+}
+
+func TestEventFrame_NullData(t *testing.T) {
+	ev := rooms.Event{ID: 7, RoomKey: "page:p1", Type: "page.changed", Data: nil}
+	frame, err := ev.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(frame, &got); err != nil {
+		t.Fatalf("unmarshal frame %s: %v", frame, err)
+	}
+	if got["type"] != "page.changed" {
+		t.Errorf("type = %v, want page.changed", got["type"])
+	}
+	if seq, ok := got["seq"].(float64); !ok || int64(seq) != 7 {
+		t.Errorf("seq = %v, want 7", got["seq"])
+	}
+	if len(got) != 2 {
+		t.Errorf("frame = %v, want exactly {type, seq}", got)
+	}
+}

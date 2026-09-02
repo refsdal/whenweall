@@ -112,4 +112,11 @@ jobs:
       - run: go vet ./...
       - uses: golangci/golangci-lint-action@v9
       - run: go test ./...
+      # A second, narrower pass under the race detector: CGO_ENABLED needs a C compiler, which
+      # isn't guaranteed on every machine this suite runs on (it wasn't in the sandbox this was
+      # developed in), but GitHub's ubuntu-latest runners do have gcc. Scoped by name rather than
+      # by package to keep this fast — it's the concurrency-sensitive tests (the rooms hub's
+      # watermark/dispatch state, and any poll/booking test exercising concurrent writers) that
+      # actually benefit from -race, not the whole suite.
+      - run: go test -race -run 'Race|Concurrent|Winner|LateCommitter|Slow' ./internal/rooms/... ./internal/polls/... ./internal/bookings/...
       - run: docker build .
