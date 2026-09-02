@@ -253,6 +253,17 @@ export function bookSlot(
   )
 }
 
+/** A plain link, not a fetch call — the browser downloads this directly, mirroring polls'
+ * `calendarIcsUrl`/`rosterCsvUrl` (polls.ts). Unlike those two (owner-session cookie auth,
+ * same-origin), a booking's manage token IS the credential here: the visitor viewing this link
+ * has no session at all, so `t` carries the same query-param token every other manage-token
+ * endpoint in this file does. */
+export function bookingCalendarIcsUrl(bookingId: string, token?: string): string {
+  return token
+    ? `/api/v1/bookings/${bookingId}/calendar.ics?t=${encodeURIComponent(token)}`
+    : `/api/v1/bookings/${bookingId}/calendar.ics`
+}
+
 export function getManagedBooking(bookingId: string, token?: string): Promise<BookingForManage> {
   return api<BookingForManage>('GET', `/api/v1/bookings/${bookingId}/manage`, undefined, {
     query: token ? { t: token } : undefined,

@@ -859,6 +859,66 @@ func TestHandlerManagedBooking(t *testing.T) {
 	})
 }
 
+// ---- row 11b: GET /api/v1/bookings/{id}/calendar.ics (public(token) -> BookingICS) ---------
+//
+// Carried fix: restores the .ics parity the TS backend had — a visitor who lost the mailed
+// attachment can still re-download the same invite off their manage link.
+
+func TestHandlerBookingICS(t *testing.T) {
+	p := setupHandlerPage(t, testConfig(t))
+	start := futureUTCSlot(3, 9, 0)
+	bookRec := doRequest(t, p.h, "POST", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/bookings", bookBody(start), nil)
+	if bookRec.Code != http.StatusCreated {
+		t.Fatalf("Book: status = %d; body=%s", bookRec.Code, bookRec.Body)
+	}
+	booked := decodeBody[struct {
+		Booking     bookings.BookingView `json:"booking"`
+		ManageToken string               `json:"manageToken"`
+	}](t, bookRec)
+
+	rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics?t="+booked.ManageToken, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/calendar; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/calendar; charset=utf-8", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "BEGIN:VCALENDAR") || !strings.Contains(body, "BEGIN:VEVENT") {
+		t.Errorf("body missing VCALENDAR/VEVENT: %q", body)
+	}
+	if !strings.Contains(body, "UID:"+booked.Booking.ID+"@whenweall") {
+		t.Errorf("body missing booking UID: %q", body)
+	}
+
+	t.Run("a wrong token is 403 invalid_token", func(t *testing.T) {
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics?t=wrong-token", nil, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "invalid_token" {
+			t.Errorf("code = %q, want invalid_token", errCode(t, rec))
+		}
+	})
+
+	t.Run("a missing token is 403 invalid_token", func(t *testing.T) {
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics", nil, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "invalid_token" {
+			t.Errorf("code = %q, want invalid_token", errCode(t, rec))
+		}
+	})
+
+	t.Run("404 for an unknown booking id", func(t *testing.T) {
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/missing/calendar.ics?t=whatever", nil, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body)
+		}
+	})
+}
+
 // ---- row 12: POST /api/v1/bookings/{id}/cancel (public(token)|auth+org -> Cancel) ----------
 //
 // Also this task's accumulated requirement (e): without a token but with a session, the caller

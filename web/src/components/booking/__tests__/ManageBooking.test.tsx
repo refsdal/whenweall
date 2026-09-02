@@ -7,6 +7,8 @@ vi.mock('#/api/bookings', () => ({
   cancelBooking: vi.fn(),
   rescheduleBooking: vi.fn(),
   getPublicAvailability: vi.fn(),
+  bookingCalendarIcsUrl: (bookingId: string, token?: string) =>
+    `/api/v1/bookings/${bookingId}/calendar.ics?t=${token}`,
 }))
 
 afterEach(() => {
@@ -69,5 +71,12 @@ describe('ManageBooking', () => {
 
     expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /cancel booking/i })).not.toBeInTheDocument()
+  })
+
+  it('links the calendar download at the manage token URL', () => {
+    renderManage(makeBooking())
+
+    const link = screen.getByRole('link', { name: /add to calendar/i })
+    expect(link).toHaveAttribute('href', '/api/v1/bookings/bk_1/calendar.ics?t=tok')
   })
 })

@@ -94,6 +94,7 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("POST /api/v1/book/{org}/{page}/bookings", bookLimit(http.HandlerFunc(s.handleBook(a, cfg))))
 
 	mux.Handle("GET /api/v1/bookings/{id}/manage", bookLimit(http.HandlerFunc(s.handleManagedBooking(a))))
+	mux.Handle("GET /api/v1/bookings/{id}/calendar.ics", bookLimit(http.HandlerFunc(s.handleBookingICS(cfg))))
 	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a))))
 	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule(a))))
 }
@@ -575,6 +576,29 @@ func (s *Service) handleManagedBooking(a Auth) http.HandlerFunc {
 			return
 		}
 		httpserver.JSON(w, http.StatusOK, view)
+	}
+}
+
+// handleBookingICS serves bookingID's own .ics download over ?t=<manage token> — the standalone
+// re-download surface BookingICS (bookings.go) backs; see that method's own doc comment for why
+// this route has no organiser-session fallback the way handleManagedBooking/handleCancel/
+// handleReschedule each do. Content-Disposition is deliberately omitted: this response is meant to
+// be opened by the browser's own calendar-import flow (the same reason the mailed attachment's own
+// filename, "calendar.ics", is enough context on its own), not saved to disk under a
+// server-chosen name.
+func (s *Service) handleBookingICS(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bookingID := r.PathValue("id")
+		token := manageTokenFromQuery(r)
+
+		ics, err := s.BookingICS(r.Context(), bookingID, token, cfg.AppURL)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(ics)
 	}
 }
 

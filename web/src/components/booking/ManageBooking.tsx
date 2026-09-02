@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Clock, MapPin, StickyNote, User } from 'lucide-react'
+import { CalendarPlus, Clock, MapPin, StickyNote, User } from 'lucide-react'
 import { toast } from 'sonner'
 import { slotSummary } from '#/components/booking/BookingForm'
 import { googleCalendarUrl } from '#/components/booking/BookingConfirmed'
@@ -18,7 +18,7 @@ import {
 } from '#/components/ui/dialog'
 import { errorCode } from '#/lib/errors'
 import { getLocale, m } from '#/lib/i18n'
-import { cancelBooking, rescheduleBooking } from '#/api/bookings'
+import { bookingCalendarIcsUrl, cancelBooking, rescheduleBooking } from '#/api/bookings'
 import type { BookingForManage } from '#/api/types'
 
 function messageForError(error: unknown): string {
@@ -216,9 +216,12 @@ export function ManageBooking({
               {m.booking_manage_cancel()}
             </Button>
           )}
-          {/* No `.ics` download here: internal/bookings/handlers.go has no calendar.ics route at
-              all (unlike internal/polls) — a known gap in this rewrite, flagged in the task
-              report rather than worked around. */}
+          <Button asChild variant="outline">
+            <a href={bookingCalendarIcsUrl(booking.id, token)} download>
+              <CalendarPlus aria-hidden="true" />
+              {m.poll_add_to_calendar()}
+            </a>
+          </Button>
           <Button asChild variant="ghost">
             <a
               href={googleCalendarUrl({

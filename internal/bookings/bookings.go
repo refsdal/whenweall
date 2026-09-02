@@ -695,6 +695,40 @@ func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken str
 	return view, nil
 }
 
+// BookingICS builds bookingID's own .ics download — the same visitor-facing calendar file
+// sendBookingConfirmedMail/sendBookingRescheduledMail attach to their mails (BuildBookingICS,
+// ics.go), now also reachable as a standalone GET so a visitor who deleted that mail (or whose
+// mail client dropped the attachment) can still re-download the invite from the manage link. Token
+// verification only — no organiser-session fallback the way ManagedBooking/Cancel/Reschedule each
+// have (I6): this is a plain restatement of a mail attachment the visitor's own manage token
+// already unlocks, not a new owner-facing surface, so it stays exactly as narrow as the brief
+// asks. A wrong or missing token is ErrInvalidToken (403 invalid_token, the same mapping every
+// other manage-token consumer in this package uses) rather than ErrNotFound, matching
+// verifyManageToken's own "empty token never verifies" rule.
+func (s *Service) BookingICS(ctx context.Context, bookingID, manageToken, appURL string) ([]byte, error) {
+	booking, err := s.q.GetBooking(ctx, bookingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !s.verifyManageToken(bookingID, manageToken) {
+		return nil, ErrInvalidToken
+	}
+
+	page, err := s.q.GetBookingPage(ctx, booking.PageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	manageURL := s.bookingManageURL(appURL, booking.ID)
+	return BuildBookingICS(booking.ID, page.Title, pageDescriptionText(page), pageLocationText(page), booking.StartAt, booking.EndAt, manageURL), nil
+}
+
 // ListPageBookings ports listBookings (bookings.ts). This port's fixed signature (pageID, orgID)
 // carries no userID, so — like GetOwnedPage (pages.go) — only the org-scoping half of the TS
 // source's auth (page must belong to orgID) is reachable here; the creator-or-manager
