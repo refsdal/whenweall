@@ -84,6 +84,17 @@ func (h *Hub) Run(ctx context.Context) error {
 
 		h.log.Info("rooms: hub listening for room_events", "replica_id", h.replicaID, "reconnect", reconnecting)
 		if reconnecting {
+			// Every pendingNotify entry recorded before this reconnect is now dead weight: it was
+			// awaiting its own NOTIFY to arrive (consumePending), and that NOTIFY — like every other
+			// notification that fired during the gap this hub was disconnected — is gone for good
+			// (Postgres does not queue notifications for an absent listener; see this function's own
+			// doc comment). Nothing will ever consume those entries, so they would otherwise sit in
+			// memory forever, growing on every reconnect a busy replica has over its lifetime — the
+			// same map-leak shape pruneRoomLocked (hub.go) fixes per-room, here fixed wholesale,
+			// across every room at once, in the one place that actually knows a reconnect happened.
+			// Safe regardless of what (if anything) resyncAll below is about to nudge: a client told
+			// to resync refetches a full snapshot, never relying on pendingNotify's bookkeeping.
+			h.clearPendingNotify()
 			h.resyncAll()
 		}
 
@@ -349,6 +360,15 @@ func (h *Hub) trackPending(roomKey string, id int64) {
 		h.pendingNotify[roomKey] = make(map[int64]struct{})
 	}
 	h.pendingNotify[roomKey][id] = struct{}{}
+	h.mu.Unlock()
+}
+
+// clearPendingNotify wipes h.pendingNotify entirely — see Run's own doc comment at its one call
+// site for why every entry recorded before a reconnect is unconsumable and safe to discard
+// wholesale, regardless of room.
+func (h *Hub) clearPendingNotify() {
+	h.mu.Lock()
+	h.pendingNotify = make(map[string]map[int64]struct{})
 	h.mu.Unlock()
 }
 

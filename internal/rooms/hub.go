@@ -102,10 +102,13 @@ type Hub struct {
 	// pendingNotify holds, per room, the set of ids that were delivered early by a deliverSince
 	// sweep (see its doc comment) but whose own NOTIFY hasn't been processed yet. It exists
 	// purely to suppress the routine duplicate that would otherwise occur when that NOTIFY does
-	// arrive; see deliverSince and deliverLateCommitter in listener.go. Self-draining: every id
-	// added here is removed either when its own NOTIFY arrives (the common case) or when the
-	// room's last local subscriber leaves (Subscribe's unsubscribe closure prunes it alongside
-	// watermark, since neither means anything once nobody's listening).
+	// arrive; see deliverSince and deliverLateCommitter in listener.go. Self-draining two ways: an
+	// entry is removed when its own NOTIFY finally arrives (the common case, consumePending), when
+	// its room's last local subscriber leaves (pruneRoomLocked, called from both dispatchLocal's
+	// drop path and Subscribe's unsubscribe closure — see pruneRoomLocked's own doc comment for the
+	// full lifecycle), or wholesale, for every room at once, when Run's LISTEN session reconnects
+	// (listener.go: a NOTIFY lost to the disconnected gap will never arrive to consume its entry,
+	// so every entry recorded before the reconnect is dead weight the moment it happens).
 	pendingNotify map[string]map[int64]struct{}
 
 	sqlDB     *sql.DB
@@ -166,22 +169,57 @@ func (h *Hub) Subscribe(roomKey string) (<-chan []byte, func()) {
 
 	unsubscribe := func() {
 		h.mu.Lock()
-		if room, ok := h.subs[roomKey]; ok {
+		room, ok := h.subs[roomKey]
+		if ok {
 			delete(room, sub)
-			if len(room) == 0 {
-				delete(h.subs, roomKey)
-				// Neither means anything with nobody listening: pruning them means a future
-				// resubscribe gets a fresh initWatermarkFloor rather than trusting stale state,
-				// and handleNotify's short-circuit (no local subscribers) re-derives a floor from
-				// whatever NOTIFYs arrive in the meantime — see its doc comment.
-				delete(h.watermark, roomKey)
-				delete(h.pendingNotify, roomKey)
-			}
+		}
+		// No `if ok` guard around the prune check below (an earlier version of this closure had
+		// one): dispatchLocal can have already deleted h.subs[roomKey] out from under this
+		// subscriber — its OWN slow-consumer drop path prunes the room the moment it empties,
+		// which can race this exact unsubscribe call for the very same, now-dropped subscriber.
+		// When that happens ok is false here, room is nil, and len(nil) is 0 — pruneRoomLocked
+		// still needs to run (defensively harmless if dispatchLocal already ran it first; deleting
+		// an absent map key is a no-op) so a subscriber that reaches this function via the
+		// "dropped, then its own deferred unsubscribe fires anyway" path is never the one case that
+		// skips cleanup. See pruneRoomLocked's own doc comment for the full lifecycle this and
+		// dispatchLocal's drop path both feed into.
+		if !ok || len(room) == 0 {
+			h.pruneRoomLocked(roomKey)
 		}
 		h.mu.Unlock()
 		sub.close()
 	}
 	return sub.ch, unsubscribe
+}
+
+// pruneRoomLocked deletes every trace of roomKey — its subs entry, its watermark, and any
+// pendingNotify entries — once nothing is locally subscribed to it anymore. Must be called with
+// h.mu held.
+//
+// The full lifecycle these three maps share: Subscribe adds roomKey to subs (and, for its first
+// local subscriber, primes watermark via initWatermarkFloor); handleNotify/deliverSince may add or
+// advance watermark and populate pendingNotify as NOTIFYs arrive (see listener.go's own doc
+// comments for both); and this function is the ONE place all three are torn back down, called from
+// the two and only two paths a room's last local subscriber can disappear by: the unsubscribe
+// closure above (the ordinary, graceful "the connection closed" path) and dispatchLocal's
+// slow-consumer drop path (a subscriber can be removed WITHOUT ever calling unsubscribe itself —
+// the hub notices its channel is full and drops it there instead). Missing either call site was
+// this design's documented map leak (I3): a room subscribed to even briefly, then abandoned via
+// the drop path specifically, used to leave its watermark (and possibly a pendingNotify entry)
+// behind forever, since nothing else ever revisits a room with zero subscribers. Neither watermark
+// nor pendingNotify means anything with nobody listening regardless of which path got there:
+// pruning both here means a future resubscribe gets a fresh initWatermarkFloor rather than
+// trusting stale state, and handleNotify's short-circuit (no local subscribers) re-derives a floor
+// from whatever NOTIFYs arrive in the meantime.
+//
+// See also Run's reconnect path (listener.go), which clears pendingNotify wholesale across EVERY
+// room on a lost/reconnected LISTEN session — a coarser, session-scoped version of this same
+// cleanup, for the same underlying reason: entries recorded before a disconnect can never be
+// consumed (their own NOTIFY is gone for good), so nothing revisits them either.
+func (h *Hub) pruneRoomLocked(roomKey string) {
+	delete(h.subs, roomKey)
+	delete(h.watermark, roomKey)
+	delete(h.pendingNotify, roomKey)
 }
 
 // initWatermarkFloor establishes a cold-start floor for a room at (approximately) "now": the
@@ -240,7 +278,9 @@ func (h *Hub) dispatchLocal(roomKey string, frame []byte) {
 		delete(room, sub)
 	}
 	if len(room) == 0 {
-		delete(h.subs, roomKey)
+		// See pruneRoomLocked's own doc comment: this is one of the two paths a room's last local
+		// subscriber can disappear by, and the one the map-leak fix (I3) was specifically missing.
+		h.pruneRoomLocked(roomKey)
 	}
 	h.mu.Unlock()
 

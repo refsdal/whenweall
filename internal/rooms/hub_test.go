@@ -423,6 +423,112 @@ func TestReconnectSendsResyncAndResumesDelivery(t *testing.T) {
 	}
 }
 
+// TestDroppedRoomIsFullyPruned is I3's regression test for the map-leak fix's drop-path half:
+// when dispatchLocal drops a room's ONLY subscriber, every trace of that room — its subs entry,
+// its watermark, and any pendingNotify bookkeeping — must be gone, not just the subs entry the
+// pre-fix code already handled (see pruneRoomLocked's own doc comment on Hub).
+//
+// This drives dispatchLocal directly (Hub.DispatchLocal, export_test.go) rather than through real
+// Postgres NOTIFYs: no LISTEN session is running at all here, which is what lets this assert the
+// room stays pruned rather than raced by handleNotify's "no local subscribers" branch legitimately
+// re-populating watermark for whatever NOTIFY happens to land next — a real, correct behavior this
+// test must not be confused with the leak it targets.
+func TestDroppedRoomIsFullyPruned(t *testing.T) {
+	_, sqlDB := testdb.URL(t)
+	hub := rooms.NewHub("", sqlDB, nil)
+	const roomKey = "poll:dropped-room"
+
+	frames, unsubscribe := hub.Subscribe(roomKey)
+	defer unsubscribe() // idempotent even if dispatchLocal already dropped (closed) it.
+	hub.SeedPendingNotify(roomKey, 999999)
+
+	if !hub.RoomTracked(roomKey) {
+		t.Fatal("room not tracked immediately after Subscribe + SeedPendingNotify")
+	}
+
+	// Never read frames: fill its buffer (cap 64) and push it over, so dispatchLocal drops it as a
+	// slow consumer — the path pruneRoomLocked must be called from, not just the graceful
+	// unsubscribe closure.
+	for i := 0; i < 100; i++ {
+		hub.DispatchLocal(roomKey, []byte(`{"type":"poll.changed"}`))
+	}
+
+	if hub.RoomTracked(roomKey) {
+		t.Fatal("room still tracked (subs/watermark/pendingNotify) after its only subscriber was dropped")
+	}
+	if n := hub.PendingNotifyLen(roomKey); n != 0 {
+		t.Errorf("pendingNotify still holds %d entries for a fully pruned room", n)
+	}
+
+	// Confirm the subscriber really was dropped (not merely left registered) — same confirmation
+	// TestSlowSubscriberIsDropped already makes.
+	closed := false
+	waitClosed := time.After(5 * time.Second)
+	for !closed {
+		select {
+		case _, ok := <-frames:
+			if !ok {
+				closed = true
+			}
+		case <-waitClosed:
+			t.Fatal("subscriber's channel was never closed (never dropped)")
+		}
+	}
+}
+
+// TestReconnectClearsPendingNotify is I3's regression test for the map-leak fix's reconnect-path
+// half: a pendingNotify entry recorded before a lost LISTEN session is unconsumable (its own
+// NOTIFY is gone for good — Postgres does not queue notifications for an absent listener, see
+// Run's own doc comment) and must not survive the reconnect. Seeds the entry directly
+// (Hub.SeedPendingNotify) rather than via the natural two-Emits-in-one-tx path: that path's
+// routine duplicate NOTIFY is typically consumed within milliseconds, racing (and likely losing
+// to) a deliberately forced disconnect — seeding removes that race entirely.
+func TestReconnectClearsPendingNotify(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+
+	appName := "rooms_hub_test_" + db.NewID()
+	listenURL := url
+	if strings.Contains(listenURL, "?") {
+		listenURL += "&application_name=" + appName
+	} else {
+		listenURL += "?application_name=" + appName
+	}
+
+	hub := rooms.NewHub(listenURL, sqlDB, nil)
+	runHub(t, hub)
+	awaitListening(t, hub, sqlDB)
+
+	const roomKey = "poll:pendingnotify-reconnect"
+	frames, unsubscribe := hub.Subscribe(roomKey)
+	defer unsubscribe()
+
+	hub.SeedPendingNotify(roomKey, 999999)
+	if got := hub.PendingNotifyLen(roomKey); got != 1 {
+		t.Fatalf("PendingNotifyLen after seeding = %d, want 1", got)
+	}
+
+	// Force the hub's dedicated LISTEN connection to drop, simulating a lost connection — same
+	// machinery as TestReconnectSendsResyncAndResumesDelivery.
+	var pid int
+	if err := sqlDB.QueryRowContext(context.Background(),
+		`SELECT pid FROM pg_stat_activity WHERE application_name = $1`, appName,
+	).Scan(&pid); err != nil {
+		t.Fatalf("finding listener backend pid: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(context.Background(), `SELECT pg_terminate_backend($1)`, pid); err != nil {
+		t.Fatalf("terminating listener backend: %v", err)
+	}
+
+	resync := mustReceiveFrame(t, frames, 10*time.Second)
+	if resync["type"] != "resync" {
+		t.Fatalf("frame after reconnect = %v, want resync", resync)
+	}
+
+	if got := hub.PendingNotifyLen(roomKey); got != 0 {
+		t.Errorf("PendingNotifyLen after reconnect = %d, want 0 (Run must clear pendingNotify wholesale on every reconnect)", got)
+	}
+}
+
 // TestColdStartDoesNotReplayHistory is the regression test for the cold-start critical: a room
 // with a long pre-existing history must not get swept and replayed at a subscriber the moment it
 // joins (which would very likely blow through the subscriber's bounded channel — cap 64 — and get
