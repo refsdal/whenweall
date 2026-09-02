@@ -38,13 +38,11 @@ import (
 // `throw new AppError('CONFLICT')` for "already finalized" (service.ts), which is NOT the same
 // TS code as POLL_FINALIZED despite the similar English wording; see Finalize's own call site.
 var (
-	// ErrForbidden is returned when the caller is authenticated but not allowed to act on the
-	// poll — ports the "wrong org" half of requireManagedPoll (src/server/polls/service.ts).
-	// Unlike the TS original (which maps a wrong-org poll to NOT_FOUND, so a poll id's existence
-	// is never leaked outside its own org) the Go port's managing calls only ever receive an
-	// orgID, no userID/role — see the doc comment on requireOrgPoll in service.go for the full
-	// reasoning — so "this poll belongs to a different org" is reported as ErrForbidden here,
-	// not ErrNotFound. This is an intentional, documented deviation from the TS behavior.
+	// ErrForbidden is returned when the caller is authenticated but not allowed to act on a
+	// poll's contents (role/creator checks, guest-token scoping). A poll belonging to a
+	// DIFFERENT org maps to ErrNotFound, matching the TS original's leak-avoidance rule —
+	// a poll id's existence is never revealed outside its own org (see requireOrgPoll in
+	// service.go).
 	ErrForbidden = errors.New("polls: forbidden")
 
 	// ErrNotFound is returned when a poll (or an option/participant/comment within it) doesn't
