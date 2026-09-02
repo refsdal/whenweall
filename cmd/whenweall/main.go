@@ -159,6 +159,12 @@ func serve() int {
 		bookingsSvc.Register(mux, authSvc, cfg)
 		rooms.Register(mux, hub, authSvc, pollsSvc, bookingsSvc, statsSvc, cfg)
 		admin.Register(mux, authSvc, sqlDB)
+		// Task 5: the e2e seed endpoint Playwright's fixtures call, gated the same way
+		// config.Load itself hard-fails boot on (EnableTestRoutes set alongside
+		// APP_ENV=production) — never reachable in a real deployment.
+		if cfg.EnableTestRoutes {
+			httpserver.RegisterTestRoutes(mux, cfg, authSvc, pollsSvc, bookingsSvc)
+		}
 	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
