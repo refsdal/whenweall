@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>whenweall — Find a time everyone can make.</title>
+    <meta
+      name="description"
+      content="whenweall is a free, fast scheduling poll: propose dates, share a link, let everyone vote, pick the winner."
+    />
+    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#130e0b" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!--
+      Resolves the stored theme before first paint so the page never flashes the wrong theme.
+      Plain (non-module, blocking) inline script so it runs before anything renders — a module
+      script would be deferred and lose the race against first paint. Mirrors
+      `web/src/lib/theme.ts`'s `themeInitScript`; keep the two in sync by hand, since this file
+      isn't processed through that module.
+    -->
+    <script>
+      ;(function () {
+        try {
+          var t = localStorage.getItem('theme')
+          if (t !== 'light' && t !== 'dark' && t !== 'auto') {
+            t = 'auto'
+          }
+          var d = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var e = document.documentElement
+          e.classList.toggle('dark', d)
+          e.classList.toggle('light', !d)
+          e.style.colorScheme = d ? 'dark' : 'light'
+        } catch (_) {}
+      })()
+    </script>
+  </head>
+  <body class="min-h-dvh antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

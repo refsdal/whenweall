@@ -9,12 +9,7 @@
       "@/*": ["./src/*"]
     },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": [
-      "./worker-configuration.d.ts",
-      "node",
-      "vite/client",
-      "@cloudflare/vitest-plugin/types"
-    ],
+    "types": ["node", "vite/client"],
 
     /* Bundler mode */
     "moduleResolution": "bundler",

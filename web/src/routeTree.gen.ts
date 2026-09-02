@@ -25,24 +25,15 @@ import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitati
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as AdminAuditRouteImport } from './routes/admin/audit'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
-import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
 import { Route as AdminUsersIdRouteImport } from './routes/admin/users.$id'
-import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as ApiStatsWsRouteImport } from './routes/api/stats/ws'
-import { Route as ApiTestSeedRouteImport } from './routes/api/test/seed'
 import { Route as BookHandleSlugRouteImport } from './routes/book/$handle/$slug'
 import { Route as BookingIdIndexRouteImport } from './routes/booking/$id/index'
-import { Route as BookingIdCalendarDoticsRouteImport } from './routes/booking/$id/calendar[.]ics'
 import { Route as BookingsIdIndexRouteImport } from './routes/bookings/$id/index'
 import { Route as BookingsIdEditRouteImport } from './routes/bookings/$id/edit'
 import { Route as PIdIndexRouteImport } from './routes/p/$id/index'
-import { Route as PIdCalendarDoticsRouteImport } from './routes/p/$id/calendar[.]ics'
 import { Route as PIdEditRouteImport } from './routes/p/$id/edit'
-import { Route as PIdRosterDotcsvRouteImport } from './routes/p/$id/roster[.]csv'
-import { Route as ApiBookingsPageIdWsRouteImport } from './routes/api/bookings/$pageId/ws'
-import { Route as ApiPollsIdWsRouteImport } from './routes/api/polls/$id/ws'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -124,11 +115,6 @@ const AdminUsersRoute = AdminUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const ApiHealthRoute = ApiHealthRouteImport.update({
-  id: '/api/health',
-  path: '/api/health',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const BookingsIndexRoute = BookingsIndexRouteImport.update({
   id: '/bookings/',
   path: '/bookings/',
@@ -144,21 +130,6 @@ const AdminUsersIdRoute = AdminUsersIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => AdminUsersRoute,
 } as any)
-const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiStatsWsRoute = ApiStatsWsRouteImport.update({
-  id: '/api/stats/ws',
-  path: '/api/stats/ws',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiTestSeedRoute = ApiTestSeedRouteImport.update({
-  id: '/api/test/seed',
-  path: '/api/test/seed',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const BookHandleSlugRoute = BookHandleSlugRouteImport.update({
   id: '/book/$handle/$slug',
   path: '/book/$handle/$slug',
@@ -167,11 +138,6 @@ const BookHandleSlugRoute = BookHandleSlugRouteImport.update({
 const BookingIdIndexRoute = BookingIdIndexRouteImport.update({
   id: '/booking/$id/',
   path: '/booking/$id/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BookingIdCalendarDoticsRoute = BookingIdCalendarDoticsRouteImport.update({
-  id: '/booking/$id/calendar.ics',
-  path: '/booking/$id/calendar.ics',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BookingsIdIndexRoute = BookingsIdIndexRouteImport.update({
@@ -189,29 +155,9 @@ const PIdIndexRoute = PIdIndexRouteImport.update({
   path: '/p/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PIdCalendarDoticsRoute = PIdCalendarDoticsRouteImport.update({
-  id: '/p/$id/calendar.ics',
-  path: '/p/$id/calendar.ics',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const PIdEditRoute = PIdEditRouteImport.update({
   id: '/p/$id/edit',
   path: '/p/$id/edit',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PIdRosterDotcsvRoute = PIdRosterDotcsvRouteImport.update({
-  id: '/p/$id/roster.csv',
-  path: '/p/$id/roster.csv',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiBookingsPageIdWsRoute = ApiBookingsPageIdWsRouteImport.update({
-  id: '/api/bookings/$pageId/ws',
-  path: '/api/bookings/$pageId/ws',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPollsIdWsRoute = ApiPollsIdWsRouteImport.update({
-  id: '/api/polls/$id/ws',
-  path: '/api/polls/$id/ws',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -231,25 +177,16 @@ export interface FileRoutesByFullPath {
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
-  '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
   '/admin/': typeof AdminIndexRoute
   '/bookings/': typeof BookingsIndexRoute
   '/admin/users/$id': typeof AdminUsersIdRoute
-  '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/stats/ws': typeof ApiStatsWsRoute
-  '/api/test/seed': typeof ApiTestSeedRoute
   '/book/$handle/$slug': typeof BookHandleSlugRoute
-  '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
-  '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
-  '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
   '/booking/$id/': typeof BookingIdIndexRoute
   '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
-  '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
-  '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -266,25 +203,16 @@ export interface FileRoutesByTo {
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
-  '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
   '/admin': typeof AdminIndexRoute
   '/bookings': typeof BookingsIndexRoute
   '/admin/users/$id': typeof AdminUsersIdRoute
-  '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/stats/ws': typeof ApiStatsWsRoute
-  '/api/test/seed': typeof ApiTestSeedRoute
   '/book/$handle/$slug': typeof BookHandleSlugRoute
-  '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
-  '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
-  '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
   '/booking/$id': typeof BookingIdIndexRoute
   '/bookings/$id': typeof BookingsIdIndexRoute
   '/p/$id': typeof PIdIndexRoute
-  '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
-  '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -303,25 +231,16 @@ export interface FileRoutesById {
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
-  '/api/health': typeof ApiHealthRoute
   '/bookings/new': typeof BookingsNewRoute
   '/admin/': typeof AdminIndexRoute
   '/bookings/': typeof BookingsIndexRoute
   '/admin/users/$id': typeof AdminUsersIdRoute
-  '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/stats/ws': typeof ApiStatsWsRoute
-  '/api/test/seed': typeof ApiTestSeedRoute
   '/book/$handle/$slug': typeof BookHandleSlugRoute
-  '/booking/$id/calendar.ics': typeof BookingIdCalendarDoticsRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
-  '/p/$id/calendar.ics': typeof PIdCalendarDoticsRoute
   '/p/$id/edit': typeof PIdEditRoute
-  '/p/$id/roster.csv': typeof PIdRosterDotcsvRoute
   '/booking/$id/': typeof BookingIdIndexRoute
   '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
-  '/api/bookings/$pageId/ws': typeof ApiBookingsPageIdWsRoute
-  '/api/polls/$id/ws': typeof ApiPollsIdWsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -341,25 +260,16 @@ export interface FileRouteTypes {
     | '/accept-invitation/$id'
     | '/admin/audit'
     | '/admin/users'
-    | '/api/health'
     | '/bookings/new'
     | '/admin/'
     | '/bookings/'
     | '/admin/users/$id'
-    | '/api/auth/$'
-    | '/api/stats/ws'
-    | '/api/test/seed'
     | '/book/$handle/$slug'
-    | '/booking/$id/calendar.ics'
     | '/bookings/$id/edit'
-    | '/p/$id/calendar.ics'
     | '/p/$id/edit'
-    | '/p/$id/roster.csv'
     | '/booking/$id/'
     | '/bookings/$id/'
     | '/p/$id/'
-    | '/api/bookings/$pageId/ws'
-    | '/api/polls/$id/ws'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -376,25 +286,16 @@ export interface FileRouteTypes {
     | '/accept-invitation/$id'
     | '/admin/audit'
     | '/admin/users'
-    | '/api/health'
     | '/bookings/new'
     | '/admin'
     | '/bookings'
     | '/admin/users/$id'
-    | '/api/auth/$'
-    | '/api/stats/ws'
-    | '/api/test/seed'
     | '/book/$handle/$slug'
-    | '/booking/$id/calendar.ics'
     | '/bookings/$id/edit'
-    | '/p/$id/calendar.ics'
     | '/p/$id/edit'
-    | '/p/$id/roster.csv'
     | '/booking/$id'
     | '/bookings/$id'
     | '/p/$id'
-    | '/api/bookings/$pageId/ws'
-    | '/api/polls/$id/ws'
   id:
     | '__root__'
     | '/'
@@ -412,25 +313,16 @@ export interface FileRouteTypes {
     | '/accept-invitation/$id'
     | '/admin/audit'
     | '/admin/users'
-    | '/api/health'
     | '/bookings/new'
     | '/admin/'
     | '/bookings/'
     | '/admin/users/$id'
-    | '/api/auth/$'
-    | '/api/stats/ws'
-    | '/api/test/seed'
     | '/book/$handle/$slug'
-    | '/booking/$id/calendar.ics'
     | '/bookings/$id/edit'
-    | '/p/$id/calendar.ics'
     | '/p/$id/edit'
-    | '/p/$id/roster.csv'
     | '/booking/$id/'
     | '/bookings/$id/'
     | '/p/$id/'
-    | '/api/bookings/$pageId/ws'
-    | '/api/polls/$id/ws'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -447,23 +339,14 @@ export interface RootRouteChildren {
   TermsRoute: typeof TermsRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   AcceptInvitationIdRoute: typeof AcceptInvitationIdRoute
-  ApiHealthRoute: typeof ApiHealthRoute
   BookingsNewRoute: typeof BookingsNewRoute
   BookingsIndexRoute: typeof BookingsIndexRoute
-  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
-  ApiStatsWsRoute: typeof ApiStatsWsRoute
-  ApiTestSeedRoute: typeof ApiTestSeedRoute
   BookHandleSlugRoute: typeof BookHandleSlugRoute
-  BookingIdCalendarDoticsRoute: typeof BookingIdCalendarDoticsRoute
   BookingsIdEditRoute: typeof BookingsIdEditRoute
-  PIdCalendarDoticsRoute: typeof PIdCalendarDoticsRoute
   PIdEditRoute: typeof PIdEditRoute
-  PIdRosterDotcsvRoute: typeof PIdRosterDotcsvRoute
   BookingIdIndexRoute: typeof BookingIdIndexRoute
   BookingsIdIndexRoute: typeof BookingsIdIndexRoute
   PIdIndexRoute: typeof PIdIndexRoute
-  ApiBookingsPageIdWsRoute: typeof ApiBookingsPageIdWsRoute
-  ApiPollsIdWsRoute: typeof ApiPollsIdWsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -580,13 +463,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminUsersRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/api/health': {
-      id: '/api/health'
-      path: '/api/health'
-      fullPath: '/api/health'
-      preLoaderRoute: typeof ApiHealthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/bookings/': {
       id: '/bookings/'
       path: '/bookings'
@@ -608,27 +484,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminUsersIdRouteImport
       parentRoute: typeof AdminUsersRoute
     }
-    '/api/auth/$': {
-      id: '/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/api/auth/$'
-      preLoaderRoute: typeof ApiAuthSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/stats/ws': {
-      id: '/api/stats/ws'
-      path: '/api/stats/ws'
-      fullPath: '/api/stats/ws'
-      preLoaderRoute: typeof ApiStatsWsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/test/seed': {
-      id: '/api/test/seed'
-      path: '/api/test/seed'
-      fullPath: '/api/test/seed'
-      preLoaderRoute: typeof ApiTestSeedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/book/$handle/$slug': {
       id: '/book/$handle/$slug'
       path: '/book/$handle/$slug'
@@ -641,13 +496,6 @@ declare module '@tanstack/react-router' {
       path: '/booking/$id'
       fullPath: '/booking/$id/'
       preLoaderRoute: typeof BookingIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/booking/$id/calendar.ics': {
-      id: '/booking/$id/calendar.ics'
-      path: '/booking/$id/calendar.ics'
-      fullPath: '/booking/$id/calendar.ics'
-      preLoaderRoute: typeof BookingIdCalendarDoticsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bookings/$id/': {
@@ -671,39 +519,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/p/$id/calendar.ics': {
-      id: '/p/$id/calendar.ics'
-      path: '/p/$id/calendar.ics'
-      fullPath: '/p/$id/calendar.ics'
-      preLoaderRoute: typeof PIdCalendarDoticsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/p/$id/edit': {
       id: '/p/$id/edit'
       path: '/p/$id/edit'
       fullPath: '/p/$id/edit'
       preLoaderRoute: typeof PIdEditRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/p/$id/roster.csv': {
-      id: '/p/$id/roster.csv'
-      path: '/p/$id/roster.csv'
-      fullPath: '/p/$id/roster.csv'
-      preLoaderRoute: typeof PIdRosterDotcsvRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/bookings/$pageId/ws': {
-      id: '/api/bookings/$pageId/ws'
-      path: '/api/bookings/$pageId/ws'
-      fullPath: '/api/bookings/$pageId/ws'
-      preLoaderRoute: typeof ApiBookingsPageIdWsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/polls/$id/ws': {
-      id: '/api/polls/$id/ws'
-      path: '/api/polls/$id/ws'
-      fullPath: '/api/polls/$id/ws'
-      preLoaderRoute: typeof ApiPollsIdWsRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -751,23 +571,14 @@ const rootRouteChildren: RootRouteChildren = {
   TermsRoute: TermsRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   AcceptInvitationIdRoute: AcceptInvitationIdRoute,
-  ApiHealthRoute: ApiHealthRoute,
   BookingsNewRoute: BookingsNewRoute,
   BookingsIndexRoute: BookingsIndexRoute,
-  ApiAuthSplatRoute: ApiAuthSplatRoute,
-  ApiStatsWsRoute: ApiStatsWsRoute,
-  ApiTestSeedRoute: ApiTestSeedRoute,
   BookHandleSlugRoute: BookHandleSlugRoute,
-  BookingIdCalendarDoticsRoute: BookingIdCalendarDoticsRoute,
   BookingsIdEditRoute: BookingsIdEditRoute,
-  PIdCalendarDoticsRoute: PIdCalendarDoticsRoute,
   PIdEditRoute: PIdEditRoute,
-  PIdRosterDotcsvRoute: PIdRosterDotcsvRoute,
   BookingIdIndexRoute: BookingIdIndexRoute,
   BookingsIdIndexRoute: BookingsIdIndexRoute,
   PIdIndexRoute: PIdIndexRoute,
-  ApiBookingsPageIdWsRoute: ApiBookingsPageIdWsRoute,
-  ApiPollsIdWsRoute: ApiPollsIdWsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

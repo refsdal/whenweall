@@ -1,14 +1,6 @@
-import {
-  HeadContent,
-  Outlet,
-  Scripts,
-  createRootRoute,
-  type ErrorComponentProps,
-} from '@tanstack/react-router'
+import { Outlet, createRootRoute, type ErrorComponentProps } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { MotionConfig } from 'motion/react'
-import appCss from '../styles.css?url'
-import { appConfig } from '#/app.config'
 import { ErrorCard } from '#/components/layout/ErrorCard'
 import { Header } from '#/components/layout/Header'
 import { Footer } from '#/components/layout/Footer'
@@ -16,33 +8,18 @@ import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { RouteProgress } from '#/components/layout/RouteProgress'
 import { Toaster } from '#/components/ui/sonner'
 import { getLocale, m } from '#/lib/i18n'
-import { themeInitScript } from '#/lib/theme'
 import { getSession } from '#/server/auth/session.functions'
 import { getPublicConfig } from '#/server/config.functions'
 
+// NOTE(go-rewrite-08 task 1): `head`/`shellComponent`/`HeadContent`/`Scripts` were TanStack
+// Start SSR-only APIs — there is no equivalent in plain `@tanstack/react-router` (no server, no
+// document to render). The document shell they used to produce (`<html>`, the theme-init
+// script, `<head>` meta, `#root` mount point) now lives statically in `web/index.html`, which
+// Vite serves and injects `main.tsx` into directly. `beforeLoad`'s `getSession`/`getPublicConfig`
+// calls are TanStack Start server functions (`#/server/*`) that no longer resolve under `web/` —
+// left as-is on purpose; replacing them with real Go API calls is Task 2-4's job (see
+// worklist.txt), not this move.
 export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: `${appConfig.name} — ${appConfig.tagline}` },
-      { name: 'description', content: appConfig.description },
-      {
-        name: 'theme-color',
-        content: appConfig.brand.paperLight,
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        name: 'theme-color',
-        content: appConfig.brand.paperDark,
-        media: '(prefers-color-scheme: dark)',
-      },
-    ],
-    links: [
-      { rel: 'stylesheet', href: appCss },
-      { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
-    ],
-  }),
   beforeLoad: async () => ({
     session: await getSession(),
     locale: getLocale(),
@@ -50,7 +27,6 @@ export const Route = createRootRoute({
   }),
   notFoundComponent: RootNotFound,
   errorComponent: RootError,
-  shellComponent: RootDocument,
   component: RootLayout,
 })
 
@@ -91,27 +67,5 @@ function RootLayout() {
         <Toaster position="bottom-right" />
       </div>
     </MotionConfig>
-  )
-}
-
-function RootDocument({ children }: { children: React.ReactNode }) {
-  // `shellComponent` renders outside the matched route tree, so it has no access to
-  // `Route.useRouteContext()`. Paraglide's `getLocale()` resolves correctly here in both
-  // environments: on the server from the `paraglideMiddleware` async context, on the client
-  // from the `whenweall_locale` cookie / document.
-  const locale = getLocale()
-
-  return (
-    <html lang={locale} suppressHydrationWarning>
-      <head>
-        {/* Resolves the stored theme before first paint so the page never flashes. */}
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        <HeadContent />
-      </head>
-      <body className="min-h-dvh antialiased">
-        {children}
-        <Scripts />
-      </body>
-    </html>
   )
 }
