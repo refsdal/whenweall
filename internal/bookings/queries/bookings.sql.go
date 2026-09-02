@@ -30,6 +30,33 @@ func (q *Queries) CountUpcomingConfirmedBookings(ctx context.Context, arg CountU
 	return count, err
 }
 
+const getBooking = `-- name: GetBooking :one
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings WHERE id = $1
+`
+
+func (q *Queries) GetBooking(ctx context.Context, id string) (Booking, error) {
+	row := q.db.QueryRowContext(ctx, getBooking, id)
+	var i Booking
+	err := row.Scan(
+		&i.ID,
+		&i.PageID,
+		&i.StartAt,
+		&i.EndAt,
+		&i.VisitorName,
+		&i.VisitorEmail,
+		&i.VisitorNote,
+		&i.VisitorLocale,
+		&i.VisitorTimezone,
+		&i.Status,
+		&i.CancelledBy,
+		&i.ManageTokenHash,
+		&i.GoogleEventID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getBookingPage = `-- name: GetBookingPage :one
 SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL
 `
@@ -103,6 +130,106 @@ func (q *Queries) GetBookingPageByOrgSlug(ctx context.Context, arg GetBookingPag
 	return i, err
 }
 
+const getBookingPageByOrgSlugForUpdate = `-- name: GetBookingPageByOrgSlugForUpdate :one
+
+SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL FOR UPDATE
+`
+
+type GetBookingPageByOrgSlugForUpdateParams struct {
+	OrganizationID int64
+	Slug           string
+}
+
+// Task 3 (booking creation/manage service) queries below.
+// Locks the page row for the duration of the enclosing transaction — Book/Reschedule's own
+// invariant lock (see bookings.go's package doc comment): serializes every concurrent
+// book/reschedule attempt against THIS page, so the "recompute busy intervals, then insert"
+// sequence below can never interleave across transactions.
+func (q *Queries) GetBookingPageByOrgSlugForUpdate(ctx context.Context, arg GetBookingPageByOrgSlugForUpdateParams) (BookingPage, error) {
+	row := q.db.QueryRowContext(ctx, getBookingPageByOrgSlugForUpdate, arg.OrganizationID, arg.Slug)
+	var i BookingPage
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.CreatedBy,
+		&i.MemberUserID,
+		&i.Slug,
+		&i.Title,
+		&i.Description,
+		&i.Location,
+		&i.Timezone,
+		&i.SlotDurationMin,
+		&i.BufferBeforeMin,
+		&i.BufferAfterMin,
+		&i.MinNoticeMin,
+		&i.MaxDaysAhead,
+		&i.Availability,
+		&i.DateOverrides,
+		&i.GoogleSync,
+		&i.Reminders,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getBookingPageForUpdate = `-- name: GetBookingPageForUpdate :one
+SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+`
+
+// Same lock as GetBookingPageByOrgSlugForUpdate, keyed by id instead of (org, slug) — used by
+// Reschedule, which already has the booking's page_id in hand.
+func (q *Queries) GetBookingPageForUpdate(ctx context.Context, id string) (BookingPage, error) {
+	row := q.db.QueryRowContext(ctx, getBookingPageForUpdate, id)
+	var i BookingPage
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.CreatedBy,
+		&i.MemberUserID,
+		&i.Slug,
+		&i.Title,
+		&i.Description,
+		&i.Location,
+		&i.Timezone,
+		&i.SlotDurationMin,
+		&i.BufferBeforeMin,
+		&i.BufferAfterMin,
+		&i.MinNoticeMin,
+		&i.MaxDaysAhead,
+		&i.Availability,
+		&i.DateOverrides,
+		&i.GoogleSync,
+		&i.Reminders,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getOrganization = `-- name: GetOrganization :one
+SELECT id, name, slug, logo, metadata, created_at, updated_at FROM organizations WHERE id = $1
+`
+
+func (q *Queries) GetOrganization(ctx context.Context, id int64) (Organization, error) {
+	row := q.db.QueryRowContext(ctx, getOrganization, id)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Logo,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getOrganizationBySlug = `-- name: GetOrganizationBySlug :one
 SELECT id, name, slug, logo, metadata, created_at, updated_at FROM organizations WHERE slug = $1
 `
@@ -120,6 +247,52 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const insertBooking = `-- name: InsertBooking :exec
+INSERT INTO bookings (
+  id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale,
+  visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+`
+
+type InsertBookingParams struct {
+	ID              string
+	PageID          string
+	StartAt         time.Time
+	EndAt           time.Time
+	VisitorName     string
+	VisitorEmail    string
+	VisitorNote     sql.NullString
+	VisitorLocale   sql.NullString
+	VisitorTimezone string
+	Status          string
+	CancelledBy     sql.NullString
+	ManageTokenHash string
+	GoogleEventID   sql.NullString
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (q *Queries) InsertBooking(ctx context.Context, arg InsertBookingParams) error {
+	_, err := q.db.ExecContext(ctx, insertBooking,
+		arg.ID,
+		arg.PageID,
+		arg.StartAt,
+		arg.EndAt,
+		arg.VisitorName,
+		arg.VisitorEmail,
+		arg.VisitorNote,
+		arg.VisitorLocale,
+		arg.VisitorTimezone,
+		arg.Status,
+		arg.CancelledBy,
+		arg.ManageTokenHash,
+		arg.GoogleEventID,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
 }
 
 const insertBookingPage = `-- name: InsertBookingPage :exec
@@ -236,6 +409,117 @@ func (q *Queries) ListBookingPagesByOrg(ctx context.Context, organizationID int6
 	return items, nil
 }
 
+const listBookingsInRange = `-- name: ListBookingsInRange :many
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings
+WHERE page_id = $1
+  AND start_at < $2
+  AND end_at > $3
+ORDER BY start_at
+`
+
+type ListBookingsInRangeParams struct {
+	PageID    string
+	RangeTo   time.Time
+	RangeFrom time.Time
+}
+
+// Every booking (any status) on a page overlapping [range_from, range_to) — ListPageBookings'
+// own query, unfiltered by status (matching listBookings, bookings.ts).
+func (q *Queries) ListBookingsInRange(ctx context.Context, arg ListBookingsInRangeParams) ([]Booking, error) {
+	rows, err := q.db.QueryContext(ctx, listBookingsInRange, arg.PageID, arg.RangeTo, arg.RangeFrom)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Booking
+	for rows.Next() {
+		var i Booking
+		if err := rows.Scan(
+			&i.ID,
+			&i.PageID,
+			&i.StartAt,
+			&i.EndAt,
+			&i.VisitorName,
+			&i.VisitorEmail,
+			&i.VisitorNote,
+			&i.VisitorLocale,
+			&i.VisitorTimezone,
+			&i.Status,
+			&i.CancelledBy,
+			&i.ManageTokenHash,
+			&i.GoogleEventID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConfirmedBookingsInRange = `-- name: ListConfirmedBookingsInRange :many
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings
+WHERE page_id = $1
+  AND status = 'confirmed'
+  AND start_at < $2
+  AND end_at > $3
+ORDER BY start_at
+`
+
+type ListConfirmedBookingsInRangeParams struct {
+	PageID    string
+	RangeTo   time.Time
+	RangeFrom time.Time
+}
+
+// Confirmed bookings on a page overlapping [range_from, range_to) as their raw stored interval —
+// see bookedIntervalsForPage's (bookings.go) doc comment on why no buffer is applied here.
+func (q *Queries) ListConfirmedBookingsInRange(ctx context.Context, arg ListConfirmedBookingsInRangeParams) ([]Booking, error) {
+	rows, err := q.db.QueryContext(ctx, listConfirmedBookingsInRange, arg.PageID, arg.RangeTo, arg.RangeFrom)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Booking
+	for rows.Next() {
+		var i Booking
+		if err := rows.Scan(
+			&i.ID,
+			&i.PageID,
+			&i.StartAt,
+			&i.EndAt,
+			&i.VisitorName,
+			&i.VisitorEmail,
+			&i.VisitorNote,
+			&i.VisitorLocale,
+			&i.VisitorTimezone,
+			&i.Status,
+			&i.CancelledBy,
+			&i.ManageTokenHash,
+			&i.GoogleEventID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteBookingPage = `-- name: SoftDeleteBookingPage :exec
 UPDATE booking_pages SET deleted_at = $2, updated_at = $2 WHERE id = $1
 `
@@ -309,6 +593,48 @@ func (q *Queries) UpdateBookingPage(ctx context.Context, arg UpdateBookingPagePa
 		arg.GoogleSync,
 		arg.Reminders,
 		arg.Status,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const updateBookingSchedule = `-- name: UpdateBookingSchedule :exec
+UPDATE bookings SET start_at = $2, end_at = $3, updated_at = $4 WHERE id = $1
+`
+
+type UpdateBookingScheduleParams struct {
+	ID        string
+	StartAt   time.Time
+	EndAt     time.Time
+	UpdatedAt time.Time
+}
+
+func (q *Queries) UpdateBookingSchedule(ctx context.Context, arg UpdateBookingScheduleParams) error {
+	_, err := q.db.ExecContext(ctx, updateBookingSchedule,
+		arg.ID,
+		arg.StartAt,
+		arg.EndAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const updateBookingStatus = `-- name: UpdateBookingStatus :exec
+UPDATE bookings SET status = $2, cancelled_by = $3, updated_at = $4 WHERE id = $1
+`
+
+type UpdateBookingStatusParams struct {
+	ID          string
+	Status      string
+	CancelledBy sql.NullString
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) error {
+	_, err := q.db.ExecContext(ctx, updateBookingStatus,
+		arg.ID,
+		arg.Status,
+		arg.CancelledBy,
 		arg.UpdatedAt,
 	)
 	return err

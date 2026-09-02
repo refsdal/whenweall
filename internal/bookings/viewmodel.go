@@ -60,3 +60,41 @@ type PublicPageView struct {
 	Status          string              `json:"status"`
 	Owner           PublicPageOwnerView `json:"owner"`
 }
+
+// BookingView mirrors viewmodel.ts's BookingView.
+type BookingView struct {
+	ID              string  `json:"id"`
+	PageID          string  `json:"pageId"`
+	StartAt         string  `json:"startAt"`
+	EndAt           string  `json:"endAt"`
+	VisitorName     string  `json:"visitorName"`
+	VisitorEmail    string  `json:"visitorEmail"`
+	VisitorNote     *string `json:"visitorNote"`
+	VisitorTimezone string  `json:"visitorTimezone"`
+	VisitorLocale   *string `json:"visitorLocale"`
+	Status          string  `json:"status"`
+	CancelledBy     *string `json:"cancelledBy"`
+	CreatedAt       string  `json:"createdAt"`
+}
+
+// ManagedBookingPageView mirrors BookingForManage['page'] (viewmodel.ts) — deliberately omits the
+// page's organizationId, same reasoning as the TS source's own doc comment: a token-authenticated
+// visitor gets this same shape as an authenticated owner, and nothing reads the org's internal id
+// off it.
+type ManagedBookingPageView struct {
+	ID              string              `json:"id"`
+	Handle          *string             `json:"handle"`
+	Slug            string              `json:"slug"`
+	Title           string              `json:"title"`
+	Location        *string             `json:"location"`
+	Timezone        string              `json:"timezone"`
+	SlotDurationMin int                 `json:"slotDurationMin"`
+	Owner           PublicPageOwnerView `json:"owner"`
+}
+
+// ManagedBookingView mirrors viewmodel.ts's BookingForManage — getBookingForManage's/
+// ManagedBooking's return: the booking plus enough of its page to render a manage page.
+type ManagedBookingView struct {
+	BookingView
+	Page ManagedBookingPageView `json:"page"`
+}

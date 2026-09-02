@@ -10,14 +10,34 @@ import (
 
 type Querier interface {
 	CountUpcomingConfirmedBookings(ctx context.Context, arg CountUpcomingConfirmedBookingsParams) (int64, error)
+	GetBooking(ctx context.Context, id string) (Booking, error)
 	GetBookingPage(ctx context.Context, id string) (BookingPage, error)
 	GetBookingPageByOrgSlug(ctx context.Context, arg GetBookingPageByOrgSlugParams) (BookingPage, error)
+	// Task 3 (booking creation/manage service) queries below.
+	// Locks the page row for the duration of the enclosing transaction — Book/Reschedule's own
+	// invariant lock (see bookings.go's package doc comment): serializes every concurrent
+	// book/reschedule attempt against THIS page, so the "recompute busy intervals, then insert"
+	// sequence below can never interleave across transactions.
+	GetBookingPageByOrgSlugForUpdate(ctx context.Context, arg GetBookingPageByOrgSlugForUpdateParams) (BookingPage, error)
+	// Same lock as GetBookingPageByOrgSlugForUpdate, keyed by id instead of (org, slug) — used by
+	// Reschedule, which already has the booking's page_id in hand.
+	GetBookingPageForUpdate(ctx context.Context, id string) (BookingPage, error)
+	GetOrganization(ctx context.Context, id int64) (Organization, error)
 	GetOrganizationBySlug(ctx context.Context, slug string) (Organization, error)
+	InsertBooking(ctx context.Context, arg InsertBookingParams) error
 	// Task 2 (booking pages service) queries below.
 	InsertBookingPage(ctx context.Context, arg InsertBookingPageParams) error
 	ListBookingPagesByOrg(ctx context.Context, organizationID int64) ([]BookingPage, error)
+	// Every booking (any status) on a page overlapping [range_from, range_to) — ListPageBookings'
+	// own query, unfiltered by status (matching listBookings, bookings.ts).
+	ListBookingsInRange(ctx context.Context, arg ListBookingsInRangeParams) ([]Booking, error)
+	// Confirmed bookings on a page overlapping [range_from, range_to) as their raw stored interval —
+	// see bookedIntervalsForPage's (bookings.go) doc comment on why no buffer is applied here.
+	ListConfirmedBookingsInRange(ctx context.Context, arg ListConfirmedBookingsInRangeParams) ([]Booking, error)
 	SoftDeleteBookingPage(ctx context.Context, arg SoftDeleteBookingPageParams) error
 	UpdateBookingPage(ctx context.Context, arg UpdateBookingPageParams) error
+	UpdateBookingSchedule(ctx context.Context, arg UpdateBookingScheduleParams) error
+	UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) error
 	UpdateOrganizationSlug(ctx context.Context, arg UpdateOrganizationSlugParams) error
 }
 
