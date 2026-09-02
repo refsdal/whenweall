@@ -123,6 +123,17 @@ DELETE FROM votes WHERE participant_id = $1;
 -- count-then-insert on the same option.
 SELECT * FROM poll_options WHERE id = $1 FOR UPDATE;
 
+-- name: GetParticipantForUpdate :one
+-- Locks the participant row for the duration of the enclosing transaction — Claim's second
+-- atomicity primitive, protecting a participant's own signupMaxClaims cap (see claims.go's Claim
+-- doc comment on lock ordering: option row first, then participant row, always in that order,
+-- everywhere): the SAME participant claiming two DIFFERENT options concurrently would otherwise
+-- each lock a different option row (no conflict there) and both read the same pre-claim count of
+-- existing votes, both pass the maxClaims check, and both insert — exceeding the cap. Locking the
+-- participant row before that count serializes concurrent claims by the same participant,
+-- regardless of which option each one targets.
+SELECT * FROM participants WHERE id = $1 FOR UPDATE;
+
 -- name: CountYesVotesForOption :one
 SELECT count(*) FROM votes WHERE option_id = $1 AND answer = 'yes';
 

@@ -626,3 +626,88 @@ func TestClaimLastSlotExactlyOneWinner(t *testing.T) {
 func raceName(i int) string {
 	return "Racer" + string(rune('A'+i))
 }
+
+// TestClaimSharedParticipantMaxClaimsAcrossOptions is I10's proof: a signup poll capped at
+// signupMaxClaims=1, with a SINGLE participant racing to claim many DIFFERENT unlimited-capacity
+// options at once. THE atomicity contract's option-row lock (GetPollOptionForUpdate) can't help
+// here — each goroutine locks a DIFFERENT option row, so none of them ever blocks another on that
+// lock alone. Without also locking the participant row (queries.GetParticipantForUpdate,
+// claims.go's Claim) before counting its existing claims, every goroutine could read the same
+// "0 claims so far" snapshot and all pass the maxClaims check, exceeding the cap. Exactly one
+// must succeed; every other goroutine must observe ErrClaimLimitReached.
+//
+// 16 distinct options (not just two): confirmed by temporarily reverting the fix that fewer
+// racers doesn't reliably expose the race in this environment — the vulnerable window between
+// the read and the insert is narrow enough that two (or even several) goroutines on a fast local
+// Postgres usually just don't overlap, the same ceiling TestClaimLastSlotExactlyOneWinner's own
+// option-lock race hits without artificially widening its window. This environment has no cgo, so
+// `go test -race` cannot run (the race detector requires cgo) — compensated for with `-count=5`
+// repetition instead, same as that test.
+func TestClaimSharedParticipantMaxClaimsAcrossOptions(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	claimantID := seedUser(t, d)
+
+	// 16 distinct unlimited-capacity options, signupMaxClaims=1, one goroutine per option (never
+	// two racers on the same option): re-claiming an option you already hold is a defined no-op
+	// success (Changed: false, no error at all — see Claim's alreadyClaimed branch), so repeat
+	// racers on one option would conflate "won a second slot" with "harmlessly re-confirmed the
+	// one already held". One racer per option, spread across many options, is what actually
+	// exercises the participant-row lock: no two goroutines ever contend for the same OPTION row
+	// (so THE atomicity contract's option lock gives them no reason to block each other) — only
+	// the participant-row lock (queries.GetParticipantForUpdate) can serialize them.
+	capacities := make([]*int, 16)
+	created := createSignupPoll(t, ctx, s, orgID, ownerID, capacities, 1)
+	viewer := polls.Viewer{UserID: claimantID}
+
+	// Materialize the shared participant row (and bring its claim count back to 0) BEFORE the
+	// race starts, so every racer's resolveClaimant hits the "existing participant" branch — a
+	// signed-in user's first-ever claim on a poll has its own separate create-vs-create race
+	// (no unique constraint on participants(poll_id, user_id) to prevent two rows), which is not
+	// what this test is proving.
+	warmup, err := s.Claim(ctx, created.ID, created.Options[0].ID, polls.ClaimInput{Name: "Shared"}, viewer)
+	if err != nil {
+		t.Fatalf("warm-up Claim: %v", err)
+	}
+	if err := s.Unclaim(ctx, created.ID, created.Options[0].ID, viewer); err != nil {
+		t.Fatalf("warm-up Unclaim: %v", err)
+	}
+
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for _, opt := range created.Options {
+		wg.Add(1)
+		go func(optionID string) {
+			defer wg.Done()
+			<-start
+			_, err := s.Claim(ctx, created.ID, optionID, polls.ClaimInput{ParticipantID: warmup.ParticipantID}, viewer)
+			if err == nil {
+				wins.Add(1)
+			} else if !errors.Is(err, polls.ErrClaimLimitReached) {
+				t.Errorf("err = %v, want nil or ErrClaimLimitReached", err)
+			}
+		}(opt.ID)
+	}
+	close(start)
+	wg.Wait()
+
+	if wins.Load() != 1 {
+		t.Fatalf("winners = %d, want exactly 1", wins.Load())
+	}
+
+	view, err := s.GetView(ctx, created.ID, polls.Viewer{UserID: ownerID})
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
+	total := 0
+	for _, opt := range created.Options {
+		total += view.Claims[opt.ID].Count
+	}
+	if total != 1 {
+		t.Fatalf("total claims across all options = %d, want exactly 1", total)
+	}
+}

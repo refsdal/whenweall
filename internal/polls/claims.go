@@ -6,12 +6,20 @@ package polls
 // methods via Viewer instead of a precomputed `auth`/`org` struct.
 //
 // THE atomicity contract (spec §9's overbooking proof): Claim runs entirely inside one
-// transaction. The contested resource is one poll_options row's capacity vs. its current
-// yes-vote count; `SELECT ... FOR UPDATE` on that row (queries.GetPollOptionForUpdate) is taken
-// before the count, and held until the winning claim's vote is inserted and the transaction
-// commits — every other concurrent claimant on the *same* option blocks on that same row lock, so
-// the read-count-then-insert sequence below can never interleave across transactions. See
-// TestClaimLastSlotExactlyOneWinner (claims_test.go) for the proof.
+// transaction, and takes TWO row locks, always in this fixed order (never the reverse, anywhere
+// in this file — a fixed lock order rules out a cyclic wait, so this can never deadlock against
+// itself):
+//
+//  1. The contested option row's capacity vs. its current yes-vote count: `SELECT ... FOR UPDATE`
+//     (queries.GetPollOptionForUpdate) is taken before the count, and held until the winning
+//     claim's vote is inserted and the transaction commits — every other concurrent claimant on
+//     the *same option* blocks on that same row lock, so the read-count-then-insert sequence
+//     below can never interleave across transactions. See TestClaimLastSlotExactlyOneWinner
+//     (claims_test.go) for the proof.
+//  2. The claiming participant's own row, for an EXISTING participant only (queries.
+//     GetParticipantForUpdate): protects their signupMaxClaims cap the same way, across the
+//     *different* options the same participant might claim concurrently — see
+//     TestClaimSharedParticipantMaxClaimsAcrossOptions (claims_test.go) for the proof.
 
 import (
 	"context"
@@ -214,6 +222,23 @@ func (s *Service) Claim(ctx context.Context, pollID, optionID string, in ClaimIn
 	participantID, created, isGuest, prepared, err := s.resolveClaimant(ctx, q, pollID, poll, in, viewer)
 	if err != nil {
 		return nil, err
+	}
+
+	// Lock the participant row next — option row first, then participant row, is this
+	// transaction's fixed lock order everywhere a Claim needs both, so two Claim calls can never
+	// wait on each other in opposite orders (no cyclic wait, no deadlock). Skipped when created:
+	// a brand-new participant has no row yet to lock (it's inserted further down, still inside
+	// this same transaction), and no concurrent claimant can reference an id that doesn't exist
+	// yet, so there's nothing to race on. For an EXISTING participant (explicit ParticipantID, or
+	// a signed-in user reusing their own row), this is THE atomicity primitive protecting
+	// signupMaxClaims: without it, the SAME participant claiming two DIFFERENT options
+	// concurrently would lock two different option rows above (no conflict there), both read the
+	// same pre-claim vote count below, both pass the maxClaims check, and both insert — exceeding
+	// the cap.
+	if !created {
+		if _, err := q.GetParticipantForUpdate(ctx, participantID); err != nil {
+			return nil, err
+		}
 	}
 
 	existingVotes, err := q.ListVotesByParticipant(ctx, participantID)

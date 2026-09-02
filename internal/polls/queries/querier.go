@@ -22,6 +22,15 @@ type Querier interface {
 	// Task 3 (participants/votes/comments/claims) queries below.
 	GetParticipant(ctx context.Context, id string) (Participant, error)
 	GetParticipantByPollAndUser(ctx context.Context, arg GetParticipantByPollAndUserParams) (Participant, error)
+	// Locks the participant row for the duration of the enclosing transaction — Claim's second
+	// atomicity primitive, protecting a participant's own signupMaxClaims cap (see claims.go's Claim
+	// doc comment on lock ordering: option row first, then participant row, always in that order,
+	// everywhere): the SAME participant claiming two DIFFERENT options concurrently would otherwise
+	// each lock a different option row (no conflict there) and both read the same pre-claim count of
+	// existing votes, both pass the maxClaims check, and both insert — exceeding the cap. Locking the
+	// participant row before that count serializes concurrent claims by the same participant,
+	// regardless of which option each one targets.
+	GetParticipantForUpdate(ctx context.Context, id string) (Participant, error)
 	GetPoll(ctx context.Context, id string) (Poll, error)
 	// Locks the option row for the duration of the enclosing transaction — THE atomicity primitive
 	// Claim relies on (see claims.go's doc comment): every concurrent claimant on the same option

@@ -196,6 +196,35 @@ func (q *Queries) GetParticipantByPollAndUser(ctx context.Context, arg GetPartic
 	return i, err
 }
 
+const getParticipantForUpdate = `-- name: GetParticipantForUpdate :one
+SELECT id, poll_id, name, email, user_id, edit_token_hash, locale, created_at, updated_at FROM participants WHERE id = $1 FOR UPDATE
+`
+
+// Locks the participant row for the duration of the enclosing transaction — Claim's second
+// atomicity primitive, protecting a participant's own signupMaxClaims cap (see claims.go's Claim
+// doc comment on lock ordering: option row first, then participant row, always in that order,
+// everywhere): the SAME participant claiming two DIFFERENT options concurrently would otherwise
+// each lock a different option row (no conflict there) and both read the same pre-claim count of
+// existing votes, both pass the maxClaims check, and both insert — exceeding the cap. Locking the
+// participant row before that count serializes concurrent claims by the same participant,
+// regardless of which option each one targets.
+func (q *Queries) GetParticipantForUpdate(ctx context.Context, id string) (Participant, error) {
+	row := q.db.QueryRowContext(ctx, getParticipantForUpdate, id)
+	var i Participant
+	err := row.Scan(
+		&i.ID,
+		&i.PollID,
+		&i.Name,
+		&i.Email,
+		&i.UserID,
+		&i.EditTokenHash,
+		&i.Locale,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPoll = `-- name: GetPoll :one
 SELECT id, organization_id, created_by, type, title, description, location, timezone, status, deadline_at, finalized_option_id, require_participant_email, allow_comments, allow_if_need_be, signup_max_claims, created_at, updated_at, deleted_at FROM polls WHERE id = $1 AND deleted_at IS NULL
 `
