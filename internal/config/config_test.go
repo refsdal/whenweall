@@ -25,8 +25,11 @@ func TestLoadMinimalValid(t *testing.T) {
 	if cfg.SMTPPort != 587 {
 		t.Errorf("SMTPPort = %d, want 587", cfg.SMTPPort)
 	}
-	if !cfg.TrustProxy || !cfg.MigrateOnBoot {
-		t.Error("TrustProxy/MigrateOnBoot should default true")
+	if cfg.TrustProxy {
+		t.Error("TrustProxy should default false")
+	}
+	if !cfg.MigrateOnBoot {
+		t.Error("MigrateOnBoot should default true")
 	}
 	if len(cfg.LimenSecret) != 32 {
 		t.Errorf("LimenSecret len = %d, want 32", len(cfg.LimenSecret))

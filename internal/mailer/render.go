@@ -21,7 +21,6 @@ var templatesFS embed.FS
 var names = []string{
 	"verify_email",
 	"reset_password",
-	"magic_link",
 	"org_invite",
 	"finalized",
 	"closed",

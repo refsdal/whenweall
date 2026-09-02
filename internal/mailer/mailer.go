@@ -182,7 +182,7 @@ func redactSendErr(err error) error {
 // the job handler (RegisterHandler) and tests, so a request never blocks on an SMTP round trip.
 //
 // This path — a fully-rendered Message queued as-is — is for auth/org mail only: verify_email,
-// reset_password, magic_link, org_invite, and the like, whose tokens are minted once, live only
+// reset_password, org_invite, and the like, whose tokens are minted once, live only
 // inside the request that minted them, and cannot be re-derived later (see ParseFromAddress's
 // callers and the token packages upstream of them). There is nothing to go stale, so queuing the
 // finished Message is safe.

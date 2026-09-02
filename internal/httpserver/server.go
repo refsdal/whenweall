@@ -59,7 +59,6 @@ var authRateLimitedRoutes = map[string]string{
 	"POST /api/v1/auth/signin/credential":       "auth.signin",
 	"POST /api/v1/auth/signup/credential":       "auth.signup",
 	"POST /api/v1/auth/passwords/request-reset": "auth.password_reset",
-	"POST /api/v1/auth/magic-link/signin":       "auth.magic_link",
 }
 
 // authRateLimitMiddleware wraps the entire "/api/v1/auth/" mount in one middleware that computes

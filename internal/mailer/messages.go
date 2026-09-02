@@ -4,10 +4,6 @@ package mailer
 // the app's paraglide message catalog (messages/en.json, messages/nb.json) so the wording here
 // stays a straight port rather than a parallel translation effort. Placeholders use the same
 // `{name}` syntax as paraglide; translate() below does the substitution.
-//
-// email_magic_link_* is the one set with no paraglide source — magic_link is a new template
-// (brief: "copy modelled on VerifyEmail: sign in with this link"), so its copy is authored here
-// directly, in both locales, to match the surrounding templates rather than being English-only.
 var catalog = map[string]map[string]string{
 	"en": {
 		"email_verify_subject": "Verify your email address",
@@ -19,11 +15,6 @@ var catalog = map[string]map[string]string{
 		"email_reset_heading": "Reset your password",
 		"email_reset_body":    "Hi {name}, we received a request to reset your password. Click the button below to choose a new one.",
 		"email_reset_cta":     "Reset password",
-
-		"email_magic_link_subject": "Sign in to whenweall",
-		"email_magic_link_heading": "Sign in",
-		"email_magic_link_body":    "Hi {name}, use the link below to sign in. It expires shortly.",
-		"email_magic_link_cta":     "Sign in",
 
 		"email_org_invite_subject": "{inviter} invited you to {org} on whenweall",
 		"email_org_invite_heading": "Join {org}",
@@ -116,11 +107,6 @@ var catalog = map[string]map[string]string{
 		"email_reset_heading": "Tilbakestill passordet",
 		"email_reset_body":    "Hei {name}, vi har mottatt en forespørsel om å tilbakestille passordet ditt. Klikk på knappen under for å velge et nytt.",
 		"email_reset_cta":     "Tilbakestill passord",
-
-		"email_magic_link_subject": "Logg inn på whenweall",
-		"email_magic_link_heading": "Logg inn",
-		"email_magic_link_body":    "Hei {name}, bruk lenken under for å logge inn. Den utløper snart.",
-		"email_magic_link_cta":     "Logg inn",
 
 		"email_org_invite_subject": "{inviter} inviterte deg til {org} på whenweall",
 		"email_org_invite_heading": "Bli med i {org}",

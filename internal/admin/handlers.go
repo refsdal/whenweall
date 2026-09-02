@@ -334,8 +334,8 @@ func handleAuditList(sqlDB *sql.DB) http.HandlerFunc {
 // (rather than, say, one marked `json:"-"`) so leaving a dead job's Payload out of this response
 // can never regress silently by a future field-for-field copy of jobs.Job growing one — a
 // dead-lettered "mail:send" job's own payload (internal/mailer) carries the recipient's email
-// address, and some mail kinds (verification/password-reset/magic-link) carry a raw token in it
-// too; either is unfit for a support console screen to render.
+// address, and some mail kinds (verification/password-reset) carry a raw token in it too; either
+// is unfit for a support console screen to render.
 type FailedJobView struct {
 	ID        string  `json:"id"`
 	Kind      string  `json:"kind"`

@@ -181,10 +181,10 @@ const authMountSignoutMethodAndPath = "POST /api/v1/auth/signout"
 // under that mount except signout. This is the second, narrower layer resolveSession's own locked
 // check (above) can't provide on its own: that check only ever controls what auth.FromContext
 // returns for *this application's* handlers, because Limen's own plugin routes (organization's
-// invitations, Limen's own GET /me, magic-link's verify, an OAuth callback, ...) authenticate
-// against Limen's *own* session validation and never call FromContext at all. Concretely: a locked
-// user can still complete a fresh credential sign-in, an OAuth callback, or a magic-link verify —
-// none of Limen's plugins know locked_users exists — minting a brand new, perfectly valid Limen
+// invitations, Limen's own GET /me, an OAuth callback, ...) authenticate against Limen's *own*
+// session validation and never call FromContext at all. Concretely: a locked user can still
+// complete a fresh credential sign-in or an OAuth callback — none of Limen's plugins know
+// locked_users exists — minting a brand new, perfectly valid Limen
 // session; without this middleware they could then use that session against any Limen route
 // directly, right past resolveSession's check. Blocking every such route here, unconditionally,
 // is the actual containment: the fresh session still gets minted (there is no hook early enough to

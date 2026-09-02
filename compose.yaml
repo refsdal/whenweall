@@ -63,7 +63,7 @@ services:
       OIDC_NAME: ${OIDC_NAME:-sso}
       # Escape hatch (spec §6): set false to run `whenweall migrate` yourself instead.
       MIGRATE_ON_BOOT: ${MIGRATE_ON_BOOT:-true}
-      TRUST_PROXY: ${TRUST_PROXY:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     ports:
       - '${APP_PORT:-3000}:3000'
     read_only: true

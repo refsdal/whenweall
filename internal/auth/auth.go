@@ -27,12 +27,10 @@ import (
 	"github.com/thecodearcher/limen"
 	sqladapter "github.com/thecodearcher/limen/adapters/sql"
 	credentialpassword "github.com/thecodearcher/limen/plugins/credential-password"
-	magiclink "github.com/thecodearcher/limen/plugins/magic-link"
 	"github.com/thecodearcher/limen/plugins/oauth"
 	oauthgeneric "github.com/thecodearcher/limen/plugins/oauth-generic"
 	oauthgoogle "github.com/thecodearcher/limen/plugins/oauth-google"
 	"github.com/thecodearcher/limen/plugins/organization"
-	twofactor "github.com/thecodearcher/limen/plugins/two-factor"
 
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
@@ -145,12 +143,6 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 				s.enqueueInviteMail(ctx, d)
 			}),
 		),
-		magiclink.New(
-			magiclink.WithSendMagicLink(func(m magiclink.MagicLinkMessage) {
-				s.enqueueMagicLinkMail(m)
-			}),
-		),
-		twofactor.New(),
 	}
 
 	// oauth is only added when at least one provider is actually configured — an empty oauth
@@ -222,18 +214,17 @@ func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption 
 		// silently refuses to send back over that same http connection, breaking sessions
 		// entirely rather than just weakening them.
 		limen.WithHTTPCookieSecure(strings.HasPrefix(cfg.AppURL, "https://")),
-		// Every signin/signup/me (and two-factor/magic-link/oauth) response is routed
-		// through this transformer instead of Limen's default user serialization — see
-		// sessionTransformer's own doc comment for why the default is missing a usable id.
+		// Every signin/signup/me (and oauth) response is routed through this transformer
+		// instead of Limen's default user serialization — see sessionTransformer's own doc
+		// comment for why the default is missing a usable id.
 		limen.WithHTTPSessionTransformer(s.sessionTransformer),
 		// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
 		// (this package's first attempt at the personal-org invariant) turns out to miss most
 		// real signups. ctx.GetAuthResult() is only populated when the route handler itself
 		// calls Responder.SessionResponse — but this config's oauth plugin runs in its
 		// default redirect mode (RedirectWithSession), which redirects the browser instead of
-		// calling SessionResponse, and magic-link's verify (autoCreateUser default true) has
-		// the same gap. A hook keyed to specific route IDs silently no-ops for both. The
-		// invariant is instead enforced lazily, once per user per process, in
+		// calling SessionResponse. A hook keyed to specific route IDs silently no-ops for that
+		// case. The invariant is instead enforced lazily, once per user per process, in
 		// resolveSession (session.go) — see ensurePersonalOrgOnce.
 	}
 
@@ -289,7 +280,7 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 
 // sessionTransformer implements limen.SessionTransformer (registered via
 // limen.WithHTTPSessionTransformer in buildLimenConfig), so it runs on every signin/signup/me
-// (and two-factor/magic-link/oauth) response that goes through Limen's Responder.SessionResponse.
+// (and oauth) response that goes through Limen's Responder.SessionResponse.
 //
 // It exists because Limen's default user serialization never includes a usable id: UserSchema.Serialize
 // deletes the id column outright (see the pinned source's user.go), and even without that,
@@ -352,7 +343,7 @@ func (s *Service) RevokeUserSessions(ctx context.Context, userID string) error {
 // organization — the silent "personal org" every user gets, named from their email's local part
 // (ports src/server/auth/personal-org.ts's createPersonalOrganization) — enforcing the invariant
 // lazily rather than via a Limen HTTP hook (see the comment in buildLimenConfig's HTTP block for
-// why: GetAuthResult() misses both redirect-mode OAuth and magic-link signins). This runs on
+// why: GetAuthResult() misses redirect-mode OAuth signins). This runs on
 // literally every authenticated request until it succeeds once for a given user, at which point
 // personalOrgEnsured short-circuits every later request for that user in this process — so the
 // one-time cost (a ListOrganizations call, plus a CreateOrganization on a brand-new user's very
@@ -488,8 +479,8 @@ func parseLimenID(id string) any {
 }
 
 // enqueueTokenMail builds the reset-password/verify-email link (Limen only ever passes the
-// callback a bare token; there is no URL to preserve as-is here, unlike magic-link) and enqueues
-// it under templateName. path is the SPA route that will read ?token= and complete the flow.
+// callback a bare token, not a full URL) and enqueues it under templateName. path is the SPA
+// route that will read ?token= and complete the flow.
 func (s *Service) enqueueTokenMail(email, templateName, path, token string) {
 	s.sendMail(mailer.Message{
 		To:       email,
@@ -497,21 +488,6 @@ func (s *Service) enqueueTokenMail(email, templateName, path, token string) {
 		Data: map[string]any{
 			"URL":  s.cfg.AppURL + path + "?token=" + token,
 			"Name": nameFromEmail(email),
-		},
-	})
-}
-
-// enqueueMagicLinkMail sends the magic-link sign-in mail. Unlike verify-email/reset-password,
-// Limen already builds a full URL for magic links (m.URL, pointed at its own
-// GET /api/v1/auth/magic-link/verify route) and hands it to this callback — so this uses that
-// URL as-is rather than building a separate SPA link.
-func (s *Service) enqueueMagicLinkMail(m magiclink.MagicLinkMessage) {
-	s.sendMail(mailer.Message{
-		To:       m.Email,
-		Template: "magic_link",
-		Data: map[string]any{
-			"URL":  m.URL,
-			"Name": nameFromEmail(m.Email),
 		},
 	})
 }
@@ -542,11 +518,11 @@ func (s *Service) enqueueInviteMail(ctx context.Context, d *organization.SendInv
 }
 
 // sendMail enqueues msg on a background context. Every Limen mail callback above fires
-// synchronously inside a request/handler goroutine with no ctx of its own (WithSendPasswordResetEmail
-// and WithSendEmailVerificationMail take only (email, token string); WithSendMagicLink takes only
-// a message) — using context.Background() here (rather than propagating a request context that
-// may already be canceled by the time the callback runs) matches the brief's "enqueue outside any
-// tx" instruction: this is a fire-and-forget queue write, not part of the request's own work.
+// synchronously inside a request/handler goroutine with no ctx of its own
+// (WithSendPasswordResetEmail and WithSendEmailVerificationMail take only (email, token string))
+// — using context.Background() here (rather than propagating a request context that may already
+// be canceled by the time the callback runs) matches the brief's "enqueue outside any tx"
+// instruction: this is a fire-and-forget queue write, not part of the request's own work.
 func (s *Service) sendMail(msg mailer.Message) {
 	s.sendMailCtx(context.Background(), msg)
 }

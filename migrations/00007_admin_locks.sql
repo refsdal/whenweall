@@ -18,9 +18,9 @@
 --   2. internal/auth's LockedSessionMiddleware (session.go), wrapped by internal/httpserver
 --      around the whole /api/v1/auth/ mount, closes that gap: it blocks a locked user's session
 --      from reaching any Limen route except signout. A locked user can still complete a fresh
---      credential sign-in, an OAuth callback, or a magic-link verify — none of Limen's plugins
---      know this table exists — which mints a brand new, perfectly valid Limen session; layer 2 is
---      what makes that session useless anyway.
+--      credential sign-in or an OAuth callback — none of Limen's plugins know this table exists —
+--      which mints a brand new, perfectly valid Limen session; layer 2 is what makes that session
+--      useless anyway.
 --
 -- internal/admin's LockUser also revokes the user's existing Limen sessions outright (see
 -- auth.Service's RevokeUserSessions) — belt and suspenders on top of both layers above: revoking

@@ -297,7 +297,7 @@ near the actual typo, is worse than refusing to light up at all.
 | `OIDC_CLIENT_ID`        | no       | —                                  | See above.                                                                                          |
 | `OIDC_CLIENT_SECRET`    | no       | —                                  | See above.                                                                                          |
 | `OIDC_NAME`             | no       | `sso`                                | Label on the OIDC sign-in button.                                                                  |
-| `TRUST_PROXY`           | no       | `true`                               | Trust `X-Forwarded-*` from the reverse proxy in front of the app (client IPs for rate limiting). Turn off only if you expose the app directly with no proxy. |
+| `TRUST_PROXY`           | no       | `false`                              | Trust `X-Forwarded-*` from the reverse proxy in front of the app (client IPs for rate limiting). Set `true` only when — and because — a reverse proxy in front of the app sets these headers; otherwise a client can fabricate them and bypass every per-IP rate limit. |
 | `MIGRATE_ON_BOOT`       | no       | `true`                               | Escape hatch: set `false` to run `whenweall migrate` yourself instead — see [Ops](#ops).           |
 | `ENABLE_TEST_ROUTES`    | no       | `false`                              | Exposes the Playwright seed route. The server refuses to start if this is set alongside `APP_ENV=production` — never set it on a real instance. |
 
@@ -331,8 +331,11 @@ whenweall.example.com {
 ```
 
 Whatever proxy you use, it must forward WebSocket upgrades — every poll, sign-up sheet
-and booking page's live updates depend on it. **nginx** needs the upgrade headers set
-explicitly:
+and booking page's live updates depend on it. Once a proxy is in front of the app and
+setting `X-Forwarded-For`, set `TRUST_PROXY=true` so client IPs used for rate limiting
+come from that header instead of the proxy's own address — leaving it at its `false`
+default with a proxy in front means every request appears to originate from the same
+IP. **nginx** needs the upgrade headers set explicitly:
 
 ```nginx
 location / {
@@ -347,9 +350,9 @@ location / {
 ```
 
 **Traefik** forwards WebSocket upgrades by default with no extra configuration beyond
-routing to the container's port — just make sure `TRUST_PROXY` stays `true` (the
-default) so client IPs used for rate limiting come from the forwarded headers Traefik
-sets, not the proxy's own address.
+routing to the container's port — just make sure you set `TRUST_PROXY=true` so client
+IPs used for rate limiting come from the forwarded headers Traefik sets, not the
+proxy's own address.
 
 ## Ops
 

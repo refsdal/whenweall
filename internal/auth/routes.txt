@@ -67,34 +67,11 @@ DELETE /api/v1/auth/organizations/members/:id                protected
 Custom organization roles (organizations/roles/*) are absent: buildLimenConfig doesn't pass
 organization.WithCustomRoles(true), so /organizations/roles and /organizations/roles/:id 404.
 
-magic-link (/magic-link)
----------------------------
-POST   /api/v1/auth/magic-link/signin                       public   (enqueues magic_link mail)
-GET    /api/v1/auth/magic-link/verify                        public   (consumes the magic-link token)
-
-magic-link/signin's JSON body accepts optional redirect_uri / new_user_redirect_uri /
-error_redirect_uri fields (plugins/magic-link/handlers.go's validateRedirectURLs), each checked
-against IsTrustedOrigin (our BaseURL, i.e. cfg.AppURL, plus any WithHTTPTrustedOrigins entries —
-buildLimenConfig sets none) and 403ing "... is not trusted" if given but not trusted. When
-magic-link/verify's stored state carries a redirect_uri (or, for a first-time signup,
-new_user_redirect_uri), a successful verify 303-redirects the browser there with the session
-cookie attached instead of responding at all; a failed verify redirects to error_redirect_uri (or
-redirect_uri) with ?error=... appended if either was given. Without any redirect_uri on the
-original signin request, verify has nothing to redirect to either way: success renders the normal
-JSON session response in the browser (SessionResponse), and failure renders the normal JSON error
-response — neither is a redirect. The SPA must supply redirect_uri itself if it wants the browser
-to land back on a specific page after clicking the emailed link rather than seeing raw JSON.
-
-two-factor (/two-factor)
----------------------------
-GET    /api/v1/auth/two-factor/backup-codes                  protected
-PUT    /api/v1/auth/two-factor/backup-codes                  protected
-GET    /api/v1/auth/two-factor/totp/uri                      protected
-POST   /api/v1/auth/two-factor/otp/send                      public   (challenge step of a 2FA signin)
-POST   /api/v1/auth/two-factor/initiate-setup                protected
-POST   /api/v1/auth/two-factor/finalize-setup                protected
-POST   /api/v1/auth/two-factor/disable                       protected
-POST   /api/v1/auth/two-factor/verify                        public   (challenge step of a 2FA signin)
+magic-link and two-factor are NOT mounted: buildLimenConfig's plugin set carries neither
+magiclink.New(...) nor twofactor.New() (see auth.go), so every /api/v1/auth/magic-link/* and
+/api/v1/auth/two-factor/* route 404s. Neither ever had frontend UI, and magic-link in particular
+auto-creates an account on first verify (autoCreateUser default true), bypassing the password
+signup flow's own validation on every deployment — see README Non-goals ("no magic links").
 
 oauth (/oauth) — present ONLY when cfg.Capabilities.Google or cfg.Capabilities.OIDC is true;
 absent (404) entirely otherwise (see TestOAuthRoutesAbsentWithoutConfig). :provider is "google"
@@ -113,10 +90,10 @@ POST   /api/v1/auth/oauth/:provider/tokens/refresh            protected
 {"url": "<provider's own authorization URL>"} (plugins/oauth/handlers.go's SignInWithOAuth) and
 sets its state cookie on that same response. The SPA is expected to navigate the browser to
 `url` itself. /authorize also accepts optional ?redirect_uri= and ?error_redirect_uri= query
-params, each checked against IsTrustedOrigin exactly like magic-link's (see above) and 403ing if
+params, each checked against IsTrustedOrigin (our BaseURL, i.e. cfg.AppURL, plus any
+WithHTTPTrustedOrigins entries — buildLimenConfig sets none) and 403ing "... is not trusted" if
 given but not trusted; redirect_uri defaults to BaseURL (cfg.AppURL) when omitted rather than
 being required. Both are threaded through the OAuth state and used the same way on /callback:
 success redirects to redirect_uri with the session cookie attached, failure redirects to
-error_redirect_uri (or redirect_uri) with ?error=... appended — /callback, unlike magic-link's
-/verify, always has at least the BaseURL default to redirect to, so it never falls back to a bare
-JSON response.
+error_redirect_uri (or redirect_uri) with ?error=... appended — /callback always has at least the
+BaseURL default to redirect to, so it never falls back to a bare JSON response.

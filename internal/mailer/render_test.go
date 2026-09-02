@@ -33,14 +33,6 @@ func TestRenderAllTemplates(t *testing.T) {
 			},
 		},
 		{
-			name: "magic_link",
-			data: map[string]any{
-				"AppURL": "https://app.example",
-				"Name":   "Ada",
-				"URL":    "https://app.example/signin/abc123",
-			},
-		},
-		{
 			name: "org_invite",
 			data: map[string]any{
 				"AppURL":      "https://app.example",

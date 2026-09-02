@@ -58,7 +58,7 @@ type Config struct {
 	OIDCName         string // default "sso"
 
 	EnableTestRoutes bool
-	TrustProxy       bool // default true
+	TrustProxy       bool // default false — true only behind a reverse proxy that sets X-Forwarded-For
 	MigrateOnBoot    bool // default true
 
 	Capabilities Capabilities
@@ -119,7 +119,7 @@ func Load(env map[string]string) (*Config, []string, error) {
 		OIDCName:         get("OIDC_NAME"),
 
 		EnableTestRoutes: boolEnv("ENABLE_TEST_ROUTES", false),
-		TrustProxy:       boolEnv("TRUST_PROXY", true),
+		TrustProxy:       boolEnv("TRUST_PROXY", false),
 		MigrateOnBoot:    boolEnv("MIGRATE_ON_BOOT", true),
 	}
 
