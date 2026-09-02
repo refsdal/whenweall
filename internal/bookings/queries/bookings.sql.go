@@ -73,6 +73,37 @@ func (q *Queries) GetBooking(ctx context.Context, id string) (Booking, error) {
 	return i, err
 }
 
+const getBookingForUpdate = `-- name: GetBookingForUpdate :one
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, google_event_id, created_at, updated_at FROM bookings WHERE id = $1 FOR UPDATE
+`
+
+// M2/M7 (bookings.go): locks the booking row for the duration of the enclosing transaction.
+// Cancel takes this alone (it never touches the page row — there's no availability invariant to
+// protect on a cancel); Reschedule takes it too, AFTER GetBookingPageForUpdate (lock order is
+// always page then booking — see Reschedule's own doc comment for why that order, and why it
+// never deadlocks against Cancel, which only ever takes this one lock).
+func (q *Queries) GetBookingForUpdate(ctx context.Context, id string) (Booking, error) {
+	row := q.db.QueryRowContext(ctx, getBookingForUpdate, id)
+	var i Booking
+	err := row.Scan(
+		&i.ID,
+		&i.PageID,
+		&i.StartAt,
+		&i.EndAt,
+		&i.VisitorName,
+		&i.VisitorEmail,
+		&i.VisitorNote,
+		&i.VisitorLocale,
+		&i.VisitorTimezone,
+		&i.Status,
+		&i.CancelledBy,
+		&i.GoogleEventID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getBookingPage = `-- name: GetBookingPage :one
 SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL
 `

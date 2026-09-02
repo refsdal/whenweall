@@ -790,3 +790,174 @@ func TestBookRacingClaimsExactlyOneWinner(t *testing.T) {
 		t.Fatalf("confirmed booking rows = %d, want exactly 1", n)
 	}
 }
+
+// TestBookRaceAdjacentSlotBufferCollision is M7's own buffer-collision race proof:
+// TestBookRacingClaimsExactlyOneWinner above races two Book calls onto the EXACT SAME slot; this
+// races two ADJACENT slots that only collide once each candidate's own buffer padding is applied
+// (see "throws SLOT_UNAVAILABLE when the candidate collides with an existing booking plus buffer"
+// in TestBook, above, for the single-threaded version of the same rule) — proving the page lock's
+// serialization (this file's package doc comment) catches a buffer-only collision under real
+// concurrency too, not just an identical-start collision.
+func TestBookRaceAdjacentSlotBufferCollision(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, func(in *bookings.PageInput) {
+		in.BufferBeforeMin, in.BufferAfterMin = 15, 15
+	})
+	slotA := futureUTCSlot(3, 9, 0)      // 09:00-09:30
+	slotB := slotA.Add(30 * time.Minute) // 09:30-10:00 — adjacent, no raw overlap with slotA
+
+	var wg sync.WaitGroup
+	begin := make(chan struct{})
+	errA, errB := new(error), new(error)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-begin
+		_, *errA = p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(slotA, "a@example.com"))
+	}()
+	go func() {
+		defer wg.Done()
+		<-begin
+		_, *errB = p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(slotB, "b@example.com"))
+	}()
+	close(begin)
+	wg.Wait()
+
+	wins := 0
+	for _, e := range []error{*errA, *errB} {
+		if e == nil {
+			wins++
+		} else if !errors.Is(e, bookings.ErrSlotTaken) {
+			t.Errorf("err = %v, want nil or ErrSlotTaken", e)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("winners = %d, want exactly 1 (adjacent slots collide via buffer padding)", wins)
+	}
+
+	var n int
+	if err := p.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM bookings WHERE page_id = $1 AND status = 'confirmed'", p.pageID,
+	).Scan(&n); err != nil {
+		t.Fatalf("counting bookings: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("confirmed booking rows = %d, want exactly 1", n)
+	}
+}
+
+// TestBookVsRescheduleRaceConsistentOccupancy is M7's Book-vs-Reschedule race: a fresh Book onto
+// slot T races a Reschedule of a DIFFERENT, already-confirmed booking onto that SAME slot T.
+// Exactly one of the two must win; the slot must end up with exactly one confirmed occupant
+// either way — proving Book and Reschedule serialize against EACH OTHER (not just against their
+// own kind) via the same page lock.
+func TestBookVsRescheduleRaceConsistentOccupancy(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, nil)
+
+	existingStart := futureUTCSlot(3, 9, 0)
+	existing, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(existingStart, "existing@example.com"))
+	if err != nil {
+		t.Fatalf("Book(existing): %v", err)
+	}
+	target := futureUTCSlot(3, 11, 0)
+
+	var wg sync.WaitGroup
+	begin := make(chan struct{})
+	var bookErr, reschedErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-begin
+		_, bookErr = p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(target, "new@example.com"))
+	}()
+	go func() {
+		defer wg.Done()
+		<-begin
+		_, reschedErr = p.svc.Reschedule(ctx, existing.BookingID, existing.ManageToken, target, false)
+	}()
+	close(begin)
+	wg.Wait()
+
+	wins := 0
+	if bookErr == nil {
+		wins++
+	} else if !errors.Is(bookErr, bookings.ErrSlotTaken) {
+		t.Errorf("Book: err = %v, want nil or ErrSlotTaken", bookErr)
+	}
+	if reschedErr == nil {
+		wins++
+	} else if !errors.Is(reschedErr, bookings.ErrSlotTaken) {
+		t.Errorf("Reschedule: err = %v, want nil or ErrSlotTaken", reschedErr)
+	}
+	if wins != 1 {
+		t.Fatalf("winners = %d, want exactly 1 (Book and Reschedule racing onto the same slot)", wins)
+	}
+
+	var n int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM bookings WHERE page_id = $1 AND status = 'confirmed' AND start_at = $2`,
+		p.pageID, target.UTC(),
+	).Scan(&n); err != nil {
+		t.Fatalf("counting bookings at target: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("confirmed bookings occupying target slot = %d, want exactly 1", n)
+	}
+}
+
+// TestCancelRaceEnqueuesExactlyOneMailJob is M2's own race proof: several concurrent Cancel calls
+// for the SAME booking must all succeed (Cancel is idempotent — none of them ever error), the
+// booking ends up cancelled exactly once, and — the actual bug this fixes — exactly ONE
+// "cancelled" mail:booking job is enqueued, never one per racer. See Cancel's own doc comment
+// (bookings.go) for why this needs a row lock, not just Cancel's own pre-existing idempotency
+// check.
+func TestCancelRaceEnqueuesExactlyOneMailJob(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, nil)
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "a@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+
+	const racers = 8
+	var wg sync.WaitGroup
+	begin := make(chan struct{})
+	errs := make([]error, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-begin
+			errs[i] = p.svc.Cancel(ctx, result.BookingID, result.ManageToken, false)
+		}(i)
+	}
+	close(begin)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("racer %d: Cancel err = %v, want nil (idempotent)", i, err)
+		}
+	}
+
+	var status string
+	if err := p.db.QueryRowContext(ctx, `SELECT status FROM bookings WHERE id = $1`, result.BookingID).Scan(&status); err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("status = %q, want cancelled", status)
+	}
+
+	payloads := decodeMailBookingJobs(t, listJobs(t, p.db, "mail:booking"))
+	cancelled := 0
+	for _, pl := range payloads {
+		if pl.Kind == "cancelled" {
+			cancelled++
+		}
+	}
+	if cancelled != 1 {
+		t.Fatalf(`"cancelled" mail:booking jobs = %d, want exactly 1 (among %+v) — a race would enqueue one per racer`, cancelled, payloads)
+	}
+}

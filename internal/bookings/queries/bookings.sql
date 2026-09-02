@@ -74,6 +74,14 @@ INSERT INTO bookings (
 -- name: GetBooking :one
 SELECT * FROM bookings WHERE id = $1;
 
+-- name: GetBookingForUpdate :one
+-- M2/M7 (bookings.go): locks the booking row for the duration of the enclosing transaction.
+-- Cancel takes this alone (it never touches the page row — there's no availability invariant to
+-- protect on a cancel); Reschedule takes it too, AFTER GetBookingPageForUpdate (lock order is
+-- always page then booking — see Reschedule's own doc comment for why that order, and why it
+-- never deadlocks against Cancel, which only ever takes this one lock).
+SELECT * FROM bookings WHERE id = $1 FOR UPDATE;
+
 -- name: ListConfirmedBookingsInRange :many
 -- Confirmed bookings on a page overlapping [range_from, range_to) as their raw stored interval —
 -- see bookedIntervalsForPage's (bookings.go) doc comment on why no buffer is applied here.

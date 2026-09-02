@@ -15,6 +15,12 @@ type Querier interface {
 	// this user's own pages stop trying to sync against it.
 	DisableGoogleSyncForMember(ctx context.Context, arg DisableGoogleSyncForMemberParams) error
 	GetBooking(ctx context.Context, id string) (Booking, error)
+	// M2/M7 (bookings.go): locks the booking row for the duration of the enclosing transaction.
+	// Cancel takes this alone (it never touches the page row — there's no availability invariant to
+	// protect on a cancel); Reschedule takes it too, AFTER GetBookingPageForUpdate (lock order is
+	// always page then booking — see Reschedule's own doc comment for why that order, and why it
+	// never deadlocks against Cancel, which only ever takes this one lock).
+	GetBookingForUpdate(ctx context.Context, id string) (Booking, error)
 	GetBookingPage(ctx context.Context, id string) (BookingPage, error)
 	GetBookingPageByOrgSlug(ctx context.Context, arg GetBookingPageByOrgSlugParams) (BookingPage, error)
 	// Task 3 (booking creation/manage service) queries below.

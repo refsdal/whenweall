@@ -385,7 +385,11 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 // itself was found, but this credential doesn't open it (Task 6's accumulated requirement (d);
 // see ErrInvalidToken's own doc comment in errors.go for why this changed from an earlier,
 // simpler ErrNotFound). Idempotent: cancelling an already-cancelled booking is a no-op, matching
-// cancelBooking's own doc comment.
+// cancelBooking's own doc comment — but that idempotency proof depends on M2's own row lock,
+// below: unlike Book/Reschedule, Cancel never touches the page row at all (there's no
+// availability invariant to protect — cancelling only ever shrinks the busy set), so this is the
+// ONE method in this file that locks the booking row directly instead of (or, for Reschedule,
+// alongside) the page's.
 func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byOrganiser bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -394,7 +398,16 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 	defer func() { _ = tx.Rollback() }()
 	q := queries.New(tx)
 
-	booking, err := q.GetBooking(ctx, bookingID)
+	// M2: FOR UPDATE, not a plain read — two concurrent Cancel calls for the SAME booking (the
+	// same visitor double-clicking "cancel", or a visitor and an organiser racing each other)
+	// must never both observe status=="confirmed" and both proceed: the second call blocks here
+	// until the first's transaction commits, then sees the now-current "cancelled" status and
+	// takes the idempotent no-op path below — a single cancellation mail, not two. Without this
+	// lock, a plain read lets both transactions decide "not yet cancelled" from their own
+	// snapshot before either writes, and Postgres's own row-level lock on the later UPDATE
+	// doesn't help: by the time the second UPDATE blocks and unblocks, this method's Go-level
+	// booking.Status check has already run against its own stale copy.
+	booking, err := q.GetBookingForUpdate(ctx, bookingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -495,7 +508,32 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	defer func() { _ = tx.Rollback() }()
 	q := queries.New(tx)
 
-	booking, err := q.GetBooking(ctx, bookingID)
+	// M2/M7: lock order is page, THEN booking — always in that order, never the reverse, so two
+	// transactions that both need both locks (this method is the only one that ever takes both)
+	// can never deadlock against each other by acquiring them in opposite orders. preLockBooking's
+	// own PageID is safe to key this first lock on: a booking's page never changes over its
+	// lifetime, so this is exactly the id the fresh, LOCKED booking read a few lines down would
+	// also report.
+	page, err := q.GetBookingPageForUpdate(ctx, preLockBooking.PageID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if page.Status == "paused" {
+		return nil, ErrPagePaused
+	}
+
+	// M7: lock the booking row too, and re-verify EVERYTHING against this fresh read — never the
+	// preLockBooking snapshot from before either lock was taken. Without this second lock, a
+	// concurrent Cancel (which takes only the booking row's own lock, never the page's — see
+	// Cancel's own doc comment) could commit a cancellation in the gap between preLockBooking's
+	// read and this point, and this method — checking only its OWN stale, pre-lock copy of
+	// booking.Status — would happily reschedule an already-cancelled booking. Taking this lock
+	// blocks until any such concurrent Cancel has committed, so the re-check below always sees
+	// its outcome.
+	booking, err := q.GetBookingForUpdate(ctx, bookingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -507,21 +545,6 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	}
 	if booking.Status == "cancelled" {
 		return nil, ErrConflict
-	}
-
-	// Lock the page row now, before recomputing the candidate slot's validity below — see this
-	// file's package doc comment for why the ordering matters. Re-read fresh (never the
-	// preLockPage snapshot above): this is the authoritative row every DB-backed check from here
-	// on is checked against.
-	page, err := q.GetBookingPageForUpdate(ctx, booking.PageID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	if page.Status == "paused" {
-		return nil, ErrPagePaused
 	}
 
 	now := time.Now().UTC()
