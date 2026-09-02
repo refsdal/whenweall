@@ -161,6 +161,12 @@ SELECT * FROM notification_prefs WHERE user_id = $1;
 -- name: ListSubscriptionsByScope :many
 SELECT * FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2;
 
+-- name: GetSubscription :one
+-- One viewer's own subscription row for one scope (buildView's per-viewer notifications block —
+-- getPollView, service.ts) — distinct from ListSubscriptionsByScope, which lists every
+-- subscriber and is used for mail fan-out (resolveRecipients), not a single viewer's own row.
+SELECT * FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3;
+
 -- name: UpsertNotificationSubscription :exec
 -- Ports subscriptions.ts's upsert (ensureCreatorSubscription/followScope): a conflict on the
 -- (scope_type, scope_id, user_id) PK is a no-op, so re-following never resets an override the

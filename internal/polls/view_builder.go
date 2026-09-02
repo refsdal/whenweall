@@ -2,6 +2,9 @@ package polls
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/refsdal/whenweall/internal/polls/queries"
@@ -12,14 +15,16 @@ import (
 // (service.ts) does. q may be tx-bound (mutating methods, mid-transaction) or the Service's own
 // db-bound Queries (read-only methods).
 //
-// Notifications is always nil: it's the viewer's own per-poll notification override plus their
-// account defaults, both of which live in notification_subscriptions/notification_prefs — tables
-// Task 4 owns (UpdateNotificationPrefs/SetFollowing). IsOwner reflects only "viewerUserID created
-// this poll" — the TS source's isOwner also lights up for any org admin/owner regardless of who
-// created it (canManageContent), which needs the viewer's org role; Task 2's callers don't all
-// carry that (see the doc comments on Update/SetStatus/Finalize/Delete), so this is a deliberate,
-// narrower approximation. viewerUserID == "" (an anonymous/guest viewer, or a caller with no
-// identity to offer) always yields IsOwner == false.
+// IsOwner ports getPollView's own isOwner: `isMember && canManageContent(...)` — the viewer must
+// be a member of the poll's own org (not just any signed-in user, so a wrong-org member never
+// lights up admin controls), AND either the poll's own creator or an org owner/admin. This is
+// exactly canManagePoll's contract (participants.go), so IsOwner just delegates to it.
+//
+// Notifications is the viewer's own per-poll notification override (notification_subscriptions)
+// plus their account defaults (notification_prefs), populated for any org member — not just a
+// manager — matching getPollView's own `isMember ? {...} : null` (any member may follow a poll
+// and tune their own grid, so this is gated on plain membership, computed once and shared with
+// IsOwner's canManagePoll call rather than recomputed). nil for a non-member/anonymous viewer.
 func (s *Service) buildView(ctx context.Context, q *queries.Queries, poll queries.Poll, viewerUserID string) (*PollView, error) {
 	optionRows, err := q.ListOptionsByPoll(ctx, poll.ID)
 	if err != nil {
@@ -113,11 +118,62 @@ func (s *Service) buildView(ctx context.Context, q *queries.Queries, poll querie
 		}
 	}
 
-	isOwner := false
-	if viewerUserID != "" && poll.CreatedBy.Valid {
-		if strconv.FormatInt(poll.CreatedBy.Int64, 10) == viewerUserID {
-			isOwner = true
+	// isMember gates both IsOwner and Notifications below — getPollView (service.ts) computes it
+	// once and shares it the same way. A viewer with no parseable UserID (anonymous/guest) is
+	// never a member.
+	isMember := false
+	var viewerUserIDInt int64
+	if viewerUserID != "" {
+		if uid, perr := strconv.ParseInt(viewerUserID, 10, 64); perr == nil {
+			viewerUserIDInt = uid
+			isMember, err = q.IsOrgMember(ctx, queries.IsOrgMemberParams{
+				OrganizationID: poll.OrganizationID, UserID: uid,
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
+	}
+
+	isOwner := false
+	if isMember {
+		isOwner, err = s.canManagePoll(ctx, q, poll.OrganizationID, poll.CreatedBy, viewerUserID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var notifications *NotificationsView
+	if isMember {
+		following := false
+		var channels, defaults map[string]any
+
+		sub, serr := q.GetSubscription(ctx, queries.GetSubscriptionParams{
+			ScopeType: "poll", ScopeID: poll.ID, UserID: viewerUserIDInt,
+		})
+		switch {
+		case serr == nil:
+			following = true
+			if sub.Channels.Valid {
+				if err := json.Unmarshal(sub.Channels.RawMessage, &channels); err != nil {
+					return nil, err
+				}
+			}
+		case !errors.Is(serr, sql.ErrNoRows):
+			return nil, serr
+		}
+
+		pref, perr := q.GetNotificationPref(ctx, viewerUserIDInt)
+		switch {
+		case perr == nil && pref.Channels.Valid:
+			if err := json.Unmarshal(pref.Channels.RawMessage, &defaults); err != nil {
+				return nil, err
+			}
+		case perr != nil && !errors.Is(perr, sql.ErrNoRows):
+			return nil, perr
+		}
+
+		notifications = &NotificationsView{Channels: channels, Defaults: defaults, Following: following}
 	}
 
 	return &PollView{
@@ -137,7 +193,7 @@ func (s *Service) buildView(ctx context.Context, q *queries.Queries, poll querie
 			AllowIfNeedBe:           poll.AllowIfNeedBe,
 			SignupMaxClaims:         poll.SignupMaxClaims,
 		},
-		Notifications: nil,
+		Notifications: notifications,
 		Owner:         PollOwnerView{Name: orgName},
 		IsOwner:       isOwner,
 		Options:       options,

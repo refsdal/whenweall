@@ -241,6 +241,7 @@ func TestHandlerCreate(t *testing.T) {
 	cfg := testConfig(t)
 	h, a, _ := newTestHandler(d, cfg)
 	orgID, userID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, userID, "owner")
 	a.login(&auth.Session{UserID: userID, ActiveOrgID: orgID})
 
 	body := map[string]any{

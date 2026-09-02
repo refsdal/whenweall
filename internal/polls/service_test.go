@@ -315,10 +315,11 @@ func TestCreate(t *testing.T) {
 func TestGetView(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("isOwner true for the creator, false for others and anonymous; owner name only, no notifications", func(t *testing.T) {
+	t.Run("isOwner true for the creator, false for others and anonymous; owner name only", func(t *testing.T) {
 		d := testdb.New(t)
 		s := polls.NewService(d)
 		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
 		otherID := seedUser(t, d)
 		created := createTestPoll(t, ctx, s, orgID, ownerID)
 
@@ -329,19 +330,21 @@ func TestGetView(t *testing.T) {
 		if !asOwner.IsOwner {
 			t.Errorf("asOwner.IsOwner = false, want true")
 		}
-		if asOwner.Notifications != nil {
-			t.Errorf("asOwner.Notifications = %+v, want nil (Task 4 owns this field)", asOwner.Notifications)
-		}
 		if asOwner.Owner.Name != "Test Org" {
 			t.Errorf("Owner.Name = %q, want %q", asOwner.Owner.Name, "Test Org")
 		}
 
+		// otherID has no organization_members row at all (seedUser, not addOrgMember) — a plain
+		// non-member, not even a poll-unrelated org member.
 		asOther, err := s.GetView(ctx, created.ID, polls.Viewer{UserID: otherID})
 		if err != nil || asOther == nil {
 			t.Fatalf("GetView(other) = %v, %v", asOther, err)
 		}
 		if asOther.IsOwner {
 			t.Errorf("asOther.IsOwner = true, want false")
+		}
+		if asOther.Notifications != nil {
+			t.Errorf("asOther.Notifications = %+v, want nil for a non-member", asOther.Notifications)
 		}
 
 		asAnon, err := s.GetView(ctx, created.ID, polls.Viewer{})
@@ -350,6 +353,96 @@ func TestGetView(t *testing.T) {
 		}
 		if asAnon.IsOwner {
 			t.Errorf("asAnon.IsOwner = true, want false")
+		}
+		if asAnon.Notifications != nil {
+			t.Errorf("asAnon.Notifications = %+v, want nil for an anonymous viewer", asAnon.Notifications)
+		}
+	})
+
+	t.Run("isOwner true for an org admin who did not create the poll", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+		adminID := seedUser(t, d)
+		addOrgMember(t, d, orgID, adminID, "admin")
+
+		view, err := s.GetView(ctx, created.ID, polls.Viewer{UserID: adminID})
+		if err != nil || view == nil {
+			t.Fatalf("GetView(admin): %v, %v", view, err)
+		}
+		if !view.IsOwner {
+			t.Errorf("view.IsOwner = false, want true for a non-creator admin")
+		}
+	})
+
+	t.Run("isOwner false for a plain member who did not create the poll", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+		mateID := seedUser(t, d)
+		addOrgMember(t, d, orgID, mateID, "member")
+
+		view, err := s.GetView(ctx, created.ID, polls.Viewer{UserID: mateID})
+		if err != nil || view == nil {
+			t.Fatalf("GetView(member): %v, %v", view, err)
+		}
+		if view.IsOwner {
+			t.Errorf("view.IsOwner = true, want false for a non-creator, non-managing member")
+		}
+	})
+
+	t.Run("notifications populated for a subscribed org member, nil for a non-member", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "owner")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+		mateID := seedUser(t, d)
+		addOrgMember(t, d, orgID, mateID, "member")
+		if err := s.SetFollowing(ctx, created.ID, orgID, mateID, true); err != nil {
+			t.Fatalf("SetFollowing: %v", err)
+		}
+		if err := s.UpdateNotificationPrefs(ctx, created.ID, orgID, mateID, polls.NotificationGrid{
+			polls.EventCommentCreated: {Email: false, Push: false},
+		}); err != nil {
+			t.Fatalf("UpdateNotificationPrefs: %v", err)
+		}
+
+		view, err := s.GetView(ctx, created.ID, polls.Viewer{UserID: mateID})
+		if err != nil || view == nil {
+			t.Fatalf("GetView(member): %v, %v", view, err)
+		}
+		if view.Notifications == nil {
+			t.Fatal("view.Notifications = nil, want populated for a subscribed member")
+		}
+		if !view.Notifications.Following {
+			t.Errorf("Notifications.Following = false, want true")
+		}
+		if view.Notifications.Channels == nil {
+			t.Errorf("Notifications.Channels = nil, want the comment.created override just set")
+		}
+
+		// A member who never followed/tuned anything still gets a non-nil block (following:
+		// false, channels/defaults nil) — populated per getPollView's own `isMember ? {...} :
+		// null`, not gated on having ever interacted with notifications.
+		plainID := seedUser(t, d)
+		addOrgMember(t, d, orgID, plainID, "member")
+		plainView, err := s.GetView(ctx, created.ID, polls.Viewer{UserID: plainID})
+		if err != nil || plainView == nil {
+			t.Fatalf("GetView(plain member): %v, %v", plainView, err)
+		}
+		if plainView.Notifications == nil {
+			t.Fatal("plainView.Notifications = nil, want a populated-but-empty block for any member")
+		}
+		if plainView.Notifications.Following {
+			t.Errorf("plainView.Notifications.Following = true, want false")
 		}
 	})
 

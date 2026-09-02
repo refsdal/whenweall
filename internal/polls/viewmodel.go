@@ -43,10 +43,9 @@ type PollSettingsView struct {
 	SignupMaxClaims         int32 `json:"signupMaxClaims"`
 }
 
-// NotificationsView mirrors PollView['notifications']. Task 2 never populates this (always nil
-// on every PollView it returns) — subscriptions/prefs are Task 4's tables to read and write
-// (UpdateNotificationPrefs/SetFollowing); this type exists now so Task 4 can slot the field in
-// without changing PollView's shape.
+// NotificationsView mirrors PollView['notifications'] — populated by buildView (view_builder.go)
+// for any org member (nil for a non-member/anonymous viewer), from notification_subscriptions
+// (Channels/Following) and notification_prefs (Defaults); see buildView's own doc comment.
 type NotificationsView struct {
 	Channels  map[string]any `json:"channels"`
 	Defaults  map[string]any `json:"defaults"`

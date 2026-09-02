@@ -101,7 +101,9 @@ func (s *Service) RequireManageable(ctx context.Context, pollID, orgID, userID s
 }
 
 // Create ports createPoll. Returns the freshly created poll's view; IsOwner is always true on it
-// (the caller is, by definition, the poll's own creator).
+// in practice (the caller is, by definition, the poll's own creator, and creating a poll in orgID
+// already requires being a member of it — buildView's IsOwner also checks membership, see its
+// own doc comment).
 func (s *Service) Create(ctx context.Context, orgID, userID string, in CreatePollInput) (*PollView, error) {
 	if err := in.Validate(); err != nil {
 		return nil, err
@@ -253,9 +255,10 @@ func (s *Service) GetView(ctx context.Context, pollID string, viewer Viewer) (*P
 	return s.buildView(ctx, s.q, poll, viewer.UserID)
 }
 
-// Update ports updatePoll. Returns the freshly updated view. IsOwner on the returned view is
-// always false: unlike GetView/Create/Duplicate, the brief's exact signature for Update carries no
-// viewer/userID, so there is no identity to compute it against — see the task report.
+// Update ports updatePoll. Returns the freshly updated view. IsOwner and Notifications on the
+// returned view are always false/nil: unlike GetView/Create/Duplicate, the brief's exact
+// signature for Update carries no viewer/userID, so buildView has no identity to compute either
+// against — see the task report.
 func (s *Service) Update(ctx context.Context, pollID, orgID string, in UpdatePollInput) (*PollView, error) {
 	if err := in.Validate(); err != nil {
 		return nil, err

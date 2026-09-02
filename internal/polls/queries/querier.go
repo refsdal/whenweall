@@ -29,6 +29,10 @@ type Querier interface {
 	// taken after this line and the vote inserted before commit can never race with another claimant's
 	// count-then-insert on the same option.
 	GetPollOptionForUpdate(ctx context.Context, id string) (PollOption, error)
+	// One viewer's own subscription row for one scope (buildView's per-viewer notifications block —
+	// getPollView, service.ts) — distinct from ListSubscriptionsByScope, which lists every
+	// subscriber and is used for mail fan-out (resolveRecipients), not a single viewer's own row.
+	GetSubscription(ctx context.Context, arg GetSubscriptionParams) (NotificationSubscription, error)
 	// Task 4 (notifications/finalize+claim mail/deadline+digest timers) queries below.
 	GetUser(ctx context.Context, id int64) (User, error)
 	InsertComment(ctx context.Context, arg InsertCommentParams) error

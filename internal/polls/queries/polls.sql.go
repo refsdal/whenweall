@@ -251,6 +251,34 @@ func (q *Queries) GetPollOptionForUpdate(ctx context.Context, id string) (PollOp
 	return i, err
 }
 
+const getSubscription = `-- name: GetSubscription :one
+SELECT scope_type, scope_id, user_id, source, channels, created_at, updated_at FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3
+`
+
+type GetSubscriptionParams struct {
+	ScopeType string
+	ScopeID   string
+	UserID    int64
+}
+
+// One viewer's own subscription row for one scope (buildView's per-viewer notifications block —
+// getPollView, service.ts) — distinct from ListSubscriptionsByScope, which lists every
+// subscriber and is used for mail fan-out (resolveRecipients), not a single viewer's own row.
+func (q *Queries) GetSubscription(ctx context.Context, arg GetSubscriptionParams) (NotificationSubscription, error) {
+	row := q.db.QueryRowContext(ctx, getSubscription, arg.ScopeType, arg.ScopeID, arg.UserID)
+	var i NotificationSubscription
+	err := row.Scan(
+		&i.ScopeType,
+		&i.ScopeID,
+		&i.UserID,
+		&i.Source,
+		&i.Channels,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUser = `-- name: GetUser :one
 
 SELECT id, email, password, email_verified_at, first_name, last_name, created_at, updated_at, two_factor_enabled FROM users WHERE id = $1
