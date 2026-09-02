@@ -76,19 +76,19 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("GET /api/v1/polls", withOrgSession(a, s.handleListMine))
 
 	mux.Handle("POST /api/v1/polls/{id}/participants", voteLimit(http.HandlerFunc(s.handleAddParticipant(a, cfg))))
-	mux.HandleFunc("PATCH /api/v1/polls/{id}/participants/{pid}", s.handleUpdateParticipant(a))
-	mux.HandleFunc("DELETE /api/v1/polls/{id}/participants/{pid}", s.handleRemoveParticipant(a))
+	mux.Handle("PATCH /api/v1/polls/{id}/participants/{pid}", voteLimit(s.handleUpdateParticipant(a)))
+	mux.Handle("DELETE /api/v1/polls/{id}/participants/{pid}", voteLimit(s.handleRemoveParticipant(a)))
 
 	mux.Handle("POST /api/v1/polls/{id}/comments", commentLimit(http.HandlerFunc(s.handleAddComment(a, cfg))))
 	mux.HandleFunc("DELETE /api/v1/polls/{id}/comments/{cid}", s.handleDeleteComment(a))
 
 	mux.Handle("POST /api/v1/polls/{id}/claims", voteLimit(http.HandlerFunc(s.handleClaim(a, cfg))))
-	mux.HandleFunc("DELETE /api/v1/polls/{id}/claims/{oid}", s.handleUnclaim(a))
+	mux.Handle("DELETE /api/v1/polls/{id}/claims/{oid}", voteLimit(s.handleUnclaim(a)))
 
-	mux.HandleFunc("GET /api/v1/polls/{id}/calendar.ics", s.handleCalendarICS)
+	mux.HandleFunc("GET /api/v1/polls/{id}/calendar.ics", s.handleCalendarICS(cfg))
 	mux.Handle("GET /api/v1/polls/{id}/roster.csv", withOrgSession(a, s.handleRosterCSV))
 
-	mux.Handle("POST /api/v1/me/notification-prefs", withOrgSession(a, s.handleUpdateNotificationPrefs))
+	mux.Handle("POST /api/v1/polls/{id}/notification-prefs", withOrgSession(a, s.handleUpdateNotificationPrefs))
 	mux.Handle("POST /api/v1/polls/{id}/following", withOrgSession(a, s.handleSetFollowing))
 
 	mux.HandleFunc("GET /api/v1/config", handleConfig(cfg))
@@ -152,11 +152,11 @@ func viewerFromRequest(a Auth, r *http.Request) Viewer {
 
 // requireCaptchaIfAnon ports participants.functions.ts's own `if (!userId) await
 // requireTurnstile(...)` branch: captcha is only ever demanded of an anonymous caller, and only
-// when Turnstile is actually configured (cfg.Capabilities.Turnstile) — see
-// internal/httpserver.RequireCaptcha's doc comment for the same capability gate. The token travels
-// in the X-Captcha-Token header, matching this codebase's existing convention (RequireCaptcha),
-// rather than the TS source's own body field (a server-function-specific concern this REST surface
-// doesn't share).
+// when Turnstile is actually configured (cfg.Capabilities.Turnstile) — a deployment with no
+// Turnstile keys has no way to verify a token, so it must not block on one (mirrors
+// config.functions.ts's capability gating elsewhere). The token travels in the X-Captcha-Token
+// header — this REST surface's own convention, rather than the TS source's server-function body
+// field.
 func requireCaptchaIfAnon(cfg *config.Config, a Auth, r *http.Request) error {
 	if sess, ok := a.FromContext(r.Context()); ok && sess.UserID != "" {
 		return nil
@@ -401,7 +401,6 @@ type claimRequest struct {
 }
 
 type notificationPrefsRequest struct {
-	PollID   string           `json:"pollId"`
 	Channels NotificationGrid `json:"channels"`
 }
 
@@ -804,6 +803,17 @@ func (s *Service) handleUnclaim(a Auth) http.HandlerFunc {
 		viewer := viewerFromRequest(a, r)
 		target := unclaimTargetParticipantID(r)
 
+		// Footgun fix: a caller who passes ?participantId=<their own participant> is NOT asking
+		// to force-unclaim someone else's slot, even though target != "" would otherwise route
+		// them through UnclaimFor (manage-required) below — that would wrongly 403 an ordinary
+		// participant unclaiming their own slot who simply happened to pass their own id
+		// explicitly (e.g. a client that always sends it, self or not). Self-resolves to the same
+		// participant Unclaim's own self-service path would resolve to anyway, so this is purely a
+		// routing correction, never a widening of who UnclaimFor accepts as a target.
+		if target != "" && target == s.selfParticipantID(ctx, pollID, viewer) {
+			target = ""
+		}
+
 		// Best-effort actor name for the digest item below, resolved BEFORE the delete (the vote
 		// row disappears once Unclaim/UnclaimFor succeeds).
 		name := s.resolveUnclaimActorName(ctx, pollID, target, viewer)
@@ -860,16 +870,16 @@ func (s *Service) bestEffortParticipantName(ctx context.Context, participantID s
 	return p.Name
 }
 
-// resolveUnclaimActorName is bestEffortParticipantName's twin for Unclaim/UnclaimFor, which (per
-// their own doc comments) resolve the acting participant themselves rather than taking one as an
-// explicit argument — this mirrors just enough of that same resolution to look their name up for
-// the response.withdrawn digest item, swallowing every error (name stays "").
-func (s *Service) resolveUnclaimActorName(ctx context.Context, pollID, targetParticipantID string, viewer Viewer) string {
-	if targetParticipantID != "" {
-		return s.bestEffortParticipantName(ctx, targetParticipantID)
-	}
+// selfParticipantID resolves the viewer's own participant id for pollID — the same identity
+// resolution Unclaim's self-service path uses (claims.go's unclaim): viewer.GuestParticipantID if
+// set, else the signed-in viewer's own participant row on this poll, else "" (no resolvable
+// identity, or a lookup failure). Used by handleUnclaim to detect the ?participantId-matches-self
+// footgun (routing that case to Unclaim instead of UnclaimFor) and by resolveUnclaimActorName
+// below to look that same participant's name up for the digest item — never used for
+// authorization by itself; Unclaim/UnclaimFor still do their own.
+func (s *Service) selfParticipantID(ctx context.Context, pollID string, viewer Viewer) string {
 	if viewer.GuestParticipantID != "" {
-		return s.bestEffortParticipantName(ctx, viewer.GuestParticipantID)
+		return viewer.GuestParticipantID
 	}
 	if viewer.UserID == "" {
 		return ""
@@ -884,7 +894,19 @@ func (s *Service) resolveUnclaimActorName(ctx context.Context, pollID, targetPar
 	if err != nil {
 		return ""
 	}
-	return p.Name
+	return p.ID
+}
+
+// resolveUnclaimActorName is bestEffortParticipantName's twin for Unclaim/UnclaimFor, which (per
+// their own doc comments) resolve the acting participant themselves rather than taking one as an
+// explicit argument — looks up whichever participant (the explicit target, or the viewer's own
+// via selfParticipantID) actually acted, for the response.withdrawn digest item, swallowing every
+// error (name stays "").
+func (s *Service) resolveUnclaimActorName(ctx context.Context, pollID, targetParticipantID string, viewer Viewer) string {
+	if targetParticipantID != "" {
+		return s.bestEffortParticipantName(ctx, targetParticipantID)
+	}
+	return s.bestEffortParticipantName(ctx, s.selfParticipantID(ctx, pollID, viewer))
 }
 
 // enqueueDigestBestEffort calls EnqueueDigestItem and logs (never fails the request on) any
@@ -898,34 +920,37 @@ func (s *Service) enqueueDigestBestEffort(ctx context.Context, pollID string, it
 
 // ---- handlers: calendar/roster/notifications --------------------------------------------------
 
-func (s *Service) handleCalendarICS(w http.ResponseWriter, r *http.Request) {
-	pollID := r.PathValue("id")
-	pollURL := icsPollURL(r, pollID)
-	filename, ics, err := BuildPollICS(r.Context(), s.q, pollID, pollURL)
-	if err != nil {
-		writeServiceError(w, err)
-		return
+func (s *Service) handleCalendarICS(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pollID := r.PathValue("id")
+		pollURL := icsPollURL(cfg, pollID)
+		filename, ics, err := BuildPollICS(r.Context(), s.q, pollID, pollURL)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		if ics == nil {
+			httpserver.Err(w, http.StatusNotFound, "not_found", "no calendar event for this poll", nil)
+			return
+		}
+		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(ics)
 	}
-	if ics == nil {
-		httpserver.Err(w, http.StatusNotFound, "not_found", "no calendar event for this poll", nil)
-		return
-	}
-	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(ics)
 }
 
-// icsPollURL builds the absolute poll link BuildPollICS's VEVENT URL property points at, the same
-// shape internal/polls/timers.go's sendFinalizedMail already builds from *mailer.Mailer.AppURL()
-// (`${APP_URL}/p/{id}`) — this handler has no *mailer.Mailer, so it derives the same origin
-// straight from the incoming request instead.
-func icsPollURL(r *http.Request, pollID string) string {
-	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
-		scheme = "http"
-	}
-	return scheme + "://" + r.Host + "/p/" + pollID
+// icsPollURL builds the absolute poll link BuildPollICS's VEVENT URL property points at — the
+// same shape internal/polls/timers.go's sendFinalizedMail already builds from
+// *mailer.Mailer.AppURL() (`${APP_URL}/p/{id}`), and from the SAME source (cfg.AppURL), not the
+// incoming request's Host/X-Forwarded-Proto headers: those are caller-controlled (a request can
+// set an arbitrary Host header, or forge X-Forwarded-Proto, unless every hop in front of this
+// process is trusted to strip/overwrite them) and, even trusted, depend on the deploy's proxy
+// setup matching this handler's assumptions exactly — cfg.AppURL is this service's own
+// already-validated canonical origin (internal/config's own doc comment: "absolute http(s) URL,
+// no trailing slash"), the same one every other absolute link in this codebase is built from.
+func icsPollURL(cfg *config.Config, pollID string) string {
+	return cfg.AppURL + "/p/" + pollID
 }
 
 func (s *Service) handleRosterCSV(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
@@ -946,11 +971,12 @@ func (s *Service) handleRosterCSV(w http.ResponseWriter, r *http.Request, sess *
 }
 
 func (s *Service) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
+	pollID := r.PathValue("id")
 	var req notificationPrefsRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.UpdateNotificationPrefs(r.Context(), req.PollID, sess.ActiveOrgID, sess.UserID, req.Channels); err != nil {
+	if err := s.UpdateNotificationPrefs(r.Context(), pollID, sess.ActiveOrgID, sess.UserID, req.Channels); err != nil {
 		writeServiceError(w, err)
 		return
 	}

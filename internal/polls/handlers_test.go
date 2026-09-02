@@ -549,6 +549,19 @@ func TestHandlerCalendarICS(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "BEGIN:VCALENDAR") {
 		t.Errorf("body missing VCALENDAR: %s", rec.Body.String())
 	}
+
+	// The VEVENT's URL property must be built from cfg.AppURL, never the incoming request's
+	// Host/X-Forwarded-Proto — those are caller-controlled and this test's own request carries
+	// neither a Host override nor an X-Forwarded-Proto header (httptest's default Host is
+	// "example.com"), so a body containing testConfig's AppURL (not "example.com") is exactly the
+	// proof this handler ignores them.
+	wantURL := "URL:" + cfg.AppURL + "/p/" + created.ID
+	if !strings.Contains(rec.Body.String(), wantURL) {
+		t.Errorf("body missing %q (built from cfg.AppURL): %s", wantURL, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "example.com/p/") {
+		t.Errorf("body derived its link from the request's Host header, not cfg.AppURL: %s", rec.Body.String())
+	}
 }
 
 func TestHandlerRosterCSV(t *testing.T) {
@@ -602,10 +615,9 @@ func TestHandlerUpdateNotificationPrefs(t *testing.T) {
 	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID})
 
 	body := map[string]any{
-		"pollId":   created.ID,
 		"channels": map[string]any{"response.created": map[string]bool{"email": false, "push": false}},
 	}
-	rec := doRequest(t, h, "POST", "/api/v1/me/notification-prefs", body, sessHeader(ownerID))
+	rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/notification-prefs", body, sessHeader(ownerID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
 	}
@@ -755,6 +767,44 @@ func TestHandlerManagerForceUnclaim(t *testing.T) {
 			t.Errorf("expected the forced unclaim to remove the vote, got %+v", p.Votes)
 		}
 	})
+}
+
+// TestHandlerUnclaimSelfParticipantIDFootgun covers I6: a caller who passes
+// ?participantId=<their own participant> must NOT be routed through UnclaimFor (manage-required)
+// just because target != "" — that would 403 an ordinary participant unclaiming their own slot
+// who simply happened to pass their own id explicitly. It must succeed as plain self-service,
+// exactly as if participantId had been omitted.
+func TestHandlerUnclaimSelfParticipantIDFootgun(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, a, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 0)
+	slot := created.Options[0].ID
+
+	claimantID := seedUser(t, d)
+	addOrgMember(t, d, orgID, claimantID, "member")
+	result, err := s.Claim(ctx, created.ID, slot, polls.ClaimInput{Name: "Mallory"}, polls.Viewer{UserID: claimantID})
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	a.login(&auth.Session{UserID: claimantID, ActiveOrgID: orgID})
+
+	rec := doRequest(t, h, "DELETE",
+		"/api/v1/polls/"+created.ID+"/claims/"+slot+"?participantId="+result.ParticipantID,
+		nil, sessHeader(claimantID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (self-service, not a manage-required force-unclaim); body=%s", rec.Code, rec.Body)
+	}
+
+	view, err := s.GetView(ctx, created.ID, polls.Viewer{})
+	if err != nil {
+		t.Fatalf("GetView: %v", err)
+	}
+	if p := findParticipant(view, result.ParticipantID); p != nil && len(p.Votes) != 0 {
+		t.Errorf("expected the unclaim to remove the vote, got %+v", p.Votes)
+	}
 }
 
 // TestHandlerWrongOrgIs404 is requirement (c)'s evidence: a poll that exists, but in a different

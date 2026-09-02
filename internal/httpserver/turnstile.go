@@ -1,10 +1,11 @@
 package httpserver
 
-// Ports src/server/http/turnstile.ts: verifyTurnstile (POSTs a Turnstile token to Cloudflare's
-// siteverify endpoint) and requireTurnstile (throws CAPTCHA_FAILED when verification doesn't
-// succeed) — the latter becomes RequireCaptcha, a capability-gated middleware rather than a
-// function a handler calls itself, since every public+captcha route in the plan-4/7 HTTP surface
-// wants the identical check in front of it.
+// Ports src/server/http/turnstile.ts's verifyTurnstile (POSTs a Turnstile token to Cloudflare's
+// siteverify endpoint). requireTurnstile (throws CAPTCHA_FAILED when verification doesn't
+// succeed) is ported as requireCaptchaIfAnon (internal/polls/handlers.go) instead of the
+// middleware this package briefly also carried (RequireCaptcha, removed as dead code — nothing
+// ever wired it into a route; every public+captcha check in the actual HTTP surface calls
+// VerifyTurnstile directly through requireCaptchaIfAnon).
 
 import (
 	"context"
@@ -14,8 +15,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/refsdal/whenweall/internal/config"
 )
 
 // TurnstileSiteverifyURL is Cloudflare Turnstile's verification endpoint. Exported as a mutable
@@ -42,8 +41,9 @@ type turnstileSiteverifyResponse struct {
 // it. Ports verifyTurnstile (turnstile.ts): a missing token fails immediately with no network
 // round trip. Every other failure mode — a network error, a context timeout/cancellation, a
 // non-2xx or unparseable response body, or a well-formed `{"success":false}` — returns a non-nil
-// error; RequireCaptcha treats all of them identically (403 captcha_failed), matching
-// verifyTurnstile's own single boolean return with no distinct error cases exposed to the caller.
+// error; requireCaptchaIfAnon (internal/polls/handlers.go) treats all of them identically (403
+// captcha_failed), matching verifyTurnstile's own single boolean return with no distinct error
+// cases exposed to the caller.
 func VerifyTurnstile(ctx context.Context, secretKey, token, remoteIP string) error {
 	if token == "" {
 		return errors.New("turnstile: token required")
@@ -78,37 +78,4 @@ func VerifyTurnstile(ctx context.Context, secretKey, token, remoteIP string) err
 		return errors.New("turnstile: verification failed")
 	}
 	return nil
-}
-
-// RequireCaptcha builds middleware that gates every request behind a Turnstile challenge — port
-// of requireTurnstile (turnstile.ts), turned into middleware since every public+captcha route in
-// the HTTP surface (plan 4/7's AddParticipant/AddComment/Claim) wants the identical check.
-//
-// When cfg.Capabilities.Turnstile is off — no TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY pair
-// configured — this is a pass-through: a deployment with no Turnstile keys has no way to verify a
-// token, so it must not block on one (mirrors config.functions.ts's capability gating elsewhere).
-//
-// When on, it reads the token from the X-Captcha-Token header and calls VerifyTurnstile with
-// cfg.TurnstileSecretKey and the request's client IP (ClientIP, honoring cfg.TrustProxy). Any
-// failure at all — an empty/missing token, a rejected token, a network error, or a timeout — fails
-// closed: 403 with the standard JSON error envelope, code "captcha_failed". A captcha gate that
-// opens because Cloudflare (or the network to it) hiccupped would defeat the point of having one.
-func RequireCaptcha(cfg *config.Config) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !cfg.Capabilities.Turnstile {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			token := r.Header.Get("X-Captcha-Token")
-			remoteIP := ClientIP(r, cfg.TrustProxy)
-			if err := VerifyTurnstile(r.Context(), cfg.TurnstileSecretKey, token, remoteIP); err != nil {
-				writeErrorEnvelope(w, http.StatusForbidden, "captcha_failed", "captcha verification failed")
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
 }
