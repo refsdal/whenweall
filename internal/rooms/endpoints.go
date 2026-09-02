@@ -1,6 +1,7 @@
 // This file is Task 3's (plan 6) public HTTP surface for this package: the three WS routes
 // (poll/booking/stats) a plan-8 client actually dials, each just a thin Authorize+Snapshot
-// configuration over Hub.ServeWS (ws.go, Task 2).
+// configuration over Hub.ServeWS (ws.go, Task 2). See PROTOCOL.md for every route's URL, query
+// params, and auth rule in one place, alongside the frame shapes ws.go/stats.go produce.
 //
 // Register's signature deliberately does NOT take *polls.Service/*bookings.Service directly (the
 // task brief's own sketch does) — both of those packages already import this one (for Emit; see

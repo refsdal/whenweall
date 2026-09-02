@@ -4,7 +4,9 @@
 // Object's in-memory delta + storage alarm. See UsageStats's own doc comment for the field
 // vocabulary (ported field-for-field from stats-protocol.ts) and maybeBroadcast's for the
 // throttle design (deliberately NOT a byte-for-byte port of StatsRoom's own leading-edge-only
-// throttle — see that doc comment for why).
+// throttle — see that doc comment for why). See PROTOCOL.md for this room's exact snapshot vs
+// live wire shapes (nested vs flattened — NOT "one shape", despite what an earlier version of
+// this file's own comments claimed) with literal JSON examples.
 package rooms
 
 import (
@@ -27,14 +29,18 @@ const RoomKeyStats = "stats:global"
 const statsBroadcastThrottle = 2 * time.Second
 
 // statsEventType is this room's one live event's "type" — kept distinct from stats-protocol.ts's
-// own message shape (`{type:'stats', stats: UsageStats}`) deliberately: Register's Authorize
-// wraps every WS route (poll/booking/stats alike) in the same {"type","seq",<data fields
-// flattened>} envelope (hub.go's buildFrameFromParts), so this room's live frame is
+// own message shape (`{type:'stats', stats: UsageStats}`) deliberately: every live frame this hub
+// ever dispatches, this room's included, goes through the same {"type","seq",<data fields
+// flattened>} unwrap (hub.go's buildFrameFromParts), so a live "stats" update looks like
 // {"type":"stats","seq":N,"pollsCreated":...,...} — UsageStats's own fields flattened at the top
-// level rather than nested under a second "stats" key, for parity with this room's OWN snapshot
-// frame (Snapshot below returns the same UsageStats value, nested once under "data" by
-// snapshotFrame) — plan 8's frontend reads one shape whether it's the connection's first frame
-// or a live update, never two.
+// level, no nested "stats" key.
+//
+// This is a DIFFERENT shape from this room's own snapshot frame (Snapshot below returns the same
+// UsageStats value, but ws.go's snapshotFrame nests EVERY route's connect-time payload once under
+// "data": {"type":"snapshot","seq":N,"data":{"pollsCreated":...,...}}) — nested on connect,
+// flattened live, exactly like poll/booking's own snapshot-vs-live frames. plan 8's frontend must
+// branch on "type" (snapshot vs stats) to know which shape it's holding; see PROTOCOL.md for the
+// wire format in full, including this split with literal examples of both frames.
 const statsEventType = "stats"
 
 // UsageStats is the landing page's global, anonymous usage counters — ported field-for-field from

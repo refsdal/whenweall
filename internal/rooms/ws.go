@@ -1,7 +1,8 @@
 // This file is Task 2: ServeWS, the actual public face a client talks to (Subscribe, exported
 // from hub.go, is an internal building block — see its own doc comment). Every frame this file
 // writes to a client, live or backfilled, must honor the CONTRACT block at the top of hub.go —
-// read that first if you haven't.
+// read that first if you haven't. See PROTOCOL.md for the full wire protocol these frames (and the
+// snapshot/backfill/keepalive/ping-pong machinery below) implement, with literal JSON examples.
 package rooms
 
 import (

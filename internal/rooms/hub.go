@@ -12,6 +12,10 @@ import (
 	"github.com/refsdal/whenweall/internal/db"
 )
 
+// See PROTOCOL.md for the full wire protocol (every frame shape, every route's auth, the query
+// params, and these same delivery rules restated for a client implementer who will never read this
+// file) — this CONTRACT block is the Go-side source of truth PROTOCOL.md itself points back to.
+//
 // CONTRACT — read this before writing anything that consumes a Hub's frames (a WS handler, a
 // frontend client, Task 2's backfill).
 //
