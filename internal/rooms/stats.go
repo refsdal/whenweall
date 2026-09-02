@@ -16,8 +16,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/refsdal/whenweall/internal/db"
 )
 
 // RoomKeyStats is the one global stats room's key — both the room_state row this file owns and
@@ -52,7 +50,7 @@ type UsageStats struct {
 	ResponsesNo       int64 `json:"responsesNo"`
 }
 
-// The five counter field names Increment accepts — the jsonb keys of room_state's "stats:global"
+// The five counter field names Record accepts — the jsonb keys of room_state's "stats:global"
 // row, identical to UsageStats's own json tags above.
 const (
 	StatsPollsCreated      = "pollsCreated"
@@ -61,17 +59,6 @@ const (
 	StatsResponsesIfNeedBe = "responsesIfNeedBe"
 	StatsResponsesNo       = "responsesNo"
 )
-
-// validStatsFields guards Increment against an unrecognized field name — every call site in this
-// codebase passes one of the constants above, so this is a defensive assertion (a typo'd field
-// name is a program bug, not a reachable runtime condition), not a real input-validation surface.
-var validStatsFields = map[string]bool{
-	StatsPollsCreated:      true,
-	StatsPollsFinalized:    true,
-	StatsResponsesYes:      true,
-	StatsResponsesIfNeedBe: true,
-	StatsResponsesNo:       true,
-}
 
 // StatsFieldForAnswer maps one poll vote's answer ("yes"/"ifneedbe"/"no" — polls' own Answer
 // vocabulary) to the counter field it increments, mirroring stats-protocol.ts's ANSWER_FIELD.
@@ -89,33 +76,48 @@ func StatsFieldForAnswer(answer string) (field string, ok bool) {
 	}
 }
 
-// statsUpsertSQL atomically bumps one counter field by 1 and returns the row's full, current
-// counters — a single INSERT ... ON CONFLICT DO UPDATE, which is what makes this safe under
-// concurrent Increment calls with no separate advisory lock: two transactions racing for the same
-// room_state row simply serialize on Postgres's own row lock (the second blocks until the first
-// commits or rolls back, then re-reads the row it just waited on), exactly the same "atomic
-// upsert, no explicit locking" pattern presence.go's presenceJoin/presenceLeave already use for
-// ws_presence. jsonb_set's 4th argument (create_missing) defaults to true, so a field that has
-// never been incremented before simply springs into existence at 1 the first time it is — the row
-// need not be seeded with all five keys up front, and UsageStats's json.Unmarshal below treats an
-// absent key as its zero value regardless.
-const statsUpsertSQL = `
+// statsRecordSQL atomically bumps all five counter fields by their own delta (0 for any field a
+// given Record call doesn't touch) and returns the row's full, current counters — ONE INSERT ...
+// ON CONFLICT DO UPDATE statement regardless of how many fields actually changed, which is what
+// lets a call site with several different deltas to apply at once (e.g. AddParticipant's own
+// multi-option vote) do it in a single round trip rather than one upsert per field. Safe under
+// concurrent Record calls with no separate advisory lock, exactly like the old per-field Increment
+// before it: two transactions racing for the same room_state row simply serialize on Postgres's
+// own row lock (the second blocks until the first commits, then re-reads the row it just waited
+// on) — the same pattern presence.go's presenceJoin/presenceLeave use for ws_presence.
+//
+// The nested jsonb_set calls each read room_state.data (the row's value from BEFORE this
+// statement, unqualified — never an intermediate result of an earlier jsonb_set in this same
+// chain), so the five fields' COALESCE reads are mutually independent regardless of nesting order;
+// jsonb_set's 4th argument (create_missing) defaults to true, so a field that has never been
+// touched before simply springs into existence the first time it is — the row need not be seeded
+// with all five keys up front, and UsageStats's json.Unmarshal below treats an absent key as its
+// zero value regardless.
+const statsRecordSQL = `
 INSERT INTO room_state (room_key, data, updated_at)
-VALUES ($1, jsonb_build_object($2::text, 1::bigint), now())
+VALUES ($1, jsonb_build_object(
+	'pollsCreated', $2::bigint,
+	'pollsFinalized', $3::bigint,
+	'responsesYes', $4::bigint,
+	'responsesIfNeedBe', $5::bigint,
+	'responsesNo', $6::bigint
+), now())
 ON CONFLICT (room_key) DO UPDATE SET
-	data = jsonb_set(
+	data = jsonb_set(jsonb_set(jsonb_set(jsonb_set(jsonb_set(
 		room_state.data,
-		ARRAY[$2::text],
-		to_jsonb(COALESCE((room_state.data->>$2)::bigint, 0) + 1)
-	),
+		ARRAY['pollsCreated'], to_jsonb(COALESCE((room_state.data->>'pollsCreated')::bigint, 0) + $2::bigint)),
+		ARRAY['pollsFinalized'], to_jsonb(COALESCE((room_state.data->>'pollsFinalized')::bigint, 0) + $3::bigint)),
+		ARRAY['responsesYes'], to_jsonb(COALESCE((room_state.data->>'responsesYes')::bigint, 0) + $4::bigint)),
+		ARRAY['responsesIfNeedBe'], to_jsonb(COALESCE((room_state.data->>'responsesIfNeedBe')::bigint, 0) + $5::bigint)),
+		ARRAY['responsesNo'], to_jsonb(COALESCE((room_state.data->>'responsesNo')::bigint, 0) + $6::bigint)),
 	updated_at = now()
 RETURNING data
 `
 
-// StatsService owns the "stats:global" room_state row: Increment (called from the same
-// transaction as the domain write it counts — Create/Finalize/AddParticipant/UpdateParticipant/
-// Claim, see cmd/whenweall/main.go's wiring) and Snapshot (this room's WS route's connect-time
-// payload, endpoints.go).
+// StatsService owns the "stats:global" room_state row: Record (called AFTER the domain write's
+// own tx has committed — Create/Finalize/AddParticipant/UpdateParticipant/Claim, see
+// cmd/whenweall/main.go's wiring) and Snapshot (this room's WS route's connect-time payload,
+// endpoints.go).
 //
 // The throttle state below (mu/lastEmitAt/pending) is plain in-process memory, deliberately NOT
 // persisted to room_state — see maybeBroadcast's doc comment for why that's an accepted,
@@ -140,65 +142,104 @@ func NewStatsService(sqlDB *sql.DB, log *slog.Logger) *StatsService {
 	return &StatsService{sqlDB: sqlDB, log: log}
 }
 
-// Increment bumps field by 1 (statsUpsertSQL) using tx — the SAME transaction as the domain write
-// it counts, so a poll create/vote and its counter bump land atomically (both commit together, or
-// neither does) — then decides whether this update should actually broadcast live
-// (maybeBroadcast). Returns an error for an unrecognized field or any DB failure; unlike
-// stats-client.ts's own recordPollCreated/recordResponses (which catch and log rather than ever
-// failing their caller), this deliberately propagates like every other rooms.Emit call site in
-// this codebase already does — a documented deviation from the TS source's "marketing counter
-// must never fail the request" stance, chosen for consistency with this codebase's own Emit
-// error-handling convention rather than re-deriving a separate best-effort seam here.
-func (s *StatsService) Increment(ctx context.Context, tx db.DBTX, field string) error {
-	if !validStatsFields[field] {
-		return fmt.Errorf("rooms: unknown stats field %q", field)
+// Record atomically applies deltas — a subset of the five StatsXxx field constants, each mapped to
+// how much to bump it by (statsRecordSQL, ONE upsert regardless of how many fields are present) —
+// then decides whether this update should actually broadcast live (maybeBroadcast).
+//
+// Best-effort: every error (an unrecognized field, any DB failure) is logged and swallowed, never
+// returned. This replaced the old field-at-a-time Increment, which ran inside the SAME transaction
+// as the domain write it counted and propagated its own errors like every other rooms.Emit call
+// site in this codebase — a documented deviation, at the time, from stats-client.ts's own
+// recordPollCreated/recordResponses (which catch and log rather than ever failing their caller).
+// That shape held every mutating poll/participant write's transaction open across an extra jsonb
+// upsert against a single, hot, shared room_state row — real, avoidable lock contention for a
+// landing-page counter that is not part of any write's integrity. Record is always called AFTER
+// the caller's own domain-write tx has committed (internal/polls's Create/Duplicate/Finalize/
+// Claim/AddParticipant/UpdateParticipant — see each call site's own comment), using s.sqlDB
+// directly, matching the TS source's best-effort stance at last.
+//
+// A no-op (no DB round trip at all) when deltas has no nonzero, recognized entry — nothing to
+// record.
+func (s *StatsService) Record(ctx context.Context, deltas map[string]int64) {
+	var pollsCreated, pollsFinalized, responsesYes, responsesIfNeedBe, responsesNo int64
+	touched := false
+	for field, delta := range deltas {
+		if delta == 0 {
+			continue
+		}
+		switch field {
+		case StatsPollsCreated:
+			pollsCreated = delta
+		case StatsPollsFinalized:
+			pollsFinalized = delta
+		case StatsResponsesYes:
+			responsesYes = delta
+		case StatsResponsesIfNeedBe:
+			responsesIfNeedBe = delta
+		case StatsResponsesNo:
+			responsesNo = delta
+		default:
+			s.log.Error("rooms: record stats: unknown field", "field", field)
+			continue
+		}
+		touched = true
+	}
+	if !touched {
+		return
 	}
 
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, statsUpsertSQL, RoomKeyStats, field).Scan(&raw); err != nil {
-		return fmt.Errorf("rooms: increment stats field %q: %w", field, err)
+	if err := s.sqlDB.QueryRowContext(ctx, statsRecordSQL, RoomKeyStats,
+		pollsCreated, pollsFinalized, responsesYes, responsesIfNeedBe, responsesNo,
+	).Scan(&raw); err != nil {
+		s.log.Error("rooms: record stats", "error", err)
+		return
 	}
 
 	var stats UsageStats
 	if err := json.Unmarshal(raw, &stats); err != nil {
-		return fmt.Errorf("rooms: unmarshal stats counters: %w", err)
+		s.log.Error("rooms: unmarshal stats counters", "error", err)
+		return
 	}
 
-	s.maybeBroadcast(ctx, tx, stats)
-	return nil
+	s.maybeBroadcast(ctx, stats)
 }
 
 // maybeBroadcast implements this room's throttle: at most one live "stats" frame every
 // statsBroadcastThrottle, always carrying the LATEST counters at the moment it actually sends —
-// never the delta this particular Increment call contributed. It differs from StatsRoom.ts's own
+// never the delta this particular Record call contributed. It differs from StatsRoom.ts's own
 // #broadcastThrottled in one deliberate way: that source is a pure leading-edge throttle (a
 // broadcast that arrives just after the window opens goes out immediately; every later one within
 // the same window is dropped outright, with no guarantee the window's FINAL state is ever sent
 // live at all — only a future connection's snapshot would show it). This port adds a
-// TRAILING edge: an Increment that arrives inside an active window, finding no trailing flush
-// already scheduled, arms exactly one (time.AfterFunc, below) for whatever time remains in the
-// window, so the window's last word always reaches every live subscriber, not just its first.
-// This is what task-3's own test requirement ("10 rapid Increments produce ≤ a few frames but the
-// last one carries the final count") needs to hold regardless of timing, rather than only when a
-// burst happens to straddle a window boundary just right.
+// TRAILING edge: a Record that arrives inside an active window, finding no trailing flush already
+// scheduled, arms exactly one (time.AfterFunc, below) for whatever time remains in the window, so
+// the window's last word always reaches every live subscriber, not just its first. This is what
+// task-3's own test requirement ("10 rapid Records produce ≤ a few frames but the last one
+// carries the final count") needs to hold regardless of timing, rather than only when a burst
+// happens to straddle a window boundary just right.
 //
 // The throttle state itself (lastEmitAt/pending) is plain in-process memory, not persisted to
 // room_state or coordinated across replicas: each replica's Hub keeps its own independent
 // throttle window. In a multi-replica deployment this means the AGGREGATE broadcast rate across
-// every replica can exceed one-per-window (each replica's own Increment calls are throttled
+// every replica can exceed one-per-window (each replica's own Record calls are throttled
 // independently), a real but accepted trade-off — the counters themselves are never lost or
-// under-counted (Increment's own DB write, above, always lands), only the live-broadcast CADENCE
+// under-counted (Record's own DB write, above, always lands), only the live-broadcast CADENCE
 // is coarser than a single global rate-limiter would give, and the at-least-once CONTRACT (hub.go)
 // already asks every consumer to tolerate more frames than the theoretical minimum, never fewer
 // than the state changes they represent.
-func (s *StatsService) maybeBroadcast(ctx context.Context, tx db.DBTX, stats UsageStats) {
+//
+// Always runs on s.sqlDB, never a caller's tx: Record itself is always called post-commit now (see
+// its own doc comment), so there is no longer any caller transaction to share — this is the same
+// plain-sqlDB shape flushTrailing (below) already used for its own, always-standalone emit.
+func (s *StatsService) maybeBroadcast(ctx context.Context, stats UsageStats) {
 	s.mu.Lock()
 	now := time.Now()
 	if s.lastEmitAt.IsZero() || now.Sub(s.lastEmitAt) >= statsBroadcastThrottle {
 		s.lastEmitAt = now
 		s.mu.Unlock()
 
-		if err := Emit(ctx, tx, RoomKeyStats, statsEventType, stats); err != nil {
+		if err := Emit(ctx, s.sqlDB, RoomKeyStats, statsEventType, stats); err != nil {
 			s.log.Error("rooms: emit stats broadcast", "error", err)
 		}
 		return

@@ -267,14 +267,16 @@ func (s *Service) AddParticipant(ctx context.Context, pollID string, in Particip
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "participant"}); err != nil {
 		return nil, err
 	}
-	// Task 3 (plan 6): addParticipant's own recordResponses(Object.values(data.answers)) call
-	// (participants.functions.ts).
-	if err := s.incrementResponseStats(ctx, tx, in.Answers); err != nil {
-		return nil, err
-	}
+	// tallyAnswerStats is pure (no DB access), so it happens here, before commit, even though the
+	// actual recordStats call below only runs after it — see both functions' own doc comments.
+	statsDeltas := tallyAnswerStats(in.Answers)
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	// Task 3 (plan 6): addParticipant's own recordResponses(Object.values(data.answers)) call
+	// (participants.functions.ts). Post-commit, best-effort — see recordStats/StatsService.Record's
+	// own doc comments.
+	s.recordStats(ctx, statsDeltas)
 	return &ParticipantResult{ParticipantID: id, IsGuest: isGuest}, nil
 }
 
@@ -332,13 +334,18 @@ func (s *Service) UpdateParticipant(ctx context.Context, pollID, participantID s
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "vote"}); err != nil {
 		return err
 	}
-	// Task 3 (plan 6): updateParticipant's own recordResponses(Object.values(data.answers)) call
-	// (participants.functions.ts) — "an edit is a fresh submission", counted every time, not
-	// netted against the participant's previous answers.
-	if err := s.incrementResponseStats(ctx, tx, in.Answers); err != nil {
+	// tallyAnswerStats is pure (no DB access), so it happens here, before commit, even though the
+	// actual recordStats call below only runs after it — see both functions' own doc comments.
+	statsDeltas := tallyAnswerStats(in.Answers)
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	return tx.Commit()
+	// Task 3 (plan 6): updateParticipant's own recordResponses(Object.values(data.answers)) call
+	// (participants.functions.ts) — "an edit is a fresh submission", counted every time, not
+	// netted against the participant's previous answers. Post-commit, best-effort — see
+	// recordStats/StatsService.Record's own doc comments.
+	s.recordStats(ctx, statsDeltas)
+	return nil
 }
 
 // RemoveParticipant ports removeParticipant (participants.ts): a manager (org owner/admin, or the

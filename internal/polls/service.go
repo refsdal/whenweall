@@ -36,7 +36,8 @@ type Service struct {
 	// stats is Task 3's (plan 6) landing-page counters wiring — nil until SetStats is called
 	// (main.go's serve(), after both are constructed). A nil stats is a deliberate no-op, not an
 	// error: tests that build a bare Service via NewService and never call SetStats get every
-	// other behavior unchanged, with counting simply turned off.
+	// other behavior unchanged, with counting simply turned off. See recordStats's own doc comment
+	// for the call convention every mutating method below uses it with.
 	stats *rooms.StatsService
 }
 
@@ -56,36 +57,39 @@ func (s *Service) SetStats(stats *rooms.StatsService) {
 	s.stats = stats
 }
 
-// incrementStat is every Create/Finalize/Duplicate call site's one-line guard: a no-op when
-// SetStats was never called (see the stats field's doc comment), otherwise Increment inside the
-// SAME transaction as the domain write it counts (Task 3's brief: "same tx as the domain write").
-func (s *Service) incrementStat(ctx context.Context, tx db.DBTX, field string) error {
+// recordStats is every stats-counting call site's post-commit hook (Create/Duplicate/Finalize/
+// Claim/AddParticipant/UpdateParticipant — internal/rooms.StatsService's own doc comment on
+// Record explains why post-commit): a no-op when SetStats was never called (see the stats field's
+// doc comment), otherwise StatsService.Record. Every call site calls this explicitly, AFTER its
+// own tx.Commit() has already succeeded — never via defer, which would still fire (and record
+// counters for a write that never actually landed) on a rolled-back tx.
+func (s *Service) recordStats(ctx context.Context, deltas map[string]int64) {
 	if s.stats == nil {
-		return nil
+		return
 	}
-	return s.stats.Increment(ctx, tx, field)
+	s.stats.Record(ctx, deltas)
 }
 
-// incrementResponseStats is AddParticipant's and UpdateParticipant's shared call site: one
-// Increment per answer in answers, ported from stats-client.ts's recordResponses(Object.
-// values(data.answers)) — every answer counts, including on an edit (participants.functions.ts's
+// tallyAnswerStats is AddParticipant's and UpdateParticipant's shared pre-commit tally: one delta
+// per answer in answers, ported from stats-client.ts's recordResponses(Object.values(data.
+// answers)) — every answer counts, including on an edit (participants.functions.ts's
 // updateParticipant comment: "an edit is a fresh submission — see the spec's §1 on why the totals
-// do not net out"), so this is called unconditionally by both, never gated on whether any vote
+// do not net out"), so both callers use this unconditionally, never gated on whether any vote
 // actually changed. An answer value outside "yes"/"ifneedbe"/"no" (StatsFieldForAnswer's ok ==
-// false) is silently skipped rather than erroring the whole write — validateAnswersTx has already
+// false) is silently skipped rather than erroring the whole tally — validateAnswersTx has already
 // rejected any such value by the time either caller reaches here, so this is defense in depth, not
-// a reachable path.
-func (s *Service) incrementResponseStats(ctx context.Context, tx db.DBTX, answers map[string]string) error {
+// a reachable path. Building this map is pure (no DB access), so it happens BEFORE the domain
+// write's own tx.Commit() even though recordStats itself only ever runs after it.
+func tallyAnswerStats(answers map[string]string) map[string]int64 {
+	deltas := make(map[string]int64, len(answers))
 	for _, answer := range answers {
 		field, ok := rooms.StatsFieldForAnswer(answer)
 		if !ok {
 			continue
 		}
-		if err := s.incrementStat(ctx, tx, field); err != nil {
-			return err
-		}
+		deltas[field]++
 	}
-	return nil
+	return deltas
 }
 
 const pollFinalizedStatus = "finalized"
@@ -275,14 +279,14 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreatePol
 	if err != nil {
 		return nil, err
 	}
-	// Task 3 (plan 6): createPoll's own recordPollCreated call (polls.functions.ts) — see the
-	// stats field's doc comment for why this is a no-op absent SetStats.
-	if err := s.incrementStat(ctx, tx, rooms.StatsPollsCreated); err != nil {
-		return nil, err
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+
+	// Task 3 (plan 6): createPoll's own recordPollCreated call (polls.functions.ts) — post-commit,
+	// best-effort (see recordStats/StatsService.Record's own doc comments): a landing-page counter
+	// must never hold this poll's own write transaction open, nor fail poll creation if it errors.
+	s.recordStats(ctx, map[string]int64{rooms.StatsPollsCreated: 1})
 
 	// ensureCreatorSubscription (subscriptions.ts) — deliberately outside the transaction/after
 	// commit: the creator's subscription is a notification convenience, not part of the poll's
@@ -673,14 +677,17 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		}
 	}
 
-	// Task 3 (plan 6): finalizePoll's own recordPollFinalized call (polls.functions.ts) — reached
-	// only on a genuine not-decided -> decided transition (the already-finalized guard above
-	// returns ErrConflict before this point), matching that source's own comment.
-	if err := s.incrementStat(ctx, tx, rooms.StatsPollsFinalized); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	return tx.Commit()
+	// Task 3 (plan 6): finalizePoll's own recordPollFinalized call (polls.functions.ts) — reached
+	// only on a genuine not-decided -> decided transition (the already-finalized guard above
+	// returns ErrConflict before this point), matching that source's own comment. Post-commit,
+	// best-effort — see recordStats/StatsService.Record's own doc comments.
+	s.recordStats(ctx, map[string]int64{rooms.StatsPollsFinalized: 1})
+
+	return nil
 }
 
 // Delete ports deletePoll: a soft delete (deleted_at set). Also emits poll.changed/entity:poll —
@@ -801,14 +808,14 @@ func (s *Service) Duplicate(ctx context.Context, pollID, orgID, userID string) (
 	if err != nil {
 		return nil, err
 	}
-	// Task 3 (plan 6): duplicatePoll's own recordPollCreated call (polls.functions.ts) — "a
-	// duplicate is a new poll from the counter's point of view" (that source's own comment).
-	if err := s.incrementStat(ctx, tx, rooms.StatsPollsCreated); err != nil {
-		return nil, err
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+
+	// Task 3 (plan 6): duplicatePoll's own recordPollCreated call (polls.functions.ts) — "a
+	// duplicate is a new poll from the counter's point of view" (that source's own comment).
+	// Post-commit, best-effort — see recordStats/StatsService.Record's own doc comments.
+	s.recordStats(ctx, map[string]int64{rooms.StatsPollsCreated: 1})
 
 	// ensureCreatorSubscription + carrying the duplicator's own notification override on the
 	// original across to the copy (duplicatePoll's own post-batch calls, service.ts) —

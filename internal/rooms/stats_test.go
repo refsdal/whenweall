@@ -1,14 +1,13 @@
 package rooms_test
 
-// Tests internal/rooms/stats.go: Increment's atomic counter bump + Snapshot's read-back, plus the
-// broadcast throttle's own contract — at most a handful of live "stats" frames for a burst of
-// rapid increments, with the LAST one always carrying the final, fully-caught-up count (see
+// Tests internal/rooms/stats.go: Record's atomic multi-field counter bump + Snapshot's read-back,
+// plus the broadcast throttle's own contract — at most a handful of live "stats" frames for a
+// burst of rapid Records, with the LAST one always carrying the final, fully-caught-up count (see
 // stats.go's maybeBroadcast doc comment for why this differs from StatsRoom.ts's own pure
 // leading-edge throttle). Timing-sensitive: run with -count=5 to catch flakiness.
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -16,23 +15,6 @@ import (
 	"github.com/refsdal/whenweall/internal/rooms"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
-
-// incrementCommitted runs one Increment inside its own committed transaction — the shape every
-// real call site (internal/polls's Create/Finalize/AddParticipant/...) uses.
-func incrementCommitted(t *testing.T, sqlDB *sql.DB, stats *rooms.StatsService, field string) {
-	t.Helper()
-	ctx := context.Background()
-	tx, err := sqlDB.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := stats.Increment(ctx, tx, field); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestStatsFieldForAnswer(t *testing.T) {
 	cases := map[string]string{
@@ -51,19 +33,27 @@ func TestStatsFieldForAnswer(t *testing.T) {
 	}
 }
 
-func TestStatsIncrement_RejectsUnknownField(t *testing.T) {
+// TestStatsRecord_UnknownFieldIsSkippedNotFatal is Record's counterpart to the old
+// Increment-rejects-unknown-field test: Record is best-effort (it logs, it never returns an
+// error to a caller — see its own doc comment), so an unrecognized field alongside a recognized
+// one must not stop the recognized one from landing.
+func TestStatsRecord_UnknownFieldIsSkippedNotFatal(t *testing.T) {
 	_, sqlDB := testdb.URL(t)
 	stats := rooms.NewStatsService(sqlDB, nil)
-
 	ctx := context.Background()
-	tx, err := sqlDB.BeginTx(ctx, nil)
+
+	stats.Record(ctx, map[string]int64{
+		"not-a-real-field":      1,
+		rooms.StatsPollsCreated: 1,
+	})
+
+	got, err := stats.Snapshot(ctx, rooms.RoomKeyStats)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := stats.Increment(ctx, tx, "not-a-real-field"); err == nil {
-		t.Error("Increment with an unknown field = nil error, want one")
+	s, ok := got.(rooms.UsageStats)
+	if !ok || s.PollsCreated != 1 {
+		t.Errorf("Snapshot = %#v, want PollsCreated = 1 (the unknown field must not block the known one)", got)
 	}
 }
 
@@ -77,13 +67,15 @@ func TestStatsSnapshot_ReflectsCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	if zero, ok := got.(rooms.UsageStats); !ok || zero != (rooms.UsageStats{}) {
-		t.Errorf("Snapshot before any Increment = %#v, want a zero UsageStats", got)
+		t.Errorf("Snapshot before any Record = %#v, want a zero UsageStats", got)
 	}
 
-	incrementCommitted(t, sqlDB, stats, rooms.StatsResponsesYes)
-	incrementCommitted(t, sqlDB, stats, rooms.StatsResponsesYes)
-	incrementCommitted(t, sqlDB, stats, rooms.StatsResponsesNo)
-	incrementCommitted(t, sqlDB, stats, rooms.StatsPollsCreated)
+	stats.Record(ctx, map[string]int64{rooms.StatsResponsesYes: 2})
+	stats.Record(ctx, map[string]int64{rooms.StatsResponsesNo: 1})
+	// A single Record call applies several fields at once (the multi-answer submission shape
+	// internal/polls's AddParticipant/UpdateParticipant now use — tallyAnswerStats, called once
+	// per write) — exercised here alongside the single-field calls above.
+	stats.Record(ctx, map[string]int64{rooms.StatsPollsCreated: 1, rooms.StatsPollsFinalized: 0})
 
 	got, err = stats.Snapshot(ctx, rooms.RoomKeyStats)
 	if err != nil {
@@ -107,22 +99,24 @@ func TestStatsSnapshot_ReflectsCounters(t *testing.T) {
 	}
 }
 
-// TestStatsIncrement_ThrottledBroadcastCarriesFinalCount is Task 3's own required proof: a burst
-// of rapid Increment calls must not flood every live subscriber with one frame per call, and the
-// LAST frame it does send must reflect the burst's true final total, not whatever count happened
-// to be current when that frame's own underlying Increment call ran. See stats.go's
-// maybeBroadcast doc comment for the leading+trailing throttle design this asserts.
-func TestStatsIncrement_ThrottledBroadcastCarriesFinalCount(t *testing.T) {
+// TestStatsRecord_ThrottledBroadcastCarriesFinalCount is Task 3's own required proof (retargeted
+// from Increment to Record for I2): a burst of rapid Record calls must not flood every live
+// subscriber with one frame per call, and the LAST frame it does send must reflect the burst's
+// true final total, not whatever count happened to be current when that frame's own underlying
+// Record call ran. See stats.go's maybeBroadcast doc comment for the leading+trailing throttle
+// design this asserts.
+func TestStatsRecord_ThrottledBroadcastCarriesFinalCount(t *testing.T) {
 	url, sqlDB := testdb.URL(t)
 	hub := startHub(t, url, sqlDB)
 	stats := rooms.NewStatsService(sqlDB, nil)
+	ctx := context.Background()
 
 	frames, unsubscribe := hub.Subscribe(rooms.RoomKeyStats)
 	defer unsubscribe()
 
 	const burst = 10
 	for i := 0; i < burst; i++ {
-		incrementCommitted(t, sqlDB, stats, rooms.StatsPollsCreated)
+		stats.Record(ctx, map[string]int64{rooms.StatsPollsCreated: 1})
 	}
 
 	var received []map[string]any
