@@ -362,8 +362,11 @@ func (s *Service) SetGoogleEventID(ctx context.Context, bookingID string, eventI
 // scope-inspection-then-live-freebusy-probe contract (out of this task's scope to port). false
 // (never an error) whenever the capability itself is off (s.google == nil — this task's brief's
 // own "nil GoogleSync -> {available:false}" case) or the page has no assigned member; ErrNotFound
-// for an unknown/deleted page id (the handler's own org-scoping check runs before this, so this
-// is reached only for a page that's disappeared between the two).
+// for an unknown/deleted page id. handleGoogleStatus (handlers.go) now calls RequireManageablePage
+// before this — the same canManageContent-shaped gate every other owner-facing route over a page
+// id in this file uses (requirement (a); this row was missing it until this fix) — so ErrNotFound
+// is reached only for a page that's disappeared between the two; this method itself has no
+// orgID/userID in its own signature to check that gate against on its own.
 func (s *Service) GoogleStatus(ctx context.Context, pageID string) (bool, error) {
 	if s.google == nil {
 		return false, nil

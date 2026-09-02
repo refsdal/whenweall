@@ -767,6 +767,33 @@ func TestHandlerManagedBooking(t *testing.T) {
 			t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body)
 		}
 	})
+
+	// M1: this endpoint was unmetered — an anonymous caller could brute-force a booking's
+	// 43-character manage token with no rate limit at all. It now shares the same bookLimit
+	// bucket as every other visitor-facing endpoint (Register's own doc comment), so it 429s
+	// past the shared limit (20/minute) too.
+	t.Run("M1: the shared 'book' rate limiter applies", func(t *testing.T) {
+		p2 := setupHandlerPage(t, testConfig(t))
+		start2 := futureUTCSlot(3, 9, 0)
+		bookRec2 := doRequest(t, p2.h, "POST", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug+"/bookings", bookBody(start2), nil)
+		booked2 := decodeBody[struct {
+			Booking     bookings.BookingView `json:"booking"`
+			ManageToken string               `json:"manageToken"`
+		}](t, bookRec2)
+
+		var last *httptest.ResponseRecorder
+		// The Book call above already consumed one slot in the shared bucket; 20 more manage
+		// lookups is the 21st request overall.
+		for i := 0; i < 20; i++ {
+			last = doRequest(t, p2.h, "GET", "/api/v1/bookings/"+booked2.Booking.ID+"/manage?t="+booked2.ManageToken, nil, nil)
+		}
+		if last.Code != http.StatusTooManyRequests {
+			t.Fatalf("21st request: status = %d, want 429; body=%s", last.Code, last.Body)
+		}
+		if errCode(t, last) != "rate_limited" {
+			t.Errorf("code = %q, want rate_limited", errCode(t, last))
+		}
+	})
 }
 
 // ---- row 12: POST /api/v1/bookings/{id}/cancel (public(token)|auth+org -> Cancel) ----------
@@ -890,7 +917,12 @@ func TestHandlerReschedule(t *testing.T) {
 	})
 }
 
-// ---- row 14: GET /api/v1/booking-pages/{id}/google-status (auth) ---------------------------
+// ---- row 14: GET /api/v1/booking-pages/{id}/google-status (auth+org -> RequireManageablePage) --
+//
+// I2: this row was wired as a.RequireSession only (a plain session check, no org-scoping at all)
+// — any signed-in user could probe whether ANY page id (in any org) has Google Calendar synced.
+// Now gated by RequireManageablePage, the same requirement (a) check every other owner-facing
+// route over a page id in this file uses.
 
 func TestHandlerGoogleStatus(t *testing.T) {
 	p := setupHandlerPage(t, testConfig(t))
@@ -915,6 +947,28 @@ func TestHandlerGoogleStatus(t *testing.T) {
 		rec := doRequest(t, p.h, "GET", "/api/v1/booking-pages/"+p.pageID+"/google-status", nil, nil)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("403 for a plain member (not the creator, no managing role)", func(t *testing.T) {
+		memberID := seedUser(t, p.d)
+		addOrgMember(t, p.d, p.orgID, memberID, "member")
+		p.a.login(&auth.Session{UserID: memberID, ActiveOrgID: p.orgID})
+
+		rec := doRequest(t, p.h, "GET", "/api/v1/booking-pages/"+p.pageID+"/google-status", nil, sessHeader(memberID))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("404 for a page belonging to a different org (I2: cross-org probing)", func(t *testing.T) {
+		otherOrgID, otherUserID := seedOrgAndUser(t, p.d)
+		addOrgMember(t, p.d, otherOrgID, otherUserID, "owner")
+		p.a.login(&auth.Session{UserID: otherUserID, ActiveOrgID: otherOrgID})
+
+		rec := doRequest(t, p.h, "GET", "/api/v1/booking-pages/"+p.pageID+"/google-status", nil, sessHeader(otherUserID))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body)
 		}
 	})
 }

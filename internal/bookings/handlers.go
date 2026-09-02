@@ -8,13 +8,15 @@
 // This task also folds in five requirements accumulated from Tasks 2-5's own code reviews, each
 // only reachable once an actual caller identity (auth.Session) exists to check it against:
 //
-//  1. RequireManageable-equivalent (a): GetOwnedPage/UpdatePage/DeletePage/ListPageBookings and
-//     the organiser half of Cancel are gated behind a canManageContent-shaped check (authz.go's
-//     RequireManageablePage/RequireManageableBooking) before the underlying service call — those
-//     methods' own brief-pinned signatures (pages.go/bookings.go) carry an orgID but no
-//     userID/role to check against themselves, mirroring internal/polls's own RequireManageable
-//     retrofit exactly. SetOrgSlug (org/handle) is gated separately, by the stricter
-//     RequireOwnerRole (authz.go) — see handleSetOrgSlug's own doc comment for why.
+//  1. RequireManageable-equivalent (a): GetOwnedPage/UpdatePage/DeletePage/ListPageBookings/
+//     google-status and the organiser half of Cancel are gated behind a canManageContent-shaped
+//     check (authz.go's RequireManageablePage/RequireManageableBooking) before the underlying
+//     service call — those methods' own brief-pinned signatures (pages.go/bookings.go/google.go)
+//     carry an orgID but no userID/role to check against themselves, mirroring internal/polls's
+//     own RequireManageable retrofit exactly. (google-status shipped without this gate — a plain
+//     a.RequireSession, no org-scoping at all — until a later fix added it; see
+//     handleGoogleStatus's own doc comment.) SetOrgSlug (org/handle) is gated separately, by the
+//     stricter RequireOwnerRole (authz.go) — see handleSetOrgSlug's own doc comment for why.
 //  2. SetOrgSlug's validation field key (b): "handle", not "slug" — fixed at the source
 //     (schemas.go's validateHandle), not patched here; see that function's own doc comment.
 //  3. UpdatePage's full-replace semantics (c): see handleUpdatePage's own doc comment.
@@ -55,7 +57,11 @@ type Auth = httpserver.Auth
 // shares the single 'book' rate-limit bucket — plus GetPublicPage, which the TS source has no
 // standalone route for at all (it's only ever called internally by getPublicAvailability there);
 // this Go port's own REST split gives it a dedicated endpoint, so it gets the same bookLimit
-// rather than being an unmetered slug-enumeration surface. Captcha-if-anon (RequireCaptchaIfAnon)
+// rather than being an unmetered slug-enumeration surface. GET .../bookings/{id}/manage
+// (handleManagedBooking) is the same shape — an anonymous, token-authenticated lookup an
+// attacker could otherwise use to brute-force a booking's 43-character manage token unmetered —
+// so it shares bookLimit too (a gap in this row's original wiring, fixed alongside the
+// google-status gate above). Captcha-if-anon (RequireCaptchaIfAnon)
 // is narrower than the rate limiter: only Book actually calls requireTurnstile in the TS source
 // (bookSlot), so only handleBook checks it here — cancelBooking/rescheduleBooking are already
 // authenticated by the manage token itself and never call requireTurnstile in the TS source
@@ -69,7 +75,7 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("PATCH /api/v1/booking-pages/{id}", httpserver.WithOrgSession(a, s.handleUpdatePage))
 	mux.Handle("DELETE /api/v1/booking-pages/{id}", httpserver.WithOrgSession(a, s.handleDeletePage))
 	mux.Handle("GET /api/v1/booking-pages/{id}/bookings", httpserver.WithOrgSession(a, s.handleListPageBookings))
-	mux.Handle("GET /api/v1/booking-pages/{id}/google-status", a.RequireSession(s.handleGoogleStatus))
+	mux.Handle("GET /api/v1/booking-pages/{id}/google-status", httpserver.WithOrgSession(a, s.handleGoogleStatus))
 
 	mux.Handle("POST /api/v1/org/handle", httpserver.WithOrgSession(a, s.handleSetOrgSlug))
 	mux.Handle("POST /api/v1/me/google/disconnect", s.handleDisconnectGoogle(a))
@@ -78,7 +84,7 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("GET /api/v1/book/{org}/{page}/availability", bookLimit(http.HandlerFunc(s.handlePublicAvailability)))
 	mux.Handle("POST /api/v1/book/{org}/{page}/bookings", bookLimit(http.HandlerFunc(s.handleBook(a, cfg))))
 
-	mux.HandleFunc("GET /api/v1/bookings/{id}/manage", s.handleManagedBooking)
+	mux.Handle("GET /api/v1/bookings/{id}/manage", bookLimit(http.HandlerFunc(s.handleManagedBooking)))
 	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a))))
 	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule())))
 }
@@ -327,11 +333,18 @@ func (s *Service) handleListPageBookings(w http.ResponseWriter, r *http.Request,
 
 // handleGoogleStatus ports getGoogleCalendarStatus (pages.functions.ts) at Task 6's own
 // per-page shape — see Service.GoogleStatus's own doc comment (google.go) for how this
-// simplifies the TS source. "auth" only (mux.Handle wraps this in a.RequireSession, not
-// httpserver.WithOrgSession): matches the brief's own annotation for this row, and this handler
-// never reads sess at all, so no org-scoping check runs here.
-func (s *Service) handleGoogleStatus(w http.ResponseWriter, r *http.Request) {
+// simplifies the TS source. Gated by RequireManageablePage, the same canManageContent-shaped
+// check every other owner-facing route over a page id in this file uses (requirement (a)) — a
+// page belonging to a different org (or a caller who neither created it nor manages the org)
+// must 404/403 before GoogleStatus ever runs, the same leak-avoidance rule requireOrgPage's own
+// doc comment gives (pages.go): a page id's existence, and now whether it has Google sync wired
+// up, must never be revealed outside its own org.
+func (s *Service) handleGoogleStatus(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	pageID := r.PathValue("id")
+	if err := s.RequireManageablePage(r.Context(), pageID, sess.ActiveOrgID, sess.UserID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	available, err := s.GoogleStatus(r.Context(), pageID)
 	if err != nil {
 		writeServiceError(w, err)
