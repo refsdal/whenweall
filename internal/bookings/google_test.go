@@ -446,6 +446,198 @@ func TestGoogleSyncSilentlySkipsWhenMemberHasNoGoogleAccount(t *testing.T) {
 	}
 }
 
+// TestGoogleSyncInsertIsIdempotent is I5's own regression test (triage 2+5): a retried "insert"
+// job for a booking that already has a known GoogleEventID must make no HTTP call at all, not
+// create a second Google Calendar event.
+func TestGoogleSyncInsertIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	var insertCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/freeBusy" {
+			_, _ = w.Write([]byte(`{"calendars":{"primary":{"busy":[]}}}`))
+			return
+		}
+		insertCalls.Add(1)
+		_, _ = w.Write([]byte(`{"id":"evt-first"}`))
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "ada@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+
+	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
+	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
+	runAllJobs(t, ctx, p.db, w)
+
+	if got := insertCalls.Load(); got != 1 {
+		t.Fatalf("insert calls after the first run = %d, want 1", got)
+	}
+	if got := bookingGoogleEventID(t, p.db, result.BookingID); got != "evt-first" {
+		t.Fatalf("booking.google_event_id = %q, want %q", got, "evt-first")
+	}
+
+	// A second "insert" job for the SAME booking — a job-system retry, or a duplicate enqueue —
+	// arriving after the first one already succeeded and stored a google_event_id.
+	if err := jobs.Schedule(ctx, p.db, jobs.ScheduleInput{
+		Kind: "google:sync", RunAt: time.Now(),
+		Payload:     map[string]any{"kind": "insert", "bookingId": result.BookingID},
+		MaxAttempts: 5,
+	}); err != nil {
+		t.Fatalf("schedule a second insert job: %v", err)
+	}
+	runAllJobs(t, ctx, p.db, w)
+
+	if got := insertCalls.Load(); got != 1 {
+		t.Errorf("insert calls after the second (idempotent) run = %d, want still 1 (no HTTP call)", got)
+	}
+	if got := bookingGoogleEventID(t, p.db, result.BookingID); got != "evt-first" {
+		t.Errorf("booking.google_event_id = %q, want unchanged %q", got, "evt-first")
+	}
+}
+
+// TestGoogleSyncRescheduleDeletesThenInserts is I5's reschedule-path proof: the naive "insert
+// no-ops whenever GoogleEventID is already set" guard, applied blindly, would also make the
+// RESCHEDULE path's own insert-after-delete silently do nothing (the booking's row still shows
+// the OLD event id at that point) — googleSyncDelete's in-place clear (google.go) is what keeps
+// this working. DELETE fires for the old event, then POST for the new one, and the new id is
+// what ends up stored.
+func TestGoogleSyncRescheduleDeletesThenInserts(t *testing.T) {
+	ctx := context.Background()
+	// GoogleSync off at Book time (so Book itself enqueues no "insert" job to race against the
+	// planted event id below) — turned on via UpdatePage before Reschedule, so Reschedule's own
+	// "reschedule" job is the only "google:sync" job this booking ever gets.
+	p := setupBookablePage(t, nil)
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "ada@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE bookings SET google_event_id = 'evt-old' WHERE id = $1`, result.BookingID,
+	); err != nil {
+		t.Fatalf("plant google_event_id: %v", err)
+	}
+	if _, err := p.svc.UpdatePage(ctx, p.pageID, p.orgID, openPageInput(func(in *bookings.PageInput) {
+		in.GoogleSync = true
+	})); err != nil {
+		t.Fatalf("UpdatePage (turn GoogleSync on): %v", err)
+	}
+
+	newStart := futureUTCSlot(3, 14, 0)
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+
+	var deleteCalls, insertCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/freeBusy":
+			_, _ = w.Write([]byte(`{"calendars":{"primary":{"busy":[]}}}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/calendars/primary/events/evt-old":
+			deleteCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/calendars/primary/events":
+			insertCalls.Add(1)
+			_, _ = w.Write([]byte(`{"id":"evt-new"}`))
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
+	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
+	runAllJobs(t, ctx, p.db, w)
+
+	if got := deleteCalls.Load(); got != 1 {
+		t.Errorf("delete calls = %d, want 1", got)
+	}
+	if got := insertCalls.Load(); got != 1 {
+		t.Errorf("insert calls = %d, want 1", got)
+	}
+	if got := bookingGoogleEventID(t, p.db, result.BookingID); got != "evt-new" {
+		t.Errorf("booking.google_event_id = %q, want %q", got, "evt-new")
+	}
+}
+
+// TestGoogleSyncRescheduleDeleteFailureSkipsInsert is I5's failure-path proof: a hard DELETE
+// failure must never be followed by an insert (that would silently orphan the booking from its
+// real, still-existing old event), must leave the stored google_event_id unchanged, and must
+// still enqueue exactly one "sync_failed" notice.
+func TestGoogleSyncRescheduleDeleteFailureSkipsInsert(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, nil) // GoogleSync off at Book time — the old event is planted directly
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "ada@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE bookings SET google_event_id = 'evt-old' WHERE id = $1`, result.BookingID,
+	); err != nil {
+		t.Fatalf("plant google_event_id: %v", err)
+	}
+
+	newStart := futureUTCSlot(3, 14, 0)
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+
+	var insertCalls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		insertCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"evt-should-never-exist"}`))
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
+	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
+	if _, err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	if got := insertCalls.Load(); got != 0 {
+		t.Errorf("insert calls = %d, want 0 (delete failed, insert must not run)", got)
+	}
+	if got := bookingGoogleEventID(t, p.db, result.BookingID); got != "evt-old" {
+		t.Errorf("booking.google_event_id = %q, want unchanged %q", got, "evt-old")
+	}
+
+	payloads := decodeMailBookingJobs(t, listJobs(t, p.db, "mail:booking"))
+	found := 0
+	for _, pl := range payloads {
+		if pl.Kind == "sync_failed" && pl.BookingID == result.BookingID {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf(`"sync_failed" mail:booking jobs for booking %s = %d, want 1 (among %+v)`, result.BookingID, found, payloads)
+	}
+}
+
 // ownerUserID reads back the numeric member_user_id a booking page is assigned to (CreatePage
 // defaults it to the creator — see ownerEmail's own doc comment, emails_test.go) as the string
 // form GoogleSync's userID parameter expects.

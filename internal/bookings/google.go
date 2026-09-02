@@ -490,28 +490,45 @@ func (s *Service) handleGoogleSyncJob(ctx context.Context, job jobs.Job) error {
 
 	switch payload.Kind {
 	case "insert":
-		return s.googleSyncInsert(ctx, booking, page)
+		return s.googleSyncInsert(ctx, &booking, page)
 	case "delete":
-		_, err := s.googleSyncDelete(ctx, booking, page)
+		_, err := s.googleSyncDelete(ctx, &booking, page)
 		return err
 	case "reschedule":
-		return s.googleSyncReschedule(ctx, booking, page)
+		return s.googleSyncReschedule(ctx, &booking, page)
 	default:
 		return fmt.Errorf("bookings: unknown google:sync kind %q", payload.Kind)
 	}
 }
 
 // googleSyncInsert creates booking's Google Calendar event and stores its id — ports
-// syncGoogleEventCreate (google-sync.ts). A no-op when the booking's since been cancelled, the
-// page's sync toggle is (now) off, or the page has no assigned member — all re-checked fresh here
-// rather than trusting whatever was true when this was enqueued. ErrGoogleNotConnected (no usable
-// account) is likewise a silent no-op; any other error enqueues the "sync_failed" notice.
-func (s *Service) googleSyncInsert(ctx context.Context, booking queries.Booking, page queries.BookingPage) error {
+// syncGoogleEventCreate (google-sync.ts). booking is a *queries.Booking (not a plain value) so
+// googleSyncReschedule can hand it the SAME row googleSyncDelete just mutated in place — see that
+// function's own comment on why.
+//
+// I5 (triage 2+5): the very first check is idempotency — a booking that already has a known
+// GoogleEventID is a no-op, full stop, before even the cancelled/sync-off/no-member checks below.
+// Without this, a job system retry of an "insert" job whose Google API call actually succeeded
+// but whose subsequent SetGoogleEventID (or the job's own result bookkeeping) failed would create
+// a SECOND Google Calendar event for the same booking on its next attempt — Google Calendar has
+// no natural idempotency key for this request shape the way, say, a payment API's own
+// idempotency-key header would prevent a duplicate charge. Ports syncGoogleEventCreate's own
+// `if (booking.googleEventId) return` guard (google-sync.ts), which a naive Go port of the
+// cancelled/sync-off/no-member checks alone had dropped.
+//
+// The rest is unchanged: a no-op when the booking's since been cancelled, the page's sync toggle
+// is (now) off, or the page has no assigned member — all re-checked fresh here rather than
+// trusting whatever was true when this was enqueued. ErrGoogleNotConnected (no usable account) is
+// likewise a silent no-op; any other error enqueues the "sync_failed" notice.
+func (s *Service) googleSyncInsert(ctx context.Context, booking *queries.Booking, page queries.BookingPage) error {
+	if booking.GoogleEventID.Valid {
+		return nil
+	}
 	if booking.Status == "cancelled" || !page.GoogleSync || !page.MemberUserID.Valid {
 		return nil
 	}
 
-	view := toBookingView(booking)
+	view := toBookingView(*booking)
 	eventID, err := s.google.InsertEvent(ctx, strconv.FormatInt(page.MemberUserID.Int64, 10), &view)
 	if err != nil {
 		if errors.Is(err, ErrGoogleNotConnected) {
@@ -523,12 +540,15 @@ func (s *Service) googleSyncInsert(ctx context.Context, booking queries.Booking,
 }
 
 // googleSyncDelete deletes booking's known Google Calendar event, if any — ports
-// syncGoogleEventDelete (google-sync.ts). Returns true when there was nothing to delete, no
-// organiser account to hold a token, the event was already gone, or the delete succeeded; false
-// only on a real hard failure (for which the "sync_failed" notice has already been enqueued) —
-// googleSyncReschedule uses this to decide whether it's safe to create the replacement event, the
-// same way syncGoogleEventsForReschedule's own bool return does.
-func (s *Service) googleSyncDelete(ctx context.Context, booking queries.Booking, page queries.BookingPage) (bool, error) {
+// syncGoogleEventDelete (google-sync.ts). booking is a *queries.Booking: on a successful delete,
+// this clears GoogleEventID on the caller's own row (not just in the database, via
+// SetGoogleEventID) — see googleSyncReschedule's own comment on why that matters. Returns true
+// when there was nothing to delete, no organiser account to hold a token, the event was already
+// gone, or the delete succeeded; false only on a real hard failure (for which the "sync_failed"
+// notice has already been enqueued) — googleSyncReschedule uses this to decide whether it's safe
+// to create the replacement event, the same way syncGoogleEventsForReschedule's own bool return
+// does.
+func (s *Service) googleSyncDelete(ctx context.Context, booking *queries.Booking, page queries.BookingPage) (bool, error) {
 	if !booking.GoogleEventID.Valid {
 		return true, nil
 	}
@@ -541,7 +561,13 @@ func (s *Service) googleSyncDelete(ctx context.Context, booking queries.Booking,
 
 	err := s.google.DeleteEvent(ctx, strconv.FormatInt(page.MemberUserID.Int64, 10), booking.GoogleEventID.String)
 	if err == nil {
-		return true, s.SetGoogleEventID(ctx, booking.ID, nil)
+		setErr := s.SetGoogleEventID(ctx, booking.ID, nil)
+		// I5: clear it on this in-memory row too — the event really is gone at Google regardless
+		// of whether persisting that fact to the database above also succeeded, and
+		// googleSyncReschedule immediately hands this SAME *queries.Booking to googleSyncInsert,
+		// whose own idempotency guard checks exactly this field.
+		booking.GoogleEventID = sql.NullString{}
+		return true, setErr
 	}
 	if errors.Is(err, ErrGoogleNotConnected) {
 		return true, nil
@@ -552,8 +578,11 @@ func (s *Service) googleSyncDelete(ctx context.Context, booking queries.Booking,
 // googleSyncReschedule ports syncGoogleEventsForReschedule (google-sync.ts): delete the old event
 // (if any), and only create the replacement when that delete actually succeeded — a failed delete
 // leaves googleEventId pointed at the still-real old event rather than overwriting it with an
-// orphaned one.
-func (s *Service) googleSyncReschedule(ctx context.Context, booking queries.Booking, page queries.BookingPage) error {
+// orphaned one. Passes the SAME *queries.Booking to both calls (never a fresh copy) so
+// googleSyncInsert's own idempotency guard sees googleSyncDelete's in-place clear on success —
+// without that, a naive per-call guard would see the OLD (still-valid) GoogleEventID this
+// reschedule is meant to replace and wrongly skip creating the new event.
+func (s *Service) googleSyncReschedule(ctx context.Context, booking *queries.Booking, page queries.BookingPage) error {
 	ok, err := s.googleSyncDelete(ctx, booking, page)
 	if err != nil {
 		return err
