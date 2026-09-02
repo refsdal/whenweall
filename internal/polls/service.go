@@ -552,8 +552,11 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 	}
 
 	// Port of finalizePoll's own syncDeadline(id, null) call (polls.functions.ts): a finalized
-	// poll no longer needs its deadline reminder.
+	// poll no longer needs its deadline job OR its 24h "closes soon" reminder (I11).
 	if err := jobs.Cancel(ctx, tx, jobKindDeadline, "poll:"+pollID); err != nil {
+		return err
+	}
+	if err := jobs.Cancel(ctx, tx, jobKindReminder, "poll:"+pollID); err != nil {
 		return err
 	}
 
@@ -650,8 +653,11 @@ func (s *Service) Delete(ctx context.Context, pollID, orgID string) error {
 	}
 
 	// Port of deletePoll's own syncDeadline(id, null) call (polls.functions.ts): a deleted poll
-	// no longer needs its deadline reminder.
+	// no longer needs its deadline job OR its 24h "closes soon" reminder (I11).
 	if err := jobs.Cancel(ctx, tx, jobKindDeadline, "poll:"+pollID); err != nil {
+		return err
+	}
+	if err := jobs.Cancel(ctx, tx, jobKindReminder, "poll:"+pollID); err != nil {
 		return err
 	}
 

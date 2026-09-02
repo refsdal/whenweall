@@ -295,6 +295,242 @@ func TestDeadlineArming(t *testing.T) {
 			t.Fatalf("poll.deadline jobs = %d, want 1 (upsert, not append)", len(deadlineJobs))
 		}
 	})
+
+	// I11: the 24h "closes soon" (deadline.approaching) reminder is armed/cancelled alongside
+	// poll.deadline by the same armDeadline call — these cases are its own arming math, ported
+	// from syncDeadline's `remindAt > Date.now()` check (PollRoom.ts).
+
+	t.Run("Create with a deadline less than 24h away arms poll.deadline but not poll.reminder", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		soon := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+
+		if _, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &soon,
+		}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if n := countJobs(t, d, "poll.deadline"); n != 1 {
+			t.Errorf("poll.deadline jobs = %d, want 1", n)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 0 {
+			t.Errorf("poll.reminder jobs = %d, want 0 (deadline is under 24h away — firing now would read as a bug)", n)
+		}
+	})
+
+	t.Run("Create with a deadline more than 24h away arms poll.reminder 24h ahead of it", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		deadline := time.Now().Add(72 * time.Hour)
+		deadlineStr := deadline.UTC().Format("2006-01-02T15:04:05.000Z")
+
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &deadlineStr,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		reminderJobs := listJobs(t, d, "poll.reminder")
+		if len(reminderJobs) != 1 {
+			t.Fatalf("poll.reminder jobs = %d, want 1", len(reminderJobs))
+		}
+		if !reminderJobs[0].RoomKey.Valid || reminderJobs[0].RoomKey.String != "poll:"+created.ID {
+			t.Errorf("room_key = %+v, want poll:%s", reminderJobs[0].RoomKey, created.ID)
+		}
+
+		var runAt time.Time
+		if err := d.QueryRowContext(ctx,
+			`SELECT run_at FROM scheduled_jobs WHERE kind = 'poll.reminder' AND room_key = $1`, "poll:"+created.ID,
+		).Scan(&runAt); err != nil {
+			t.Fatalf("query run_at: %v", err)
+		}
+		wantRunAt := deadline.Add(-24 * time.Hour)
+		if diff := runAt.Sub(wantRunAt); diff < -time.Second || diff > time.Second {
+			t.Errorf("run_at = %v, want %v (deadline - 24h)", runAt, wantRunAt)
+		}
+	})
+
+	t.Run("Update extending a deadline from under 24h to over 24h away arms the reminder", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		soon := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &soon,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 0 {
+			t.Fatalf("poll.reminder jobs before extending = %d, want 0", n)
+		}
+
+		later := time.Now().Add(72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		if _, err := s.Update(ctx, created.ID, orgID, polls.UpdatePollInput{DeadlineAtSet: true, DeadlineAt: &later}); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 1 {
+			t.Errorf("poll.reminder jobs after extending past 24h = %d, want 1", n)
+		}
+	})
+
+	t.Run("Update re-arming a still-over-24h deadline upserts the reminder (still exactly one row)", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		first := time.Now().Add(72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &first,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		second := time.Now().Add(96 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		if _, err := s.Update(ctx, created.ID, orgID, polls.UpdatePollInput{DeadlineAtSet: true, DeadlineAt: &second}); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 1 {
+			t.Errorf("poll.reminder jobs = %d, want 1 (upsert, not append)", n)
+		}
+	})
+
+	t.Run("Update clearing the deadline cancels the reminder too", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		future := time.Now().Add(72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &future,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 1 {
+			t.Fatalf("poll.reminder jobs before clearing = %d, want 1", n)
+		}
+
+		if _, err := s.Update(ctx, created.ID, orgID, polls.UpdatePollInput{DeadlineAtSet: true, DeadlineAt: nil}); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 0 {
+			t.Errorf("poll.reminder jobs after clearing = %d, want 0", n)
+		}
+	})
+
+	t.Run("Finalize cancels a pending reminder", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		future := time.Now().Add(72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &future,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 1 {
+			t.Fatalf("poll.reminder jobs before finalize = %d, want 1", n)
+		}
+
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ownerID); err != nil {
+			t.Fatalf("Finalize: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 0 {
+			t.Errorf("poll.reminder jobs after finalize = %d, want 0", n)
+		}
+	})
+
+	t.Run("Delete cancels a pending reminder", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		future := time.Now().Add(72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+			Options: basicOptions(), DeadlineAt: &future,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 1 {
+			t.Fatalf("poll.reminder jobs before delete = %d, want 1", n)
+		}
+
+		if err := s.Delete(ctx, created.ID, orgID); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if n := countJobs(t, d, "poll.reminder"); n != 0 {
+			t.Errorf("poll.reminder jobs after delete = %d, want 0", n)
+		}
+	})
+}
+
+// TestReminderJobFiresMailToRecipients is I11's firing proof: once poll.reminder is due, it
+// resolves deadline.approaching's recipients (systemDefaults already default that event on) and
+// schedules one ids-only "mail:poll"/"deadline.approaching" job per recipient — mirroring
+// TestPollDeadlineJobClosesPollAndSchedulesClosedMail's own shape for the "closed" event.
+func TestReminderJobFiresMailToRecipients(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "member")
+	mateID := seedUser(t, d)
+	addOrgMember(t, d, orgID, mateID, "member")
+
+	future := time.Now().Add(72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+		Type: polls.PollTypeDatetime, Title: "T", Timezone: "Europe/Oslo",
+		Options: basicOptions(), DeadlineAt: &future,
+	}) // owner auto-subscribed (ensureCreatorSubscription)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.SetFollowing(ctx, created.ID, orgID, mateID, true); err != nil {
+		t.Fatalf("SetFollowing: %v", err)
+	}
+
+	forceDue(t, d, "poll.reminder")
+
+	w := jobs.NewWorker(d, "test-replica", slog.Default())
+	s.RegisterJobs(w, testMailer("https://whenweall.example"))
+	processed, err := w.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce (poll.reminder): %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1 (the poll.reminder job)", processed)
+	}
+
+	rows := listJobs(t, d, "mail:poll")
+	reminderJobs := filterByEvent(decodeMailPollJobs(t, rows), "deadline.approaching")
+	gotUserIDs := map[string]bool{}
+	for _, p := range reminderJobs {
+		gotUserIDs[p.UserID] = true
+	}
+	if !gotUserIDs[ownerID] || !gotUserIDs[mateID] || len(gotUserIDs) != 2 {
+		t.Errorf("deadline.approaching mail recipients = %v, want exactly {%s, %s}", gotUserIDs, ownerID, mateID)
+	}
+	for _, r := range rows {
+		if strings.Contains(string(r.Payload), "@") {
+			t.Errorf("mail:poll payload contains an address: %s", r.Payload)
+		}
+	}
+
+	// The one-shot poll.reminder job itself must be gone (jobs.Complete removes it), not left
+	// behind to re-fire.
+	if n := countJobs(t, d, "poll.reminder"); n != 0 {
+		t.Errorf("poll.reminder jobs remaining after firing = %d, want 0", n)
+	}
 }
 
 // TestClaimEnqueuesClaimConfirmationMail ports claimSlot's call into sendClaimConfirmation.

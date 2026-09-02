@@ -40,6 +40,7 @@ import (
 
 const (
 	jobKindDeadline = "poll.deadline"
+	jobKindReminder = "poll.reminder"
 	jobKindDigest   = "poll.digest"
 	jobKindMailPoll = "mail:poll"
 
@@ -51,6 +52,10 @@ const (
 	// digestDelay mirrors DIGEST_DELAY_MS (PollRoom.ts): how long a poll's digest debounces after
 	// its first queued item before sending.
 	digestDelay = 10 * time.Minute
+
+	// reminderLead mirrors REMINDER_LEAD_MS (PollRoom.ts): how far ahead of a poll's deadline the
+	// "closes soon" (deadline.approaching) reminder fires.
+	reminderLead = 24 * time.Hour
 )
 
 // mailPollPayload is the "mail:poll" job's ids-only payload — pollId/event plus whichever
@@ -76,21 +81,47 @@ func enqueueMailPoll(ctx context.Context, tx db.DBTX, payload mailPollPayload) e
 	})
 }
 
-// armDeadline ports the deadline half of PollRoom.syncDeadline: schedules (upserts) "poll.deadline"
-// for pollID when deadlineAt is non-nil, cancels the pending job when it's nil. Must run inside
-// the same transaction as the domain write that changed the deadline (Create/Update), matching
-// jobs.Schedule/Cancel's own contract.
+// armDeadline ports PollRoom.syncDeadline in full: schedules (upserts) "poll.deadline" for pollID
+// when deadlineAt is non-nil, cancels the pending job when it's nil — AND does the same for
+// "poll.reminder" (I11: PollRoom's 24h "closes soon" reminder, deadline.approaching), armed
+// reminderLead ahead of the same deadline. Must run inside the same transaction as the domain
+// write that changed the deadline (Create/Update), matching jobs.Schedule/Cancel's own contract.
+//
+// Finalize/Delete cancel both jobs directly (jobs.Cancel(..., jobKindDeadline, ...) and
+// jobs.Cancel(..., jobKindReminder, ...), service.go) rather than through this function, since
+// they aren't changing a deadline value — they're clearing both timers unconditionally because
+// the poll itself no longer needs either one.
 func armDeadline(ctx context.Context, tx db.DBTX, pollID string, deadlineAt *time.Time) error {
 	roomKey := "poll:" + pollID
 	if deadlineAt == nil {
-		return jobs.Cancel(ctx, tx, jobKindDeadline, roomKey)
+		if err := jobs.Cancel(ctx, tx, jobKindDeadline, roomKey); err != nil {
+			return err
+		}
+		return jobs.Cancel(ctx, tx, jobKindReminder, roomKey)
 	}
-	return jobs.Schedule(ctx, tx, jobs.ScheduleInput{
+	if err := jobs.Schedule(ctx, tx, jobs.ScheduleInput{
 		Kind:    jobKindDeadline,
 		RoomKey: &roomKey,
 		RunAt:   *deadlineAt,
 		Payload: map[string]any{"pollId": pollID},
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Only arm the reminder when it's still ahead of us — ports syncDeadline's own `remindAt >
+	// Date.now()` check (PollRoom.ts): a poll created/updated with a deadline already inside the
+	// next 24h would otherwise fire "closes soon" immediately, which reads as a bug, not a
+	// reminder.
+	remindAt := deadlineAt.Add(-reminderLead)
+	if remindAt.After(time.Now()) {
+		return jobs.Schedule(ctx, tx, jobs.ScheduleInput{
+			Kind:    jobKindReminder,
+			RoomKey: &roomKey,
+			RunAt:   remindAt,
+			Payload: map[string]any{"pollId": pollID},
+		})
+	}
+	return jobs.Cancel(ctx, tx, jobKindReminder, roomKey)
 }
 
 // EnqueueDigestItem ports PollRoom.enqueueDigest's storage+debounce semantics, using the pending
@@ -166,9 +197,9 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 	return tx.Commit()
 }
 
-// RegisterJobs wires this package's three job kinds into w. m is the real mailer used only by
-// "mail:poll" — "poll.deadline"/"poll.digest" never touch SMTP directly, they only ever schedule
-// further "mail:poll" jobs.
+// RegisterJobs wires this package's four job kinds into w. m is the real mailer used only by
+// "mail:poll" — "poll.deadline"/"poll.reminder"/"poll.digest" never touch SMTP directly, they only
+// ever schedule further "mail:poll" jobs.
 func (s *Service) RegisterJobs(w *jobs.Worker, m *mailer.Mailer) {
 	w.Register(jobKindDeadline, func(ctx context.Context, job jobs.Job) error {
 		var p struct {
@@ -178,6 +209,16 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m *mailer.Mailer) {
 			return fmt.Errorf("polls: decode poll.deadline payload: %w", err)
 		}
 		return s.handleDeadlineJob(ctx, p.PollID)
+	})
+
+	w.Register(jobKindReminder, func(ctx context.Context, job jobs.Job) error {
+		var p struct {
+			PollID string `json:"pollId"`
+		}
+		if err := json.Unmarshal(job.Payload, &p); err != nil {
+			return fmt.Errorf("polls: decode poll.reminder payload: %w", err)
+		}
+		return s.handleReminderJob(ctx, p.PollID)
 	})
 
 	w.Register(jobKindDigest, func(ctx context.Context, job jobs.Job) error {
@@ -195,8 +236,10 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m *mailer.Mailer) {
 
 // handleDeadlineJob is "poll.deadline"'s body: CloseExpired, then — only on an actual open->closed
 // transition — resolve poll.closed's recipients and schedule one "closed" mail:poll job per
-// recipient. Ports PollRoom#processDeadline (minus the reminder half — deadline.approaching isn't
-// in this task's scope; see the task report).
+// recipient. Ports PollRoom#processDeadline's deadline half; the reminder half (deadline.
+// approaching) is its own separate job kind (jobKindReminder/handleReminderJob below), armed and
+// fired independently of this one — see armDeadline's own doc comment for why they're scheduled
+// together but processed apart.
 func (s *Service) handleDeadlineJob(ctx context.Context, pollID string) error {
 	changed, err := s.CloseExpired(ctx, pollID)
 	if err != nil {
@@ -220,6 +263,35 @@ func (s *Service) handleDeadlineJob(ctx context.Context, pollID string) error {
 	}
 	for _, r := range recipients {
 		if err := enqueueMailPoll(ctx, s.db, mailPollPayload{PollID: pollID, Event: "closed", UserID: r.UserID}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// handleReminderJob is "poll.reminder"'s body: resolve deadline.approaching's recipients and
+// schedule one "deadline.approaching" mail:poll job per recipient. Ports PollRoom#processReminder
+// (minus the storage cleanup half — REMIND_AT_KEY's deletion — which this port has no equivalent
+// storage slot for; jobs.Complete already removes the one-shot scheduled_jobs row this ran from,
+// so there's nothing left over to clean up here). No poll.Status check: TS's own #processReminder
+// doesn't gate on it either (only emitPollEvent's blanket "poll missing or soft-deleted" check
+// applies, via GetPoll below) — a poll finalized or closed early, with its deadline unchanged,
+// still gets its "closes soon" reminder, exactly like the TS source.
+func (s *Service) handleReminderJob(ctx context.Context, pollID string) error {
+	poll, err := s.q.GetPoll(ctx, pollID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	recipients, err := s.resolveRecipients(ctx, s.q, poll.OrganizationID, pollID, EventDeadlineApproaching, "")
+	if err != nil {
+		return err
+	}
+	for _, r := range recipients {
+		if err := enqueueMailPoll(ctx, s.db, mailPollPayload{PollID: pollID, Event: string(EventDeadlineApproaching), UserID: r.UserID}); err != nil {
 			return err
 		}
 	}
@@ -308,6 +380,8 @@ func (s *Service) handleMailPollJob(ctx context.Context, m *mailer.Mailer, job j
 		return s.sendFinalizedMail(ctx, m, poll, pollURL, payload)
 	case "closed":
 		return s.sendClosedMail(ctx, m, poll, pollURL, payload)
+	case string(EventDeadlineApproaching):
+		return s.sendReminderMail(ctx, m, poll, pollURL, payload)
 	case "digest":
 		return s.sendDigestMail(ctx, m, poll, pollURL, payload)
 	case "claim_confirmation":
@@ -424,6 +498,40 @@ func (s *Service) sendClosedMail(ctx context.Context, m *mailer.Mailer, poll que
 		To:       u.Email,
 		Template: "closed",
 		Data:     map[string]any{"PollTitle": poll.Title, "PollURL": pollURL, "Locale": "en"},
+	})
+}
+
+// sendReminderMail ports the deadline.approaching half of emitPollEvent's sendImmediate
+// (emit.ts): unlike finalized/closed, this event has no dedicated template — it renders through
+// the generic "notification" template (internal/mailer/templates/notification.html), exactly the
+// shape recipients.ts's own non-digest branch builds ({event, title, url}), using the
+// email_notification_deadline_subject/body catalog keys (messages.go) notifSubject/notifBody
+// already resolve for this event.
+func (s *Service) sendReminderMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
+	if payload.UserID == "" {
+		return nil
+	}
+	uid, err := strconv.ParseInt(payload.UserID, 10, 64)
+	if err != nil {
+		return nil
+	}
+	u, err := s.q.GetUser(ctx, uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return m.Send(ctx, mailer.Message{
+		To:       u.Email,
+		Template: "notification",
+		Data: map[string]any{
+			"Event":  string(EventDeadlineApproaching),
+			"Title":  poll.Title,
+			"URL":    pollURL,
+			"Locale": "en",
+		},
 	})
 }
 
