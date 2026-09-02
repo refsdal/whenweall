@@ -34,7 +34,7 @@ APP_URL=http://localhost:3000 AUTH_SECRET=$(openssl rand -base64 32) SMTP_HOST=l
   go run ./cmd/whenweall migrate
 ```
 
-**2. Run schemagen.** `internal/auth/schemagen` builds the *exact* Limen configuration
+**2. Run schemagen.** `internal/auth/schemagen` builds the _exact_ Limen configuration
 `internal/auth.New` builds (same plugins, same options — see `auth.buildLimenConfig`), but with
 Limen's CLI serialization turned on. Constructing Limen with that config is what makes Limen write
 `.limen/schemas.json` (Limen's `Config.prepareCLIConfig`):
@@ -63,7 +63,7 @@ writes one `<version>_<table>.up.sql` / `.down.sql` pair per table that needs a 
 **4. Fold the output into a goose migration by hand.** Concatenate the generated `.up.sql` files
 (in the order the CLI printed them — that order already respects foreign-key dependencies) under
 `-- +goose Up` in a new (or, for the very first generation, `00002_auth.sql`'s existing) file, and
-their `.down.sql` counterparts *in reverse order* under `-- +goose Down`. `staff_users` (our own
+their `.down.sql` counterparts _in reverse order_ under `-- +goose Down`. `staff_users` (our own
 table, not Limen's) stays appended after Limen's tables in Up, and dropped first in Down.
 
 **5. Verify.** `go test ./internal/db/` (the migration applies cleanly to the testdb template) and
