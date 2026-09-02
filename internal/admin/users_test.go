@@ -318,6 +318,50 @@ func TestSearchUsers_CursorWalksFullSetNoDupesNoGaps(t *testing.T) {
 	}
 }
 
+// TestSearchUsers_NextCursorEmptyOnExactBoundaryLastPage mirrors audit_test.go's own
+// TestList_NextCursorEmptyOnExactBoundaryLastPage for SearchUsers's own keyset pagination (M10):
+// testdb.New gives this test its own isolated database (this package's own doc comment), so
+// seeding exactly Limit rows and nothing else is enough to land precisely on the boundary.
+func TestSearchUsers_NextCursorEmptyOnExactBoundaryLastPage(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).UTC()
+
+	seedUserAt(t, d, base.Add(1*time.Second))
+	seedUserAt(t, d, base.Add(2*time.Second))
+
+	rows, nextCursor, err := admin.SearchUsers(ctx, d, admin.UserFilter{Limit: 2})
+	if err != nil {
+		t.Fatalf("SearchUsers: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("SearchUsers returned %d rows, want 2", len(rows))
+	}
+	if nextCursor != "" {
+		t.Errorf("nextCursor = %q, want \"\" — exactly Limit rows matched, there is no next page", nextCursor)
+	}
+}
+
+// TestCountUsers_MatchesFilterIndependentOfLimit mirrors audit_test.go's own
+// TestCountAuditLog_MatchesFilterIndependentOfLimit for CountUsers.
+func TestCountUsers_MatchesFilterIndependentOfLimit(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		seedUserWithName(t, d, "Grace", fmt.Sprintf("Hopper%d", i))
+	}
+	seedUserWithName(t, d, "Someone", "Else") // must not be counted
+
+	total, err := admin.CountUsers(ctx, d, admin.UserFilter{Query: "Grace", Limit: 2})
+	if err != nil {
+		t.Fatalf("CountUsers: %v", err)
+	}
+	if total != 5 {
+		t.Errorf("CountUsers = %d, want 5 (Limit must not shrink the count)", total)
+	}
+}
+
 // --- UserDetail -----------------------------------------------------------------------------
 
 func TestUserDetail_UnknownIDReturnsNilNotError(t *testing.T) {
@@ -360,6 +404,39 @@ func TestUserDetail_IncludesOrgsAndCounts(t *testing.T) {
 	}
 	if detail.Counts.BookingPages != 1 {
 		t.Errorf("Counts.BookingPages = %d, want 1", detail.Counts.BookingPages)
+	}
+}
+
+// TestUserDetail_RolesIsEmptyArrayNotNullForAPlainMember is M6's own regression test: a member
+// with no organization_member_roles row at all (a plain member, same shape seedMember's own
+// no-roles case seeds) must still marshal Roles as `[]`, not JSON `null` — the frontend reads it
+// as an array unconditionally.
+func TestUserDetail_RolesIsEmptyArrayNotNullForAPlainMember(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	userIDStr, _ := seedUser(t, d)
+	userID := mustParseUserID(t, userIDStr)
+
+	orgID := seedOrg(t, d, "Plain Member Org")
+	seedMember(t, d, orgID, userID, time.Now()) // no roles at all
+
+	detail, err := admin.UserDetail(ctx, d, userIDStr)
+	if err != nil {
+		t.Fatalf("UserDetail: %v", err)
+	}
+	if detail == nil || len(detail.Orgs) != 1 {
+		t.Fatalf("UserDetail = %+v, want exactly one org", detail)
+	}
+	if detail.Orgs[0].Roles == nil {
+		t.Error("Orgs[0].Roles is nil, want an empty (non-nil) slice")
+	}
+
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"roles":[]`) {
+		t.Errorf("marshalled detail = %s, want it to contain \"roles\":[]", encoded)
 	}
 }
 

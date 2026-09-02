@@ -104,27 +104,17 @@ type AuditFilter struct {
 	Limit int
 }
 
-// List reads the audit log newest first, walking it as a (created_at, id) keyset so concurrent
-// inserts can never shift a page underneath the caller (a straight OFFSET would). nextCursor is
-// "" once the last page has been reached.
-func List(ctx context.Context, tx db.DBTX, f AuditFilter) ([]AuditEntry, string, error) {
-	limit := f.Limit
-	switch {
-	case limit <= 0:
-		limit = defaultListLimit
-	case limit > maxListLimit:
-		limit = maxListLimit
-	}
-
-	var (
-		where []string
-		args  []any
-	)
+// auditWhereConditions builds the WHERE conditions List and Count share — every AuditFilter field
+// except Cursor (List-only: Count reports the filtered set's true size, not one page of it) and
+// Limit (not a WHERE condition at all). Returns the conditions alongside the args already bound
+// for them; a caller that needs more placeholders (List's own cursor condition, its LIMIT) keeps
+// extending the same slice with its own arg() closure, continuing the placeholder numbering from
+// len(args).
+func auditWhereConditions(f AuditFilter) (where []string, args []any) {
 	arg := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
 	}
-
 	if f.Action != "" {
 		where = append(where, "action = "+arg(f.Action))
 	}
@@ -136,6 +126,34 @@ func List(ctx context.Context, tx db.DBTX, f AuditFilter) ([]AuditEntry, string,
 	}
 	if f.TargetID != "" {
 		where = append(where, "target_id = "+arg(f.TargetID))
+	}
+	return where, args
+}
+
+// List reads the audit log newest first, walking it as a (created_at, id) keyset so concurrent
+// inserts can never shift a page underneath the caller (a straight OFFSET would). nextCursor is
+// "" once the last page has been reached.
+//
+// Fetches limit+1 rows rather than exactly limit: the naive "nextCursor whenever we got a full
+// page" version wrongly set one whenever the result happened to land exactly on a page boundary
+// (e.g. precisely 100 rows left and Limit 100), pointing at a next page that then came back empty
+// — not a data bug (the walk still terminated, just with one wasted empty round trip), but the
+// wrong contract for nextCursor's own promise of "" meaning "no more rows". Requesting one extra
+// row and trimming it off (keeping only its own cursor value, if a next page truly exists) makes
+// the boundary case and the ordinary case the same code path.
+func List(ctx context.Context, tx db.DBTX, f AuditFilter) ([]AuditEntry, string, error) {
+	limit := f.Limit
+	switch {
+	case limit <= 0:
+		limit = defaultListLimit
+	case limit > maxListLimit:
+		limit = maxListLimit
+	}
+
+	where, args := auditWhereConditions(f)
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
 	}
 	if f.Cursor != "" {
 		cursorCreatedAt, cursorID, err := decodeCursor(f.Cursor)
@@ -152,7 +170,7 @@ func List(ctx context.Context, tx db.DBTX, f AuditFilter) ([]AuditEntry, string,
 	if len(where) > 0 {
 		query += "WHERE " + strings.Join(where, " AND ") + "\n"
 	}
-	query += fmt.Sprintf("ORDER BY created_at DESC, id DESC LIMIT %s", arg(limit))
+	query += fmt.Sprintf("ORDER BY created_at DESC, id DESC LIMIT %s", arg(limit+1))
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -160,9 +178,8 @@ func List(ctx context.Context, tx db.DBTX, f AuditFilter) ([]AuditEntry, string,
 	}
 	defer func() { _ = rows.Close() }()
 
-	entries := make([]AuditEntry, 0)
-	var lastCreatedAt time.Time
-	var lastID string
+	entries := make([]AuditEntry, 0, limit+1)
+	createdAts := make([]time.Time, 0, limit+1)
 	for rows.Next() {
 		var (
 			e           AuditEntry
@@ -190,17 +207,38 @@ func List(ctx context.Context, tx db.DBTX, f AuditFilter) ([]AuditEntry, string,
 		}
 		e.CreatedAt = formatISO(createdAt)
 		entries = append(entries, e)
-		lastCreatedAt, lastID = createdAt, e.ID
+		createdAts = append(createdAts, createdAt)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 
 	nextCursor := ""
-	if len(entries) == limit {
-		nextCursor = encodeCursor(lastCreatedAt, lastID)
+	if len(entries) > limit {
+		entries = entries[:limit]
+		createdAts = createdAts[:limit]
+		nextCursor = encodeCursor(createdAts[limit-1], entries[limit-1].ID)
 	}
 	return entries, nextCursor, nil
+}
+
+// CountAuditLog reports how many rows f's filter matches, ignoring Cursor/Limit entirely — the
+// support console's "N results" alongside a cursor-paginated List, not itself paginated. A second
+// query over the same WHERE List uses (rather than a window function folded into List's own
+// query) is the simplest correct answer at the row counts this console will ever see; if that
+// ever stops being true, revisit. Named CountAuditLog, not Count, to not collide with this
+// package's existing Count type (stats.go's Total/Last7/Last30 viewmodel).
+func CountAuditLog(ctx context.Context, tx db.DBTX, f AuditFilter) (int64, error) {
+	where, args := auditWhereConditions(f)
+
+	query := "SELECT count(*) FROM admin_audit_log"
+	if len(where) > 0 {
+		query += "\nWHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int64
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&total)
+	return total, err
 }
 
 // encodeCursor/decodeCursor make the (created_at, id) keyset opaque to callers — List's contract

@@ -515,6 +515,87 @@ func TestHandleAuditList_ReturnsRecordedActions(t *testing.T) {
 	}
 }
 
+// TestHandleAuditList_FiltersByTargetTypeAndTargetIDAndReportsTotal is I3's own regression test:
+// handleAuditList must read targetType/targetId off the query string (List already supported both
+// as AuditFilter fields; only the handler was missing them) and the response must include a
+// "total" independent of the page a limit/cursor happens to return.
+func TestHandleAuditList_FiltersByTargetTypeAndTargetIDAndReportsTotal(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	client := staffClient(t, h, "staff-audit-filters@example.com")
+	targetA, _ := seedUser(t, d)
+	targetB, _ := seedUser(t, d)
+
+	for _, id := range []string{targetA, targetA, targetB} {
+		resp := h.requestJSON(t, client, http.MethodPost, "/api/v1/admin/users/"+id+"/lock", map[string]any{"reason": "r"})
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("seeding lock for %s: status %d", id, resp.StatusCode)
+		}
+		unlockResp := h.requestJSON(t, client, http.MethodPost, "/api/v1/admin/users/"+id+"/unlock", map[string]any{"reason": "r"})
+		_ = unlockResp.Body.Close()
+	}
+
+	q := url.Values{"targetType": {"user"}, "targetId": {targetA}, "action": {"lock-user"}, "limit": {"1"}}
+	resp := h.requestJSON(t, client, http.MethodGet, "/api/v1/admin/audit?"+q.Encode(), nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Entries    []admin.AuditEntry `json:"entries"`
+		NextCursor string             `json:"nextCursor"`
+		Total      int64              `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("entries = %+v, want exactly 1 (limit=1)", out.Entries)
+	}
+	if out.Entries[0].TargetID == nil || *out.Entries[0].TargetID != targetA {
+		t.Errorf("entries[0].TargetID = %v, want %s", out.Entries[0].TargetID, targetA)
+	}
+	// Exactly one lock-user row targets targetA (the two-lock/unlock sequence above locked it
+	// once each iteration, but only the FIRST of the two matching iterations for targetA counts —
+	// targetA appears twice in the seed loop, so two lock-user rows target it).
+	if out.Total != 2 {
+		t.Errorf("total = %d, want 2 (independent of limit=1)", out.Total)
+	}
+	if out.NextCursor == "" {
+		t.Error("nextCursor is empty, want a next-page cursor (total=2 > limit=1)")
+	}
+}
+
+func TestHandleSearchUsers_ReportsTotalIndependentOfLimit(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	client := staffClient(t, h, "staff-search-total@example.com")
+	seedUserWithName(t, d, "Marie", "Curie-A")
+	seedUserWithName(t, d, "Marie", "Curie-B")
+
+	q := url.Values{"query": {"Marie"}, "limit": {"1"}}
+	resp := h.requestJSON(t, client, http.MethodGet, "/api/v1/admin/users?"+q.Encode(), nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Users      []admin.AdminUserRow `json:"users"`
+		NextCursor string               `json:"nextCursor"`
+		Total      int64                `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Users) != 1 {
+		t.Fatalf("users = %+v, want exactly 1 (limit=1)", out.Users)
+	}
+	if out.Total != 2 {
+		t.Errorf("total = %d, want 2 (independent of limit=1)", out.Total)
+	}
+}
+
 func TestHandleFailedJobs_OmitsPayloadIncludesOtherFields(t *testing.T) {
 	d := testdb.New(t)
 	h := newAdminHTTPHarness(t, d)

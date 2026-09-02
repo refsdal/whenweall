@@ -191,6 +191,37 @@ func TestList_FiltersByEveryField(t *testing.T) {
 	})
 }
 
+// TestCountAuditLog_MatchesFilterIndependentOfLimit proves Count reports the full filtered set's
+// size, not one page of it — the reason handleAuditList's own "total" exists at all.
+func TestCountAuditLog_MatchesFilterIndependentOfLimit(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).UTC()
+
+	for i := 0; i < 5; i++ {
+		insertAuditRow(t, d, fmt.Sprintf("count-%d", i), "counter@example.com", "ban-user", "user",
+			fmt.Sprintf("u%d", i), base.Add(time.Duration(i)*time.Second))
+	}
+	// A row that must NOT be counted, to prove the filter is actually applied.
+	insertAuditRow(t, d, "count-other", "someone-else@example.com", "ban-user", "user", "u-other", base)
+
+	total, err := admin.CountAuditLog(ctx, d, admin.AuditFilter{ActorEmail: "counter@example.com", Limit: 2})
+	if err != nil {
+		t.Fatalf("CountAuditLog: %v", err)
+	}
+	if total != 5 {
+		t.Errorf("CountAuditLog = %d, want 5 (Limit must not shrink the count)", total)
+	}
+
+	entries, _, err := admin.List(ctx, d, admin.AuditFilter{ActorEmail: "counter@example.com", Limit: 2})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("List returned %d entries, want 2 (the page, not the total)", len(entries))
+	}
+}
+
 func TestList_NewestFirst(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()
@@ -212,6 +243,29 @@ func TestList_NewestFirst(t *testing.T) {
 // (per keyset-pagination convention, ties are broken by id) plus rows at distinct instants, then
 // walks the whole table two rows at a time and asserts the walk visits every row exactly once, in
 // strictly non-increasing (created_at, id) order.
+// TestList_NextCursorEmptyOnExactBoundaryLastPage is M10's own regression test: when a filtered
+// set's remaining rows exactly equal Limit, nextCursor must still be "" (no more rows), not a
+// cursor pointing at an empty next page — the bug the naive "len(entries) == limit" check had.
+func TestList_NextCursorEmptyOnExactBoundaryLastPage(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).UTC()
+
+	insertAuditRow(t, d, "boundary-1", "boundary@example.com", "ban-user", "user", "u1", base.Add(1*time.Second))
+	insertAuditRow(t, d, "boundary-2", "boundary@example.com", "ban-user", "user", "u2", base.Add(2*time.Second))
+
+	entries, nextCursor, err := admin.List(ctx, d, admin.AuditFilter{ActorEmail: "boundary@example.com", Limit: 2})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("List returned %d entries, want 2", len(entries))
+	}
+	if nextCursor != "" {
+		t.Errorf("nextCursor = %q, want \"\" — exactly Limit rows matched, there is no next page", nextCursor)
+	}
+}
+
 func TestList_CursorWalksFullSetNoDupesNoGaps(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()

@@ -137,10 +137,31 @@ func composeUserName(firstName, lastName sql.NullString, email string) string {
 	return email
 }
 
+// userWhereConditions builds the WHERE conditions SearchUsers and CountUsers share — UserFilter's
+// Query field, the only one either query filters on (Cursor is SearchUsers-only, Limit isn't a
+// WHERE condition). Mirrors audit.go's own auditWhereConditions.
+func userWhereConditions(f UserFilter) (where []string, args []any) {
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		term := "%" + q + "%"
+		placeholder := arg(term)
+		where = append(where, fmt.Sprintf(
+			"(email ILIKE %s OR (coalesce(first_name, '') || ' ' || coalesce(last_name, '')) ILIKE %s)",
+			placeholder, placeholder,
+		))
+	}
+	return where, args
+}
+
 // SearchUsers is the support console's find-a-person query: a substring match on email or name
 // (both ILIKE, so it's case-insensitive without needing to lower-case either side), newest first,
 // walked as a (created_at, id) keyset exactly like admin.List (audit.go) — see that function's own
-// doc comment for why a keyset beats OFFSET here. nextCursor is "" once the last page is reached.
+// doc comment for why a keyset beats OFFSET here, and for why this fetches limit+1 rows and trims
+// rather than treating "got exactly limit rows" as "there's a next page" (the same
+// exact-boundary-page bug that comment describes). nextCursor is "" once the last page is reached.
 func SearchUsers(ctx context.Context, tx db.DBTX, f UserFilter) ([]AdminUserRow, string, error) {
 	limit := f.Limit
 	switch {
@@ -150,22 +171,10 @@ func SearchUsers(ctx context.Context, tx db.DBTX, f UserFilter) ([]AdminUserRow,
 		limit = maxUserListLimit
 	}
 
-	var (
-		where []string
-		args  []any
-	)
+	where, args := userWhereConditions(f)
 	arg := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
-	}
-
-	if q := strings.TrimSpace(f.Query); q != "" {
-		term := "%" + q + "%"
-		placeholder := arg(term)
-		where = append(where, fmt.Sprintf(
-			"(email ILIKE %s OR (coalesce(first_name, '') || ' ' || coalesce(last_name, '')) ILIKE %s)",
-			placeholder, placeholder,
-		))
 	}
 	if f.Cursor != "" {
 		cursorCreatedAt, cursorID, err := decodeUserCursor(f.Cursor)
@@ -179,7 +188,7 @@ func SearchUsers(ctx context.Context, tx db.DBTX, f UserFilter) ([]AdminUserRow,
 	if len(where) > 0 {
 		query += "\nWHERE " + strings.Join(where, " AND ")
 	}
-	query += fmt.Sprintf("\nORDER BY created_at DESC, id DESC LIMIT %s", arg(limit))
+	query += fmt.Sprintf("\nORDER BY created_at DESC, id DESC LIMIT %s", arg(limit+1))
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -187,27 +196,42 @@ func SearchUsers(ctx context.Context, tx db.DBTX, f UserFilter) ([]AdminUserRow,
 	}
 	defer func() { _ = rows.Close() }()
 
-	users := make([]AdminUserRow, 0)
-	var lastCreatedAt time.Time
-	var lastID string
+	users := make([]AdminUserRow, 0, limit+1)
+	createdAts := make([]time.Time, 0, limit+1)
 	for rows.Next() {
 		u, createdAt, err := scanUserRow(rows.Scan)
 		if err != nil {
 			return nil, "", err
 		}
 		users = append(users, u)
-		lastID = u.ID
-		lastCreatedAt = createdAt
+		createdAts = append(createdAts, createdAt)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", err
 	}
 
 	nextCursor := ""
-	if len(users) == limit {
-		nextCursor = encodeUserCursor(lastCreatedAt, lastID)
+	if len(users) > limit {
+		users = users[:limit]
+		createdAts = createdAts[:limit]
+		nextCursor = encodeUserCursor(createdAts[limit-1], users[limit-1].ID)
 	}
 	return users, nextCursor, nil
+}
+
+// CountUsers reports how many rows f's filter matches (Cursor/Limit ignored, same contract as
+// audit.go's Count) — the support console's "N results" alongside a cursor-paginated SearchUsers.
+func CountUsers(ctx context.Context, tx db.DBTX, f UserFilter) (int64, error) {
+	where, args := userWhereConditions(f)
+
+	query := "SELECT count(*) FROM users"
+	if len(where) > 0 {
+		query += "\nWHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int64
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&total)
+	return total, err
 }
 
 // encodeUserCursor/decodeUserCursor mirror audit.go's encodeCursor/decodeCursor, keyed on a bigint
@@ -285,7 +309,10 @@ func UserDetail(ctx context.Context, tx db.DBTX, userID string) (*AdminUserDetai
 		if err := orgRows.Scan(&orgID, &name, &slug, &rolesCSV); err != nil {
 			return nil, fmt.Errorf("admin: scanning org row for user %s: %w", userID, err)
 		}
-		var roles []string
+		// Never nil — an empty JSON array ([]), not a JSON null, for a member with no role rows
+		// (a plain member, e.g. seedMember's own no-roles case in users_test.go): the frontend
+		// reads Roles as an array unconditionally, and encoding/json renders a nil slice as null.
+		roles := []string{}
 		if rolesCSV != "" {
 			roles = strings.Split(rolesCSV, ",")
 		}

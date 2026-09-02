@@ -20,12 +20,13 @@
 // TS wire format:
 //
 //	GET  stats               -> DashboardStats, unwrapped
-//	GET  users               -> {"users": [...], "nextCursor": "..."}
+//	GET  users               -> {"users": [...], "nextCursor": "...", "total": N} — query/cursor/limit
 //	GET  users/{id}          -> AdminUserDetail, unwrapped (404 "not_found" for an unknown id)
 //	POST users/{id}/lock     -> {"ok": true}
 //	POST users/{id}/unlock   -> {"ok": true}
 //	DELETE users/{id}        -> {"ok": true}
-//	GET  audit               -> {"entries": [...], "nextCursor": "..."}
+//	GET  audit               -> {"entries": [...], "nextCursor": "...", "total": N} — action/actor/
+//	                            targetType/targetId/cursor/limit all optional filters
 //	GET  jobs/failed         -> {"jobs": [FailedJobView, ...]} — Payload is deliberately never
 //	                            read off the underlying jobs.Job at all (see FailedJobView's own
 //	                            doc comment), since a dead-lettered mail job's payload can carry a
@@ -39,6 +40,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/refsdal/whenweall/internal/auth"
@@ -159,18 +162,40 @@ func handleStats(sqlDB *sql.DB) http.HandlerFunc {
 	}
 }
 
+// parseLimitParam reads "limit" off q as an int, returning 0 (rather than an error) for an
+// absent, blank, or non-numeric value — 0 is exactly what List/SearchUsers's own Limit field
+// already treats as "use the default", so an unparseable limit degrades to that default instead
+// of failing the whole request over one bad query parameter.
+func parseLimitParam(q url.Values) int {
+	n, err := strconv.Atoi(q.Get("limit"))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 func handleSearchUsers(sqlDB *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		users, nextCursor, err := SearchUsers(r.Context(), sqlDB, UserFilter{
+		filter := UserFilter{
 			Query:  q.Get("query"),
 			Cursor: q.Get("cursor"),
-		})
+			Limit:  parseLimitParam(q),
+		}
+		users, nextCursor, err := SearchUsers(r.Context(), sqlDB, filter)
 		if err != nil {
 			writeInternalError(w, err)
 			return
 		}
-		httpserver.JSON(w, http.StatusOK, map[string]any{"users": users, "nextCursor": nextCursor})
+		// total is a second COUNT(*) query over the same WHERE (CountUsers's own doc comment) —
+		// fine at the row counts a staff-only support console ever sees; not something this route
+		// needs to optimize away.
+		total, err := CountUsers(r.Context(), sqlDB, filter)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		httpserver.JSON(w, http.StatusOK, map[string]any{"users": users, "nextCursor": nextCursor, "total": total})
 	}
 }
 
@@ -261,16 +286,27 @@ func handleDeleteUser(sqlDB *sql.DB, authSvc *auth.Service) http.HandlerFunc {
 func handleAuditList(sqlDB *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		entries, nextCursor, err := List(r.Context(), sqlDB, AuditFilter{
+		filter := AuditFilter{
 			Action:     q.Get("action"),
 			ActorEmail: q.Get("actor"),
+			TargetType: q.Get("targetType"),
+			TargetID:   q.Get("targetId"),
 			Cursor:     q.Get("cursor"),
-		})
+			Limit:      parseLimitParam(q),
+		}
+		entries, nextCursor, err := List(r.Context(), sqlDB, filter)
 		if err != nil {
 			writeInternalError(w, err)
 			return
 		}
-		httpserver.JSON(w, http.StatusOK, map[string]any{"entries": entries, "nextCursor": nextCursor})
+		// total is a second COUNT(*) query over the same WHERE (CountAuditLog's own doc comment)
+		// — fine at the row counts a staff-only support console ever sees.
+		total, err := CountAuditLog(r.Context(), sqlDB, filter)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		httpserver.JSON(w, http.StatusOK, map[string]any{"entries": entries, "nextCursor": nextCursor, "total": total})
 	}
 }
 
