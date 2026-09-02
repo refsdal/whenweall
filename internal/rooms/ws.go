@@ -55,6 +55,16 @@ type WSOptions struct {
 // and live frames alike) — see writeFrame.
 const wsWriteTimeout = 5 * time.Second
 
+// defaultKeepaliveInterval/defaultPingTimeout are Hub.KeepaliveInterval/Hub.PingTimeout's
+// production defaults (NewHub, hub.go) — see keepaliveLoop. 30s mirrors presence.go's own
+// presenceHeartbeatInterval (the same order of magnitude as this codebase's other liveness
+// signals); PingTimeout is comfortably shorter than the interval so one slow-but-alive round trip
+// can't cause pings to pile up against each other.
+const (
+	defaultKeepaliveInterval = 30 * time.Second
+	defaultPingTimeout       = 10 * time.Second
+)
+
 // pongFrame is this file's entire reply to a client ping — see readPumpLoop.
 var pongFrame = []byte(`{"type":"pong"}`)
 
@@ -123,6 +133,7 @@ func (h *Hub) ServeWS(opts WSOptions) http.HandlerFunc {
 
 		readDone := make(chan struct{})
 		go h.readPumpLoop(ctx, conn, readDone)
+		go h.keepaliveLoop(ctx, conn, cancel)
 
 		h.writePumpLoop(ctx, conn, frames, readDone)
 	}
@@ -293,6 +304,40 @@ func (h *Hub) readPumpLoop(ctx context.Context, conn *websocket.Conn, readDone c
 		}
 		if err := writeFrame(ctx, conn, pongFrame); err != nil {
 			return
+		}
+	}
+}
+
+// keepaliveLoop pings conn every h.KeepaliveInterval to detect a dead peer (I4) — a connection
+// whose TCP session never sees a clean close/RST (a client that vanished mid-flight, an
+// intervening middlebox that silently drops an idle connection, ...) would otherwise sit in
+// h.subs forever, its buffered channel filling with frames nobody will ever read until
+// dispatchLocal eventually drops it as "slow" — a real but needlessly delayed way to notice a
+// peer that's actually just gone.
+//
+// coder/websocket's Ping (conn.Ping) sends a WebSocket-protocol ping frame and blocks for the
+// peer's pong, which is delivered to it via the SAME mechanism as any other control frame: a
+// concurrent Read call processing it. That concurrent reader is readPumpLoop, already running on
+// its own goroutine for this connection's entire lifetime (ws.go's own doc comment on Ping's
+// needing "the concurrent reader" refers to exactly this). A ping that doesn't get its pong within
+// h.PingTimeout means the peer is unresponsive; cancel (the connection's own ctx.CancelFunc) tears
+// the connection down the same way losing the client's own read already does — unblocking
+// writePumpLoop's ctx.Done() case and readPumpLoop's in-flight conn.Read(ctx) call.
+func (h *Hub) keepaliveLoop(ctx context.Context, conn *websocket.Conn, cancel context.CancelFunc) {
+	ticker := time.NewTicker(h.KeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, pingCancel := context.WithTimeout(ctx, h.PingTimeout)
+			err := conn.Ping(pingCtx)
+			pingCancel()
+			if err != nil {
+				cancel()
+				return
+			}
 		}
 	}
 }

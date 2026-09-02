@@ -242,6 +242,45 @@ func awaitZeroPresenceRows(t *testing.T, sqlDB *sql.DB, roomKey string) {
 	t.Fatal("timed out waiting for ws_presence to reach 0 for room")
 }
 
+// TestServeWS_KeepaliveTearsDownDeadPeer is I4's regression test: a peer that stops reading
+// entirely (never issues another conn.Read after its own snapshot) can never answer a WebSocket
+// ping — coder/websocket only processes/responds to control frames from inside an active Read
+// call — so the server's own keepalive ping must eventually time out and tear the connection down.
+// Shrinks Hub.KeepaliveInterval/PingTimeout (test-only fields — see hub.go's own doc comment) so
+// this doesn't need to wait out the real 30s production default.
+//
+// Observed indirectly, through a SECOND connection watching the same room's presence count: rather
+// than trying to read anything more from the dead connection itself (which by construction is not
+// reading, so nothing it could report is a load-bearing assertion), an observer sees presence rise
+// to 2 (both connections' own joins) and then fall back to 1 once the server notices the dead peer
+// and runs its ordinary connection-close cleanup (presenceLeave).
+func TestServeWS_KeepaliveTearsDownDeadPeer(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	hub := startHub(t, url, sqlDB)
+	hub.KeepaliveInterval = 150 * time.Millisecond
+	hub.PingTimeout = 150 * time.Millisecond
+	const roomKey = "poll:ws-keepalive"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.ServeWS(rooms.WSOptions{
+		Authorize: func(r *http.Request) (string, error) { return roomKey, nil },
+		Presence:  true,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	dead := dialWS(t, server, "/ws")
+	defer func() { _ = dead.CloseNow() }()
+	_ = readWSFrame(t, dead, 5*time.Second) // snapshot — the ONLY read this connection ever does.
+
+	observer := dialWS(t, server, "/ws")
+	defer func() { _ = observer.CloseNow() }()
+	_ = readWSFrame(t, observer, 5*time.Second) // snapshot
+
+	awaitPresenceFrame(t, observer, 2) // both connections joined
+	awaitPresenceFrame(t, observer, 1) // dead's keepalive ping timed out; server tore it down
+}
+
 func TestServeWS_AuthorizeErrorRejectsBeforeUpgrade(t *testing.T) {
 	_, sqlDB := testdb.URL(t)
 	hub := rooms.NewHub("", sqlDB, nil) // Authorize fails before the hub is ever touched.

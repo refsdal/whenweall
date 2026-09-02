@@ -147,7 +147,7 @@ func serve() int {
 	srv.RegisterAPI(func(mux *http.ServeMux) {
 		pollsSvc.Register(mux, authSvc, cfg)
 		bookingsSvc.Register(mux, authSvc, cfg)
-		rooms.Register(mux, hub, authSvc, pollsSvc, bookingsSvc, statsSvc)
+		rooms.Register(mux, hub, authSvc, pollsSvc, bookingsSvc, statsSvc, cfg)
 	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)

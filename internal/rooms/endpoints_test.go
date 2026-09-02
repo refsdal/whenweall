@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/refsdal/whenweall/internal/auth"
+	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/rooms"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
@@ -171,7 +172,7 @@ func newTestMux(t *testing.T) (server *httptest.Server, a *fakeWSAuth, polls *fa
 	stats := rooms.NewStatsService(sqlDB, nil)
 
 	mux := http.NewServeMux()
-	rooms.Register(mux, hub, a, polls, bookings, stats)
+	rooms.Register(mux, hub, a, polls, bookings, stats, &config.Config{})
 
 	server = httptest.NewServer(a.middleware(mux))
 	t.Cleanup(server.Close)
@@ -275,6 +276,21 @@ func TestPollWS_SnapshotObservesChangeDuringAuthorize(t *testing.T) {
 	if data["title"] != "after" {
 		t.Errorf("snapshot title = %v, want after (Snapshot must query fresh, post-Subscribe, not reuse a value memoized during Authorize)", data["title"])
 	}
+}
+
+// TestPollWS_ConnectRateLimited is I5's regression test: the poll WS route's connect budget
+// (wsConnectLimit/wsConnectWindow, endpoints.go) rejects a caller once it exceeds 30 connects in
+// the window with 429, the standard rate_limited envelope — the same status/code shape
+// httpserver.RateLimit already uses for every other rate-limited route in this codebase.
+func TestPollWS_ConnectRateLimited(t *testing.T) {
+	server, _, polls, _ := newTestMux(t)
+	polls.byID["p1"] = map[string]any{"id": "p1"}
+
+	for i := 0; i < rooms.TestWSConnectLimit; i++ {
+		conn := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws", nil)
+		_ = conn.CloseNow()
+	}
+	dialWSExpectStatus(t, server, "/api/v1/polls/p1/ws", nil, http.StatusTooManyRequests)
 }
 
 func TestStatsWS_PublicNoPresence(t *testing.T) {

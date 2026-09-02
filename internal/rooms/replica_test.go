@@ -83,12 +83,13 @@ func newReplicaStack(t *testing.T, url string, sqlDB *sql.DB, a *fakeWSAuth) *bo
 	t.Helper()
 	hub := startHub(t, url, sqlDB)
 
+	cfg := &config.Config{AuthSecret: "replica-test-secret-32-characters!!"}
 	pollsSvc := polls.NewService(sqlDB)
-	bookingsSvc := bookings.NewService(&config.Config{AuthSecret: "replica-test-secret-32-characters!!"}, sqlDB)
+	bookingsSvc := bookings.NewService(cfg, sqlDB)
 	stats := rooms.NewStatsService(sqlDB, nil)
 
 	mux := http.NewServeMux()
-	rooms.Register(mux, hub, a, pollsSvc, bookingsSvc, stats)
+	rooms.Register(mux, hub, a, pollsSvc, bookingsSvc, stats, cfg)
 
 	server := httptest.NewServer(a.middleware(mux))
 	t.Cleanup(server.Close)

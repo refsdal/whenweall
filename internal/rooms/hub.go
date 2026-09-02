@@ -115,6 +115,15 @@ type Hub struct {
 	listenURL string
 	log       *slog.Logger
 	replicaID string
+
+	// KeepaliveInterval/PingTimeout configure ws.go's per-connection keepalive (I4): every
+	// connection ServeWS accepts pings the peer every KeepaliveInterval, bounded by PingTimeout,
+	// to detect a dead peer. Exported — unlike ws.go's own unexported constants for values nothing
+	// else needs to vary — purely so a test can shrink them, the same convention jobs.Worker's own
+	// PollInterval/JobTimeout fields already use; NewHub seeds both to sane production defaults and
+	// no production code should need to touch them.
+	KeepaliveInterval time.Duration
+	PingTimeout       time.Duration
 }
 
 // NewHub builds a Hub. listenURL is used only for Run's dedicated LISTEN connection (a pooled
@@ -125,13 +134,15 @@ func NewHub(listenURL string, sqlDB *sql.DB, log *slog.Logger) *Hub {
 		log = slog.Default()
 	}
 	return &Hub{
-		subs:          make(map[string]map[*subscriber]struct{}),
-		watermark:     make(map[string]int64),
-		pendingNotify: make(map[string]map[int64]struct{}),
-		sqlDB:         sqlDB,
-		listenURL:     listenURL,
-		log:           log,
-		replicaID:     db.NewID(),
+		subs:              make(map[string]map[*subscriber]struct{}),
+		watermark:         make(map[string]int64),
+		pendingNotify:     make(map[string]map[int64]struct{}),
+		sqlDB:             sqlDB,
+		listenURL:         listenURL,
+		log:               log,
+		replicaID:         db.NewID(),
+		KeepaliveInterval: defaultKeepaliveInterval,
+		PingTimeout:       defaultPingTimeout,
 	}
 }
 

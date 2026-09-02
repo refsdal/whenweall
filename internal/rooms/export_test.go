@@ -16,6 +16,10 @@ func (h *Hub) PendingNotifyLen(roomKey string) int {
 	return len(h.pendingNotify[roomKey])
 }
 
+// TestWSConnectLimit exposes wsConnectLimit (endpoints.go, I5) so a test can drive exactly that
+// many connects before expecting the next one to be rate-limited, without duplicating the literal.
+const TestWSConnectLimit = wsConnectLimit
+
 // DispatchLocal exposes Hub.dispatchLocal for tests — exported only so
 // TestDroppedRoomIsFullyPruned can exercise the slow-consumer drop path deterministically, purely
 // in-process, with no real Postgres LISTEN session running: real NOTIFY timing cannot be

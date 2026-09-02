@@ -18,8 +18,22 @@ package rooms
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/httpserver"
+)
+
+// wsConnectLimit/wsConnectWindow bound this package's two PUBLIC (no session required) WS
+// routes' own connect rate — I5. Each connect attempt costs a real DB round trip before the
+// handshake can even be evaluated (PollExists's existence query; stats has no gate at all, so its
+// cost is Accept itself), so an unauthenticated caller opening connections in a tight loop is a
+// real, if modest, resource-exhaustion vector otherwise. 30/min per IP is generous for a real
+// browser (at most a handful of tabs, each reconnecting on its own backoff) while still bounding a
+// flood.
+const (
+	wsConnectLimit  = 30
+	wsConnectWindow = time.Minute
 )
 
 // PollViewer identifies the caller connecting to a poll's WS room — the same shape polls.Viewer
@@ -65,17 +79,27 @@ type BookingService interface {
 //
 //   - GET /api/v1/polls/{id}/ws — public (a session, a guest participant token, or a fully
 //     anonymous caller may all connect); 404 for a missing/soft-deleted poll. roomKey "poll:"+id.
-//     Presence on.
+//     Presence on. Connect-rate-limited (wsConnectLimit/wsConnectWindow, I5).
 //   - GET /api/v1/bookings/{pageId}/ws — session required (401), and the session's caller must
 //     manage pageId (403) — managers only, mirroring handleListPageBookings's own gate
-//     (handlers.go). roomKey "booking:"+pageId. Presence on.
+//     (handlers.go). roomKey "booking:"+pageId. Presence on. Deliberately NOT wrapped in the same
+//     connect limiter as the two public routes below: this route is already gated behind a
+//     signed-in session that must also manage the target page, a meaningfully higher bar than any
+//     anonymous per-IP budget would add on top of it — its caller is by construction an
+//     authenticated org member, not an anonymous flood vector. A documented decision, not an
+//     oversight.
 //   - GET /api/v1/stats/ws — fully public, no gate at all. roomKey "stats:global". Presence OFF —
 //     a global anonymous counter has no per-viewer identity worth counting, and StatsRoom.ts's
-//     own DO never tracked one either.
-func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, bookings BookingService, stats *StatsService) {
-	mux.HandleFunc("GET /api/v1/polls/{id}/ws", pollWSHandler(h, a, polls))
+//     own DO never tracked one either. Connect-rate-limited, same as polls above.
+func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, bookings BookingService, stats *StatsService, cfg *config.Config) {
+	// h.sqlDB (not a separate parameter): Register lives in the same package as Hub, so it can
+	// reach the pool the hub itself already holds rather than asking every caller to pass it again
+	// — main.go's own rooms.NewHub(cfg.DatabaseURL, sqlDB, ...) call is the same sqlDB either way.
+	connectLimit := httpserver.PublicRateLimit(h.sqlDB, "rooms", "ws_connect", wsConnectLimit, wsConnectWindow, cfg.TrustProxy)
+
+	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
 	mux.HandleFunc("GET /api/v1/bookings/{pageId}/ws", bookingWSHandler(h, a, bookings))
-	mux.HandleFunc("GET /api/v1/stats/ws", statsWSHandler(h, stats))
+	mux.Handle("GET /api/v1/stats/ws", connectLimit(statsWSHandler(h, stats)))
 }
 
 // pollWSHandler builds one poll WS connection's handler per request (rather than a single
