@@ -4,10 +4,11 @@
 // orgID but no userID — see requireOrgPage's own doc comment in pages.go). Mirrors
 // internal/polls/service.go's RequireManageable/canManagePoll pair exactly, generalized to a
 // name that isn't poll-specific since this task's HTTP handler layer (handlers.go) needs the same
-// gate in front of THREE different resource shapes: a booking page directly (UpdatePage/
-// DeletePage/GetOwnedPage/ListPageBookings), a booking reached via its page (the organiser-cancel
-// path, requirement (e)), and the org itself, which has no per-resource "creator" at all
-// (SetOrgSlug/org-handle, requirement (a)).
+// gate in front of TWO different resource shapes: a booking page directly (UpdatePage/
+// DeletePage/GetOwnedPage/ListPageBookings), and a booking reached via its page (the
+// organiser-cancel path, requirement (e)). The org's own public handle (SetOrgSlug/org-handle) is
+// NOT one of these — see RequireOwnerRole below for why that route needs a stricter, separate
+// gate instead of canManageContent's own creator-or-admin-or-owner one.
 package bookings
 
 import (
@@ -23,10 +24,7 @@ import (
 // ALL (any role) first — no membership is an unconditional false, checked before anything else,
 // exactly like internal/polls's canManagePoll (participants.go) already does for the identical
 // TS predicate — and, only for an actual member, either createdBy's own match or holding an
-// 'owner'/'admin' role in organizationID. userID == "" (no signed-in identity at all) is always
-// false. createdBy.Valid == false (no creator to match at all — SetOrgSlug's own call site, since
-// an organization isn't "created by" a member the way a page or a booking is) simply means that
-// half of the OR can never fire, so this reduces to the plain role check for that caller.
+// 'owner'/'admin' role in organizationID.
 //
 // The membership-first ordering matters for the same reason canManagePoll's own doc comment gives:
 // someone who created a page and later left the org (or was removed) must lose the ability to
@@ -94,24 +92,33 @@ func (s *Service) RequireManageableBooking(ctx context.Context, bookingID, orgID
 	return s.RequireManageablePage(ctx, booking.PageID, orgID, userID)
 }
 
-// RequireManageableOrg is RequireManageablePage's counterpart for the org itself — SetOrgSlug's
-// own auth gate (requirement (a) explicitly folds "org-handle" into this same creator-or-manager
-// gate, rather than porting setHandle's own stricter requireOwnerRole, TS's "owner only, not
-// admin" rule for this one setting — see pages.functions.ts's own doc comment on why the TS
-// source treats it differently; this Go port's task brief does not, so an org admin (not just its
-// owner) can change the handle here). There is no "creator" to match for an organization itself
-// (createdBy passed as sql.NullInt64{} — always invalid), so this reduces to "is userID a member
-// of orgID holding the owner/admin role" — the plain half of canManageContent.
-func (s *Service) RequireManageableOrg(ctx context.Context, orgID, userID string) error {
+// RequireOwnerRole ports requireOwnerRole (org-roles.ts) — SetOrgSlug/org-handle's own auth gate,
+// deliberately NOT canManageContent/RequireManageablePage's wider creator-or-admin-or-owner one:
+// renaming the org's public handle moves every member's booking-page links, so (spec §1) it isn't
+// "manage everything" territory for an admin — only the org's OWNER may do it. There is no
+// "creator" concept for an organization itself, so this is a plain membership+role check, not a
+// canManageContent call: NOT_FOUND for an org id that fails to parse (mirrors
+// RequireManageablePage's own wrong-org convention), FORBIDDEN for anyone who isn't a member with
+// the 'owner' role specifically (a non-member, or a member whose role is 'admin'/'member').
+func (s *Service) RequireOwnerRole(ctx context.Context, orgID, userID string) error {
 	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
 	if err != nil {
 		return ErrNotFound
 	}
-	canManage, err := s.canManageContent(ctx, orgIDInt, sql.NullInt64{}, userID)
+	if userID == "" {
+		return ErrForbidden
+	}
+	userIDInt, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return ErrForbidden
+	}
+	isOwner, err := s.q.MemberHasOwnerRole(ctx, queries.MemberHasOwnerRoleParams{
+		OrganizationID: orgIDInt, UserID: userIDInt,
+	})
 	if err != nil {
 		return err
 	}
-	if !canManage {
+	if !isOwner {
 		return ErrForbidden
 	}
 	return nil

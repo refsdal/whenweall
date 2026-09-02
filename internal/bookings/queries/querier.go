@@ -55,6 +55,11 @@ type Querier interface {
 	// in organizationId? (The creator-manages-their-own-content half is checked separately by the
 	// caller against the resource's own createdBy — this query only ever answers the role question.)
 	MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error)
+	// Ports requireOwnerRole's own predicate (org-roles.ts): does userId hold the 'owner' role
+	// specifically (not admin) in organizationId? Used only by SetOrgSlug/org-handle's own
+	// RequireOwnerRole (authz.go) — every other owner-facing route accepts admin too
+	// (MemberHasManagingRole above).
+	MemberHasOwnerRole(ctx context.Context, arg MemberHasOwnerRoleParams) (bool, error)
 	SoftDeleteBookingPage(ctx context.Context, arg SoftDeleteBookingPageParams) error
 	// Task 5 (Google Calendar sync) queries below.
 	// Persists (or clears, when null) the booking's known Google Calendar event id. See

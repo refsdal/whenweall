@@ -638,6 +638,30 @@ func (q *Queries) MemberHasManagingRole(ctx context.Context, arg MemberHasManagi
 	return has_role, err
 }
 
+const memberHasOwnerRole = `-- name: MemberHasOwnerRole :one
+SELECT EXISTS (
+  SELECT 1 FROM organization_members om
+  JOIN organization_member_roles omr ON omr.member_id = om.id
+  WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role = 'owner'
+) AS has_role
+`
+
+type MemberHasOwnerRoleParams struct {
+	OrganizationID int64
+	UserID         int64
+}
+
+// Ports requireOwnerRole's own predicate (org-roles.ts): does userId hold the 'owner' role
+// specifically (not admin) in organizationId? Used only by SetOrgSlug/org-handle's own
+// RequireOwnerRole (authz.go) — every other owner-facing route accepts admin too
+// (MemberHasManagingRole above).
+func (q *Queries) MemberHasOwnerRole(ctx context.Context, arg MemberHasOwnerRoleParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, memberHasOwnerRole, arg.OrganizationID, arg.UserID)
+	var has_role bool
+	err := row.Scan(&has_role)
+	return has_role, err
+}
+
 const softDeleteBookingPage = `-- name: SoftDeleteBookingPage :exec
 UPDATE booking_pages SET deleted_at = $2, updated_at = $2 WHERE id = $1
 `

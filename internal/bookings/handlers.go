@@ -8,12 +8,13 @@
 // This task also folds in five requirements accumulated from Tasks 2-5's own code reviews, each
 // only reachable once an actual caller identity (auth.Session) exists to check it against:
 //
-//  1. RequireManageable-equivalent (a): GetOwnedPage/UpdatePage/DeletePage/ListPageBookings,
-//     SetOrgSlug (org/handle), and the organiser half of Cancel are all gated behind a
-//     canManageContent-shaped check (authz.go's RequireManageablePage/RequireManageableOrg/
-//     RequireManageableBooking) before the underlying service call — those methods' own
-//     brief-pinned signatures (pages.go/bookings.go) carry an orgID but no userID/role to check
-//     against themselves, mirroring internal/polls's own RequireManageable retrofit exactly.
+//  1. RequireManageable-equivalent (a): GetOwnedPage/UpdatePage/DeletePage/ListPageBookings and
+//     the organiser half of Cancel are gated behind a canManageContent-shaped check (authz.go's
+//     RequireManageablePage/RequireManageableBooking) before the underlying service call — those
+//     methods' own brief-pinned signatures (pages.go/bookings.go) carry an orgID but no
+//     userID/role to check against themselves, mirroring internal/polls's own RequireManageable
+//     retrofit exactly. SetOrgSlug (org/handle) is gated separately, by the stricter
+//     RequireOwnerRole (authz.go) — see handleSetOrgSlug's own doc comment for why.
 //  2. SetOrgSlug's validation field key (b): "handle", not "slug" — fixed at the source
 //     (schemas.go's validateHandle), not patched here; see that function's own doc comment.
 //  3. UpdatePage's full-replace semantics (c): see handleUpdatePage's own doc comment.
@@ -47,14 +48,18 @@ import (
 type Auth = httpserver.Auth
 
 // Register mounts this package's whole HTTP surface on mux, following internal/polls/
-// handlers.go's Register exactly: thin handlers, a single shared public rate limiter for every
-// booking-flow endpoint a visitor can hit (mirroring src/server/bookings/bookings.functions.ts's
-// own SERVER_FN_MIDDLEWARE, whose every visitor-facing entry point — getPublicAvailability,
-// bookSlot, cancelBooking, rescheduleBooking — shares the single 'book' rate-limit bucket; see
-// this task's own accumulated-requirements note on why cancel/reschedule are ALSO captcha-gated
-// here even though the TS source itself only calls requireTurnstile from bookSlot: this Go port
-// widens that gate to every anonymous mutating booking-flow call, matching internal/polls's own
-// uniform "anonymous mutation -> captcha" convention rather than TS's narrower one).
+// handlers.go's Register exactly: thin handlers, a single shared public rate limiter
+// (bookLimit) for every visitor-facing endpoint on this public booking-flow surface — mirroring
+// src/server/bookings/bookings.functions.ts's own SERVER_FN_MIDDLEWARE, whose every
+// visitor-facing entry point (getPublicAvailability, bookSlot, cancelBooking, rescheduleBooking)
+// shares the single 'book' rate-limit bucket — plus GetPublicPage, which the TS source has no
+// standalone route for at all (it's only ever called internally by getPublicAvailability there);
+// this Go port's own REST split gives it a dedicated endpoint, so it gets the same bookLimit
+// rather than being an unmetered slug-enumeration surface. Captcha-if-anon (RequireCaptchaIfAnon)
+// is narrower than the rate limiter: only Book actually calls requireTurnstile in the TS source
+// (bookSlot), so only handleBook checks it here — cancelBooking/rescheduleBooking are already
+// authenticated by the manage token itself and never call requireTurnstile in the TS source
+// either, so this port doesn't add a captcha gate to handleCancel/handleReschedule.
 func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	bookLimit := httpserver.PublicRateLimit(s.db, "bookings", "book", 20, time.Minute, cfg.TrustProxy)
 
@@ -69,13 +74,13 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("POST /api/v1/org/handle", httpserver.WithOrgSession(a, s.handleSetOrgSlug))
 	mux.Handle("POST /api/v1/me/google/disconnect", s.handleDisconnectGoogle(a))
 
-	mux.HandleFunc("GET /api/v1/book/{org}/{page}", s.handleGetPublicPage)
+	mux.Handle("GET /api/v1/book/{org}/{page}", bookLimit(http.HandlerFunc(s.handleGetPublicPage)))
 	mux.Handle("GET /api/v1/book/{org}/{page}/availability", bookLimit(http.HandlerFunc(s.handlePublicAvailability)))
 	mux.Handle("POST /api/v1/book/{org}/{page}/bookings", bookLimit(http.HandlerFunc(s.handleBook(a, cfg))))
 
 	mux.HandleFunc("GET /api/v1/bookings/{id}/manage", s.handleManagedBooking)
-	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a, cfg))))
-	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule(a, cfg))))
+	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a))))
+	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule())))
 }
 
 // manageTokenFromQuery resolves the visitor manage-token credential from this request's own `?t=`
@@ -335,11 +340,13 @@ func (s *Service) handleGoogleStatus(w http.ResponseWriter, r *http.Request) {
 	httpserver.JSON(w, http.StatusOK, map[string]bool{"available": available})
 }
 
-// handleSetOrgSlug ports setHandle (pages.functions.ts) — see RequireManageableOrg's own doc
-// comment (authz.go) for how this Go port's auth gate deliberately deviates from setHandle's own
-// stricter requireOwnerRole, per this task's accumulated requirement (a).
+// handleSetOrgSlug ports setHandle (pages.functions.ts) — gated by RequireOwnerRole (authz.go),
+// not the wider RequireManageablePage-shaped canManageContent check every other owner-facing
+// route in this file uses: renaming the org's public handle isn't "manage everything" territory
+// for an admin (spec §1 — see RequireOwnerRole's own doc comment), so only the org's owner may
+// call this.
 func (s *Service) handleSetOrgSlug(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
-	if err := s.RequireManageableOrg(r.Context(), sess.ActiveOrgID, sess.UserID); err != nil {
+	if err := s.RequireOwnerRole(r.Context(), sess.ActiveOrgID, sess.UserID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -488,17 +495,13 @@ func (s *Service) handleManagedBooking(w http.ResponseWriter, r *http.Request) {
 // handleCancel ports cancelBooking (bookings.functions.ts), plus this task's accumulated
 // requirement (e): without a manage token, the caller must be signed in AND manage the booking's
 // page (RequireManageableBooking, authz.go's creator-or-org-manager gate) — only then is
-// Cancel(byOrganiser: true) reached. Captcha-if-anon is checked before either branch: it's a
-// no-op for a signed-in caller (the organiser branch always is), so this only ever gates an
-// anonymous token-holder.
-func (s *Service) handleCancel(a Auth, cfg *config.Config) http.HandlerFunc {
+// Cancel(byOrganiser: true) reached. No captcha gate here (unlike handleBook): a token-bearing
+// visitor is already authenticated by the manage token itself, and cancelBooking never calls
+// requireTurnstile in the TS source either (only bookSlot does) — see this file's Register doc
+// comment.
+func (s *Service) handleCancel(a Auth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bookingID := r.PathValue("id")
-
-		if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
-			httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
-			return
-		}
 
 		if token := manageTokenFromQuery(r); token != "" {
 			if err := s.Cancel(r.Context(), bookingID, token, false); err != nil {
@@ -526,15 +529,12 @@ func (s *Service) handleCancel(a Auth, cfg *config.Config) http.HandlerFunc {
 }
 
 // handleReschedule ports rescheduleBooking (bookings.functions.ts) — token-only (see this file's
-// Register doc comment; Reschedule itself, bookings.go, carries no byOrganiser flag at all).
-func (s *Service) handleReschedule(a Auth, cfg *config.Config) http.HandlerFunc {
+// Register doc comment; Reschedule itself, bookings.go, carries no byOrganiser flag at all). No
+// captcha gate here either, for the same reason handleCancel has none: the manage token already
+// authenticates the caller, and rescheduleBooking never calls requireTurnstile in the TS source.
+func (s *Service) handleReschedule() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bookingID := r.PathValue("id")
-
-		if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
-			httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
-			return
-		}
 
 		var req rescheduleRequest
 		if !httpserver.DecodeJSON(w, r, &req) {

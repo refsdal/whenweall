@@ -153,6 +153,17 @@ SELECT EXISTS (
   WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role IN ('owner', 'admin')
 ) AS has_role;
 
+-- name: MemberHasOwnerRole :one
+-- Ports requireOwnerRole's own predicate (org-roles.ts): does userId hold the 'owner' role
+-- specifically (not admin) in organizationId? Used only by SetOrgSlug/org-handle's own
+-- RequireOwnerRole (authz.go) — every other owner-facing route accepts admin too
+-- (MemberHasManagingRole above).
+SELECT EXISTS (
+  SELECT 1 FROM organization_members om
+  JOIN organization_member_roles omr ON omr.member_id = om.id
+  WHERE om.organization_id = $1 AND om.user_id = $2 AND omr.role = 'owner'
+) AS has_role;
+
 -- name: DisableGoogleSyncForMember :exec
 -- Ports disconnectGoogleSync (pages.ts): turns googleSync off on every booking page whose
 -- member_user_id is userId — the account row itself (accounts, Limen's) is left untouched; only

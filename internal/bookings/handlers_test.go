@@ -548,6 +548,8 @@ func TestHandlerSetOrgSlug(t *testing.T) {
 	addOrgMember(t, d, orgID, userID, "owner")
 	a.login(&auth.Session{UserID: userID, ActiveOrgID: orgID})
 
+	// Owner-only (review fix, not requirement (a)'s wider creator-or-admin-or-owner gate): the
+	// org's OWNER succeeds — see the "an admin is forbidden" case below for the other half.
 	rec := doRequest(t, h, "POST", "/api/v1/org/handle", map[string]any{"handle": "my-handle"}, sessHeader(userID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
@@ -567,7 +569,7 @@ func TestHandlerSetOrgSlug(t *testing.T) {
 		}
 	})
 
-	t.Run("requirement (a): a plain member is forbidden", func(t *testing.T) {
+	t.Run("a plain member is forbidden", func(t *testing.T) {
 		memberID := seedUser(t, d)
 		addOrgMember(t, d, orgID, memberID, "member")
 		a.login(&auth.Session{UserID: memberID, ActiveOrgID: orgID})
@@ -578,14 +580,17 @@ func TestHandlerSetOrgSlug(t *testing.T) {
 		}
 	})
 
-	t.Run("requirement (a): an admin succeeds", func(t *testing.T) {
+	t.Run("review fix: an admin (not just a plain member) is forbidden — owner-only, not owner-or-admin", func(t *testing.T) {
 		adminID := seedUser(t, d)
 		addOrgMember(t, d, orgID, adminID, "admin")
 		a.login(&auth.Session{UserID: adminID, ActiveOrgID: orgID})
 
 		rec := doRequest(t, h, "POST", "/api/v1/org/handle", map[string]any{"handle": "admin-set-handle"}, sessHeader(adminID))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "forbidden" {
+			t.Errorf("code = %q, want forbidden", errCode(t, rec))
 		}
 	})
 }
@@ -611,6 +616,26 @@ func TestHandlerGetPublicPage(t *testing.T) {
 		}
 		if errCode(t, rec) != "not_found" {
 			t.Errorf("code = %q, want not_found", errCode(t, rec))
+		}
+	})
+
+	// Review fix: this endpoint didn't exist as a standalone route in the TS source at all (it
+	// only ever called getPublicPage internally, from getPublicAvailability) — the REST split
+	// introduced it as its own unmetered slug-enumeration surface. It now shares the same
+	// bookLimit bucket as every other visitor-facing endpoint (see Register's own doc comment),
+	// so it 429s past the shared limit (20/minute) exactly like Book/PublicAvailability/Cancel/
+	// Reschedule do.
+	t.Run("the shared 'book' rate limiter applies", func(t *testing.T) {
+		p2 := setupHandlerPage(t, testConfig(t))
+		var last *httptest.ResponseRecorder
+		for i := 0; i < 21; i++ {
+			last = doRequest(t, p2.h, "GET", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug, nil, nil)
+		}
+		if last.Code != http.StatusTooManyRequests {
+			t.Fatalf("21st request: status = %d, want 429; body=%s", last.Code, last.Body)
+		}
+		if errCode(t, last) != "rate_limited" {
+			t.Errorf("code = %q, want rate_limited", errCode(t, last))
 		}
 	})
 }
