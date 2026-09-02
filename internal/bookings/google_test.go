@@ -213,10 +213,10 @@ func TestRescheduleRejectsSlotBlockedByGoogleFreebusy(t *testing.T) {
 		t.Fatalf("Book: %v", err)
 	}
 
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, blockedSlot); !errors.Is(err, bookings.ErrSlotTaken) {
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, blockedSlot, false); !errors.Is(err, bookings.ErrSlotTaken) {
 		t.Errorf("reschedule onto Google-busy slot: err = %v, want ErrSlotTaken", err)
 	}
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, openSlot); err != nil {
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, openSlot, false); err != nil {
 		t.Errorf("reschedule onto an open slot: err = %v, want nil", err)
 	}
 }
@@ -536,7 +536,7 @@ func TestGoogleSyncRescheduleDeletesThenInserts(t *testing.T) {
 	}
 
 	newStart := futureUTCSlot(3, 14, 0)
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart); err != nil {
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
 
@@ -596,7 +596,7 @@ func TestGoogleSyncRescheduleDeleteFailureSkipsInsert(t *testing.T) {
 	}
 
 	newStart := futureUTCSlot(3, 14, 0)
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart); err != nil {
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
 

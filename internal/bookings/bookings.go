@@ -449,17 +449,18 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 }
 
 // Reschedule ports rescheduleBooking (bookings.ts) — see this file's package doc comment for the
-// atomicity contract (the same page-row lock Book takes, re-acquired here). Always requires
-// manageToken to match (ErrInvalidToken otherwise — see ErrInvalidToken's own doc comment in
-// errors.go for Task 6's requirement (d) that changed this from an earlier ErrNotFound) — this
-// port's fixed signature carries no byOrganiser flag the way Cancel's does, so there is no
-// separate owner-forced path here; an owner-initiated reschedule (were one ever added) would need
-// its own method, the same way UnclaimFor sits beside Unclaim in internal/polls/claims.go. Unlike
-// createBooking's own busy parameter, this port's fixed signature takes no caller-supplied
-// Google-freebusy list — there is no external caller here the way Book's HTTP handler is; instead
-// this method does its own internal prefetch (see this file's package doc comment's own I1 note)
-// of the page's Google Calendar freebusy, merged in alongside the page's own live bookings.
-func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string, newStart time.Time) (*BookingResult, error) {
+// atomicity contract (the same page-row lock Book takes, re-acquired here). Requires manageToken
+// to match, UNLESS byOrganiser is true — I6's own organiser fallback (accumulated requirement
+// (e)'s sibling for this method, ported the same way Cancel's own byOrganiser flag already works:
+// Task 6's HTTP layer establishes byOrganiser via RequireManageableBooking, authz.go, before
+// calling this with byOrganiser: true; a wrong manageToken (byOrganiser: false) is ErrInvalidToken
+// — see ErrInvalidToken's own doc comment in errors.go for Task 6's requirement (d) that changed
+// this from an earlier ErrNotFound). Unlike createBooking's own busy parameter, this port's fixed
+// signature takes no caller-supplied Google-freebusy list — there is no external caller here the
+// way Book's HTTP handler is; instead this method does its own internal prefetch (see this file's
+// package doc comment's own I1 note) of the page's Google Calendar freebusy, merged in alongside
+// the page's own live bookings.
+func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string, newStart time.Time, byOrganiser bool) (*BookingResult, error) {
 	// I1: resolve the booking/page read-only, and run the Google Calendar freebusy lookup, BEFORE
 	// ever opening the transaction that takes the page row lock below — see Book's identical
 	// prefetch, and this file's package doc comment, for why. Every value read in this pass is
@@ -472,7 +473,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
-	if !s.verifyManageToken(bookingID, manageToken) {
+	if !byOrganiser && !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 	from, to := bookingWindow(newStart)
@@ -501,7 +502,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
-	if !s.verifyManageToken(bookingID, manageToken) {
+	if !byOrganiser && !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 	if booking.Status == "cancelled" {
@@ -612,15 +613,18 @@ func toBookingView(b queries.Booking) BookingView {
 	}
 }
 
-// ManagedBooking ports the token-authenticated half of getBookingForManage (bookings.ts) — this
-// port's fixed signature (bookingID, manageToken) carries no org/user identity, so the
-// org-manager auth branch (requireOrgPage-shaped: same-org check + canManageContent) isn't
-// reachable here, the same deviation GetOwnedPage/ListPageBookings already document; Task 6's own
-// HTTP endpoint table keeps GET .../manage token-only (unlike POST .../cancel, whose organiser
-// fallback is this task's accumulated requirement (e)), so this stays token-only too. A wrong
-// token is ErrInvalidToken (see ErrInvalidToken's own doc comment in errors.go for Task 6's
-// requirement (d) that changed this from an earlier ErrNotFound).
-func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken string) (*ManagedBookingView, error) {
+// ManagedBooking ports the token-authenticated half of getBookingForManage (bookings.ts), plus
+// I6's own organiser fallback: byOrganiser (Task 6's HTTP layer sets it via
+// RequireManageableBooking, authz.go, exactly the way handleCancel's own byOrganiser path already
+// works — see handleManagedBooking's own doc comment, handlers.go) skips the token check
+// entirely, the same shape Cancel's/Reschedule's own byOrganiser flag already has. This method's
+// fixed signature (bookingID, manageToken, byOrganiser) still carries no org/user identity of its
+// own, so the org-manager auth branch (requireOrgPage-shaped: same-org check + canManageContent)
+// isn't reachable HERE — it's the HTTP layer's job to have already run it before setting
+// byOrganiser: true, the same deviation GetOwnedPage/ListPageBookings already document. A wrong
+// token (byOrganiser: false) is ErrInvalidToken (see ErrInvalidToken's own doc comment in
+// errors.go for Task 6's requirement (d) that changed this from an earlier ErrNotFound).
+func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken string, byOrganiser bool) (*ManagedBookingView, error) {
 	booking, err := s.q.GetBooking(ctx, bookingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -628,7 +632,7 @@ func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken str
 	if err != nil {
 		return nil, err
 	}
-	if !s.verifyManageToken(bookingID, manageToken) {
+	if !byOrganiser && !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 

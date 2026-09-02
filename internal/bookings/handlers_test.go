@@ -796,6 +796,37 @@ func TestHandlerManagedBooking(t *testing.T) {
 		}
 	})
 
+	// I6: the same no-token-but-a-session organiser fallback handleCancel's own requirement (e)
+	// already has — see this file's Register doc comment's own I6 note.
+	t.Run("I6: the page's own creator views with no token, byOrganiser", func(t *testing.T) {
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/manage", nil, sessHeader(p.ownerID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		view := decodeBody[bookings.ManagedBookingView](t, rec)
+		if view.ID != booked.Booking.ID {
+			t.Errorf("ID = %q, want %q", view.ID, booked.Booking.ID)
+		}
+	})
+
+	t.Run("I6: a plain member with no token is forbidden", func(t *testing.T) {
+		memberID := seedUser(t, p.d)
+		addOrgMember(t, p.d, p.orgID, memberID, "member")
+		p.a.login(&auth.Session{UserID: memberID, ActiveOrgID: p.orgID})
+
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/manage", nil, sessHeader(memberID))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("I6: no token and no session is 401", func(t *testing.T) {
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/manage", nil, nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body)
+		}
+	})
+
 	// M1: this endpoint was unmetered — an anonymous caller could brute-force a booking's
 	// 43-character manage token with no rate limit at all. It now shares the same bookLimit
 	// bucket as every other visitor-facing endpoint (Register's own doc comment), so it 429s
@@ -941,6 +972,36 @@ func TestHandlerReschedule(t *testing.T) {
 		}
 		if errCode(t, rec) != "invalid_token" {
 			t.Errorf("code = %q, want invalid_token", errCode(t, rec))
+		}
+	})
+
+	// I6: the same no-token-but-a-session organiser fallback handleCancel's own requirement (e)
+	// already has — see this file's Register doc comment's own I6 note.
+	t.Run("I6: the page's own creator reschedules with no token, byOrganiser", func(t *testing.T) {
+		rec := doRequest(t, p.h, "POST", "/api/v1/bookings/"+booked.Booking.ID+"/reschedule",
+			map[string]any{"startAt": rfc3339(futureUTCSlot(3, 14, 0))}, sessHeader(p.ownerID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("I6: a plain member with no token is forbidden", func(t *testing.T) {
+		memberID := seedUser(t, p.d)
+		addOrgMember(t, p.d, p.orgID, memberID, "member")
+		p.a.login(&auth.Session{UserID: memberID, ActiveOrgID: p.orgID})
+
+		rec := doRequest(t, p.h, "POST", "/api/v1/bookings/"+booked.Booking.ID+"/reschedule",
+			map[string]any{"startAt": rfc3339(futureUTCSlot(3, 15, 0))}, sessHeader(memberID))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("I6: no token and no session is 401", func(t *testing.T) {
+		rec := doRequest(t, p.h, "POST", "/api/v1/bookings/"+booked.Booking.ID+"/reschedule",
+			map[string]any{"startAt": rfc3339(futureUTCSlot(3, 16, 0))}, nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body)
 		}
 	})
 }

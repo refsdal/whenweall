@@ -131,7 +131,7 @@ func TestBook(t *testing.T) {
 			t.Errorf("len(ManageToken) = %d, want 43", len(result.ManageToken))
 		}
 
-		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken)
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken, false)
 		if err != nil {
 			t.Fatalf("ManagedBooking: %v", err)
 		}
@@ -343,7 +343,7 @@ func TestCancel(t *testing.T) {
 		if err := p.svc.Cancel(ctx, result.BookingID, result.ManageToken, false); err != nil {
 			t.Fatalf("Cancel: %v", err)
 		}
-		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken)
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken, false)
 		if err != nil {
 			t.Fatalf("ManagedBooking: %v", err)
 		}
@@ -391,7 +391,7 @@ func TestCancel(t *testing.T) {
 		if err := p.svc.Cancel(ctx, result.BookingID, "", true); err != nil {
 			t.Fatalf("Cancel(byOrganiser): %v", err)
 		}
-		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken)
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken, false)
 		if err != nil {
 			t.Fatalf("ManagedBooking: %v", err)
 		}
@@ -413,7 +413,7 @@ func TestReschedule(t *testing.T) {
 		}
 
 		newStart := futureUTCSlot(3, 11, 0)
-		resched, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart)
+		resched, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false)
 		if err != nil {
 			t.Fatalf("Reschedule: %v", err)
 		}
@@ -427,7 +427,7 @@ func TestReschedule(t *testing.T) {
 			t.Errorf("ManageToken = %q, want empty (Reschedule mints no new token)", resched.ManageToken)
 		}
 
-		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken)
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken, false)
 		if err != nil {
 			t.Fatalf("ManagedBooking: %v", err)
 		}
@@ -446,7 +446,7 @@ func TestReschedule(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		resched, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, start)
+		resched, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, start, false)
 		if err != nil {
 			t.Fatalf("Reschedule(same slot): %v", err)
 		}
@@ -465,7 +465,7 @@ func TestReschedule(t *testing.T) {
 		blocked := futureUTCSlot(3, 11, 0)
 		makeBooking(t, p.db, p.pageID, blocked, "confirmed")
 
-		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, blocked); !errors.Is(err, bookings.ErrSlotTaken) {
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, blocked, false); !errors.Is(err, bookings.ErrSlotTaken) {
 			t.Errorf("err = %v, want ErrSlotTaken", err)
 		}
 	})
@@ -478,7 +478,7 @@ func TestReschedule(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		if _, err := p.svc.Reschedule(ctx, result.BookingID, "wrong-token", futureUTCSlot(3, 11, 0)); !errors.Is(err, bookings.ErrInvalidToken) {
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, "wrong-token", futureUTCSlot(3, 11, 0), false); !errors.Is(err, bookings.ErrInvalidToken) {
 			t.Errorf("err = %v, want ErrInvalidToken", err)
 		}
 	})
@@ -494,7 +494,7 @@ func TestReschedule(t *testing.T) {
 			t.Fatalf("Cancel: %v", err)
 		}
 
-		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, futureUTCSlot(3, 11, 0)); !errors.Is(err, bookings.ErrConflict) {
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, futureUTCSlot(3, 11, 0), false); !errors.Is(err, bookings.ErrConflict) {
 			t.Errorf("err = %v, want ErrConflict", err)
 		}
 	})
@@ -508,7 +508,7 @@ func TestReschedule(t *testing.T) {
 		}
 
 		past := time.Now().UTC().Add(-1 * time.Hour)
-		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, past); !errors.Is(err, bookings.ErrBookingPast) {
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, past, false); !errors.Is(err, bookings.ErrBookingPast) {
 			t.Errorf("err = %v, want ErrBookingPast", err)
 		}
 	})
@@ -526,8 +526,31 @@ func TestReschedule(t *testing.T) {
 			t.Fatalf("UpdatePage: %v", err)
 		}
 
-		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, futureUTCSlot(3, 11, 0)); !errors.Is(err, bookings.ErrPagePaused) {
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, futureUTCSlot(3, 11, 0), false); !errors.Is(err, bookings.ErrPagePaused) {
 			t.Errorf("err = %v, want ErrPagePaused", err)
+		}
+	})
+
+	// I6: byOrganiser bypasses the token check entirely — the same shape Cancel's own
+	// byOrganiser flag already has (see TestCancel's identical case above).
+	t.Run("I6: byOrganiser bypasses the token check", func(t *testing.T) {
+		p := setupBookablePage(t, nil)
+		start := futureUTCSlot(3, 9, 0)
+		result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "a@example.com"))
+		if err != nil {
+			t.Fatalf("Book: %v", err)
+		}
+
+		newStart := futureUTCSlot(3, 11, 0)
+		if _, err := p.svc.Reschedule(ctx, result.BookingID, "wrong-token-doesnt-matter", newStart, true); err != nil {
+			t.Fatalf("Reschedule(byOrganiser): %v", err)
+		}
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken, false)
+		if err != nil {
+			t.Fatalf("ManagedBooking: %v", err)
+		}
+		if view.StartAt != formatISOForTest(newStart) {
+			t.Errorf("StartAt = %q, want %q", view.StartAt, formatISOForTest(newStart))
 		}
 	})
 }
@@ -543,7 +566,7 @@ func TestManagedBooking(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken)
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, result.ManageToken, false)
 		if err != nil {
 			t.Fatalf("ManagedBooking: %v", err)
 		}
@@ -569,14 +592,14 @@ func TestManagedBooking(t *testing.T) {
 			t.Fatalf("Book: %v", err)
 		}
 
-		if _, err := p.svc.ManagedBooking(ctx, result.BookingID, "wrong-token"); !errors.Is(err, bookings.ErrInvalidToken) {
+		if _, err := p.svc.ManagedBooking(ctx, result.BookingID, "wrong-token", false); !errors.Is(err, bookings.ErrInvalidToken) {
 			t.Errorf("err = %v, want ErrInvalidToken", err)
 		}
 	})
 
 	t.Run("an unknown booking id returns NOT_FOUND", func(t *testing.T) {
 		p := setupBookablePage(t, nil)
-		if _, err := p.svc.ManagedBooking(ctx, "missing", "whatever"); !errors.Is(err, bookings.ErrNotFound) {
+		if _, err := p.svc.ManagedBooking(ctx, "missing", "whatever", false); !errors.Is(err, bookings.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
 	})
@@ -602,18 +625,37 @@ func TestManagedBooking(t *testing.T) {
 			t.Fatalf("A and B minted the same manage token: %q", a.ManageToken)
 		}
 
-		if _, err := p.svc.ManagedBooking(ctx, b.BookingID, a.ManageToken); !errors.Is(err, bookings.ErrInvalidToken) {
+		if _, err := p.svc.ManagedBooking(ctx, b.BookingID, a.ManageToken, false); !errors.Is(err, bookings.ErrInvalidToken) {
 			t.Errorf("B with A's token: err = %v, want ErrInvalidToken", err)
 		}
-		if _, err := p.svc.ManagedBooking(ctx, a.BookingID, b.ManageToken); !errors.Is(err, bookings.ErrInvalidToken) {
+		if _, err := p.svc.ManagedBooking(ctx, a.BookingID, b.ManageToken, false); !errors.Is(err, bookings.ErrInvalidToken) {
 			t.Errorf("A with B's token: err = %v, want ErrInvalidToken", err)
 		}
 		// Each still opens its own.
-		if _, err := p.svc.ManagedBooking(ctx, a.BookingID, a.ManageToken); err != nil {
+		if _, err := p.svc.ManagedBooking(ctx, a.BookingID, a.ManageToken, false); err != nil {
 			t.Errorf("A with A's own token: err = %v, want nil", err)
 		}
-		if _, err := p.svc.ManagedBooking(ctx, b.BookingID, b.ManageToken); err != nil {
+		if _, err := p.svc.ManagedBooking(ctx, b.BookingID, b.ManageToken, false); err != nil {
 			t.Errorf("B with B's own token: err = %v, want nil", err)
+		}
+	})
+
+	// I6: byOrganiser bypasses the token check entirely — the same shape Cancel's/Reschedule's
+	// own byOrganiser flag already has.
+	t.Run("I6: byOrganiser bypasses the token check", func(t *testing.T) {
+		p := setupBookablePage(t, nil)
+		start := futureUTCSlot(3, 9, 0)
+		result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "a@example.com"))
+		if err != nil {
+			t.Fatalf("Book: %v", err)
+		}
+
+		view, err := p.svc.ManagedBooking(ctx, result.BookingID, "wrong-token-doesnt-matter", true)
+		if err != nil {
+			t.Fatalf("ManagedBooking(byOrganiser): %v", err)
+		}
+		if view.ID != result.BookingID {
+			t.Errorf("ID = %q, want %q", view.ID, result.BookingID)
 		}
 	})
 }

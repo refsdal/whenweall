@@ -251,7 +251,7 @@ func TestRescheduleReArmsReminderJob(t *testing.T) {
 	}
 
 	newStart := futureUTCSlot(5, 14, 0)
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart); err != nil {
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
 
@@ -308,7 +308,7 @@ func TestRescheduleCancelsReminderWhenPageReminderersOff(t *testing.T) {
 	}
 
 	newStart := futureUTCSlot(5, 14, 0)
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart); err != nil {
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
 
@@ -578,7 +578,7 @@ func TestMailBookingDeliversRealMail(t *testing.T) {
 	if deliveredToken != result.ManageToken {
 		t.Errorf("token in mail body = %q, want %q", deliveredToken, result.ManageToken)
 	}
-	if _, err := p.svc.ManagedBooking(ctx, result.BookingID, deliveredToken); err != nil {
+	if _, err := p.svc.ManagedBooking(ctx, result.BookingID, deliveredToken, false); err != nil {
 		t.Errorf("ManagedBooking with the mail's own token: %v", err)
 	}
 

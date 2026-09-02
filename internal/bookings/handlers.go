@@ -27,6 +27,14 @@
 //  5. Organiser Cancel (e): POST .../cancel with no manage token but a session verifies the
 //     caller manages the booking's page (RequireManageableBooking) before calling
 //     Cancel(byOrganiser: true) — see handleCancel's own doc comment.
+//
+// I6 (a later fix, past this task's original five): GET .../manage and POST .../reschedule got
+// the SAME organiser fallback as (e) above — ManagedBooking/Reschedule (bookings.go) each grew
+// their own byOrganiser flag, and handleManagedBooking/handleReschedule each grew the identical
+// no-token-but-a-session-that-manages-the-page branch handleCancel already had. Before this fix,
+// an organiser with no manage token in hand (a common case — the token lives in a visitor-facing
+// mail, not the dashboard) could cancel a booking from the org's own booking-management UI but
+// could neither view nor reschedule it the same way, an inconsistency ts parity didn't call for.
 package bookings
 
 import (
@@ -85,9 +93,9 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("GET /api/v1/book/{org}/{page}/availability", bookLimit(http.HandlerFunc(s.handlePublicAvailability)))
 	mux.Handle("POST /api/v1/book/{org}/{page}/bookings", bookLimit(http.HandlerFunc(s.handleBook(a, cfg))))
 
-	mux.Handle("GET /api/v1/bookings/{id}/manage", bookLimit(http.HandlerFunc(s.handleManagedBooking)))
+	mux.Handle("GET /api/v1/bookings/{id}/manage", bookLimit(http.HandlerFunc(s.handleManagedBooking(a))))
 	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a))))
-	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule())))
+	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule(a))))
 }
 
 // manageTokenFromQuery resolves the visitor manage-token credential from this request's own `?t=`
@@ -96,9 +104,9 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 // token from the confirmation email"), deliberately NOT httpserver.ExtractGuestToken's `?token=`/
 // X-Guest-Token convention: that seam is polls' guest-*participant* token, verified through
 // auth.Service; this one is verified entirely inside bookings.go's own verifyManageToken. "" means no
-// token was supplied — every one of this file's token-consuming handlers treats that as "try the
-// owner-session path instead" (handleCancel) or lets the service's own ErrInvalidToken/ErrNotFound
-// report it (handleManagedBooking, handleReschedule).
+// token was supplied — every one of this file's token-consuming handlers (handleManagedBooking,
+// handleCancel, handleReschedule) treats that as "try the owner-session path instead" (I6 —
+// each has one).
 func manageTokenFromQuery(r *http.Request) string {
 	return r.URL.Query().Get("t")
 }
@@ -155,8 +163,9 @@ func respondOK(w http.ResponseWriter) {
 // requireOwnerSession resolves the signed-in owner branch's own session gate — the same two
 // failure shapes httpserver.WithOrgSession itself would produce (401 "unauthenticated" for no
 // session at all, 403 "no_active_org" for a session with no active organization), reached here
-// conditionally (handleCancel only takes this branch once it already knows no manage token was
-// supplied) rather than unconditionally the way WithOrgSession's own wrapper does. ok == false
+// conditionally (handleManagedBooking/handleCancel/handleReschedule each only take this branch
+// once they already know no manage token was supplied — I6) rather than unconditionally the way
+// WithOrgSession's own wrapper does. ok == false
 // means the response has already been written; the caller must return immediately.
 func requireOwnerSession(w http.ResponseWriter, r *http.Request, a Auth) (*auth.Session, bool) {
 	sess, ok := a.FromContext(r.Context())
@@ -507,17 +516,40 @@ func (s *Service) handleBook(a Auth, cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-// handleManagedBooking ports getManagedBooking (bookings.functions.ts) — token-only (see this
-// file's Register doc comment and ManagedBooking's own doc comment in bookings.go for why there
-// is no organiser fallback here, unlike handleCancel).
-func (s *Service) handleManagedBooking(w http.ResponseWriter, r *http.Request) {
-	bookingID := r.PathValue("id")
-	view, err := s.ManagedBooking(r.Context(), bookingID, manageTokenFromQuery(r))
-	if err != nil {
-		writeServiceError(w, err)
-		return
+// handleManagedBooking ports getManagedBooking (bookings.functions.ts), plus I6's own organiser
+// fallback: without a manage token, the caller must be signed in AND manage the booking's page
+// (RequireManageableBooking, authz.go's creator-or-org-manager gate) — only then is
+// ManagedBooking(byOrganiser: true) reached, the exact same shape handleCancel's own requirement
+// (e) already has.
+func (s *Service) handleManagedBooking(a Auth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bookingID := r.PathValue("id")
+
+		if token := manageTokenFromQuery(r); token != "" {
+			view, err := s.ManagedBooking(r.Context(), bookingID, token, false)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			httpserver.JSON(w, http.StatusOK, view)
+			return
+		}
+
+		sess, ok := requireOwnerSession(w, r, a)
+		if !ok {
+			return
+		}
+		if err := s.RequireManageableBooking(r.Context(), bookingID, sess.ActiveOrgID, sess.UserID); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		view, err := s.ManagedBooking(r.Context(), bookingID, "", true)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		httpserver.JSON(w, http.StatusOK, view)
 	}
-	httpserver.JSON(w, http.StatusOK, view)
 }
 
 // handleCancel ports cancelBooking (bookings.functions.ts), plus this task's accumulated
@@ -556,11 +588,14 @@ func (s *Service) handleCancel(a Auth) http.HandlerFunc {
 	}
 }
 
-// handleReschedule ports rescheduleBooking (bookings.functions.ts) — token-only (see this file's
-// Register doc comment; Reschedule itself, bookings.go, carries no byOrganiser flag at all). No
-// captcha gate here either, for the same reason handleCancel has none: the manage token already
-// authenticates the caller, and rescheduleBooking never calls requireTurnstile in the TS source.
-func (s *Service) handleReschedule() http.HandlerFunc {
+// handleReschedule ports rescheduleBooking (bookings.functions.ts), plus I6's own organiser
+// fallback (the same shape handleCancel's requirement (e) and handleManagedBooking's own I6 fix
+// above both have): without a manage token, the caller must be signed in AND manage the booking's
+// page (RequireManageableBooking) before Reschedule(byOrganiser: true) is reached. No captcha
+// gate here either, for the same reason handleCancel has none: the manage token already
+// authenticates a token-bearing caller, and rescheduleBooking never calls requireTurnstile in the
+// TS source; the organiser path is authenticated by its own session instead.
+func (s *Service) handleReschedule(a Auth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bookingID := r.PathValue("id")
 
@@ -575,7 +610,20 @@ func (s *Service) handleReschedule() http.HandlerFunc {
 			return
 		}
 
-		result, err := s.Reschedule(r.Context(), bookingID, manageTokenFromQuery(r), newStart)
+		var result *BookingResult
+		if token := manageTokenFromQuery(r); token != "" {
+			result, err = s.Reschedule(r.Context(), bookingID, token, newStart, false)
+		} else {
+			sess, ok := requireOwnerSession(w, r, a)
+			if !ok {
+				return
+			}
+			if err := s.RequireManageableBooking(r.Context(), bookingID, sess.ActiveOrgID, sess.UserID); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			result, err = s.Reschedule(r.Context(), bookingID, "", newStart, true)
+		}
 		if err != nil {
 			writeServiceError(w, err)
 			return
