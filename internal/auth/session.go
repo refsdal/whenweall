@@ -53,10 +53,17 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	// sign back in afterwards (Limen's credential-password plugin has no concept of a lock) and
 	// mint a brand new, otherwise perfectly valid session — this check is what stops *that* one
 	// too, on every request, for as long as the lock stands.
+	//
+	// Fails closed: a lock control that fails open on its own query error (treating "couldn't
+	// tell" as "not locked") defeats the point of having it, so an error here is treated the same
+	// as "locked" — the request is anonymous — rather than falling through to a normal session.
 	var locked bool
 	if err := s.db.QueryRowContext(r.Context(),
 		"SELECT EXISTS(SELECT 1 FROM locked_users WHERE user_id = $1)", validated.User.ID,
-	).Scan(&locked); err == nil && locked {
+	).Scan(&locked); err != nil {
+		s.logger.Error("auth: locked_users check failed; treating session as anonymous", "user_id", fmt.Sprint(validated.User.ID), "error", err)
+		return nil
+	} else if locked {
 		return nil
 	}
 

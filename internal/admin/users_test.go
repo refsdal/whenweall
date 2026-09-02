@@ -409,11 +409,20 @@ func (h *authHarness) signUpAndSignIn(t *testing.T, email string) {
 
 func (h *authHarness) postJSON(t *testing.T, path string, body map[string]any) {
 	t.Helper()
+	h.postJSONWith(t, h.client, path, body)
+}
+
+// postJSONWith is postJSON against an explicit client rather than the harness's own default one —
+// TestLockUser_RejectsAFreshSignInAfterLock needs a second, independent cookie jar to prove the
+// resolveSession locked_users check itself (not just RevokeUserSessions revoking the original
+// session) is what stops a locked user.
+func (h *authHarness) postJSONWith(t *testing.T, client *http.Client, path string, body map[string]any) {
+	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal request body: %v", err)
 	}
-	resp, err := h.client.Post(h.server.URL+path, "application/json", strings.NewReader(string(b)))
+	resp, err := client.Post(h.server.URL+path, "application/json", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
 	}
@@ -425,12 +434,28 @@ func (h *authHarness) postJSON(t *testing.T, path string, body map[string]any) {
 
 func (h *authHarness) probeSessionStatus(t *testing.T) int {
 	t.Helper()
-	resp, err := h.client.Get(h.server.URL + "/probe/session")
+	return h.probeSessionStatusWith(t, h.client)
+}
+
+func (h *authHarness) probeSessionStatusWith(t *testing.T, client *http.Client) int {
+	t.Helper()
+	resp, err := client.Get(h.server.URL + "/probe/session")
 	if err != nil {
 		t.Fatalf("GET /probe/session: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
+}
+
+// newClient returns a fresh cookie-jar client against the same harness server — a brand new
+// "browser" with no session of its own yet.
+func (h *authHarness) newClient(t *testing.T) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar: %v", err)
+	}
+	return &http.Client{Jar: jar}
 }
 
 // TestLockUser_RevokesSessionsAndSessionStopsValidating ports users.workers.test.ts/
@@ -473,6 +498,39 @@ func TestLockUser_RevokesSessionsAndSessionStopsValidating(t *testing.T) {
 
 	if !auditRowExists(t, d, "lock-user", userIDStr) {
 		t.Error("LockUser left no admin_audit_log row")
+	}
+}
+
+// TestLockUser_RejectsAFreshSignInAfterLock is the review finding this file was missing: the
+// previous test's 401 is fully explained by RevokeUserSessions clearing the original session row,
+// which would still pass even if resolveSession's own locked_users EXISTS check (session.go) were
+// deleted entirely. This test signs back in *after* the lock — on a brand new cookie jar, so it's
+// a genuinely fresh session Limen itself has no reason to refuse (its credential-password plugin
+// has no concept of a lock) — and asserts the seam still treats it as anonymous. Delete the
+// locked_users check and this is the test that fails.
+func TestLockUser_RejectsAFreshSignInAfterLock(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	h := newAuthHarness(t, d)
+	email := "locked-user-resigns-in@example.com"
+	h.signUpAndSignIn(t, email)
+
+	var userID int64
+	if err := d.QueryRowContext(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&userID); err != nil {
+		t.Fatalf("looking up user id: %v", err)
+	}
+	userIDStr := fmt.Sprint(userID)
+	actor := actorSession(t, d)
+
+	if err := admin.LockUser(ctx, d, h.svc, actor, userIDStr, "policy violation"); err != nil {
+		t.Fatalf("LockUser: %v", err)
+	}
+
+	fresh := h.newClient(t)
+	h.postJSONWith(t, fresh, "/api/v1/auth/signin/credential", map[string]any{"credential": email, "password": harnessPassword})
+
+	if status := h.probeSessionStatusWith(t, fresh); status != http.StatusUnauthorized {
+		t.Fatalf("probe/session on a brand new sign-in after lock: status %d, want 401 (locked_users check should reject it)", status)
 	}
 }
 

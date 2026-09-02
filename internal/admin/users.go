@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -349,13 +350,15 @@ func LockUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *
 		return fmt.Errorf("admin: commit lock-user tx: %w", err)
 	}
 
-	// Deliberately after the commit: the lock itself (and resolveSession's own locked_users check)
-	// is already the enforcement point the moment the row above is durable, so a revoke failure
-	// here can't leave a locked user able to keep using the app — see RevokeUserSessions' own doc
-	// comment for what it does and doesn't cover.
+	// Deliberately after the commit, and deliberately log-and-continue rather than returning the
+	// error: the lock itself (and resolveSession's own locked_users check) is already the
+	// enforcement point the moment the row above is durable, so a revoke failure here can't leave
+	// a locked user able to keep using the app — it only means their (now-useless) session rows
+	// linger in Limen's sessions table a little longer than necessary. Surfacing this as LockUser's
+	// own error would wrongly read as "the lock didn't take" to a caller, when it did.
 	if authSvc != nil {
 		if err := authSvc.RevokeUserSessions(ctx, userID); err != nil {
-			return fmt.Errorf("admin: revoking sessions for locked user %s: %w", userID, err)
+			slog.Default().Error("admin: revoking sessions for locked user failed", "user_id", userID, "error", err)
 		}
 	}
 	return nil
