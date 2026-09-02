@@ -246,6 +246,20 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 	return nil
 }
 
+// RevokeUserSessions revokes every session belonging to userID, for internal/admin's LockUser and
+// DeleteUser. It delegates straight to Limen's own RevokeAllSessions (which the pinned source
+// confirms deletes the user's rows from Limen's `sessions` table via its own connection — see
+// session_store_database.go's DeleteByUserID) rather than this package deleting those rows
+// directly: Limen exposes exactly this as public API, so there is no reason to reach past the seam
+// into a table it owns. This is deliberately not part of any caller's own transaction — it can't
+// be, since it runs on Limen's own connection acquisition, not tx-scoped — so a caller that also
+// needs sessions gone for a hard FK reason (DeleteUser, against sessions.user_id's ON DELETE
+// RESTRICT) still deletes those rows itself, in its own tx, as the real enforcement; this call is
+// what reaches any Limen-side bookkeeping beyond that one table, best-effort.
+func (s *Service) RevokeUserSessions(ctx context.Context, userID string) error {
+	return s.limen.RevokeAllSessions(ctx, parseLimenID(userID))
+}
+
 // ensurePersonalOrgOnce is called from resolveSession (session.go) for every request that carries
 // a valid session, on the request's own goroutine. It guarantees user has at least one
 // organization — the silent "personal org" every user gets, named from their email's local part

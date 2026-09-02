@@ -46,6 +46,20 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 		return nil
 	}
 
+	// A locked user (internal/admin.LockUser) is treated as anonymous from here on, same as an
+	// invalid session — see locked_users' own doc comment in migrations/00007_admin_locks.sql for
+	// why this check exists alongside LockUser's own RevokeUserSessions call: the revoke clears
+	// out sessions that already existed when the lock was applied, but a locked user could still
+	// sign back in afterwards (Limen's credential-password plugin has no concept of a lock) and
+	// mint a brand new, otherwise perfectly valid session — this check is what stops *that* one
+	// too, on every request, for as long as the lock stands.
+	var locked bool
+	if err := s.db.QueryRowContext(r.Context(),
+		"SELECT EXISTS(SELECT 1 FROM locked_users WHERE user_id = $1)", validated.User.ID,
+	).Scan(&locked); err == nil && locked {
+		return nil
+	}
+
 	// Limen extends a session's expiration lazily, on whichever request first crosses its
 	// UpdateAge threshold (ValidatedSession.Refreshed), re-issuing the session cookie with a new
 	// expiry. That cookie has to reach the client the same as it would from one of Limen's own
