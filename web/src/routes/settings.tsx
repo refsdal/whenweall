@@ -4,6 +4,7 @@ import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
 import { Separator } from '#/components/ui/separator'
 import { m } from '#/lib/i18n'
 import { setHandle } from '#/api/bookings'
+import { myOrgRoles } from '#/api/auth'
 
 export const Route = createFileRoute('/settings')({
   beforeLoad: ({ context }) => {
@@ -11,11 +12,15 @@ export const Route = createFileRoute('/settings')({
       throw redirect({ to: '/login', search: { next: '/settings' } })
     }
   },
+  // The caller's own membership roles in the active org — see HandleSection's doc comment for
+  // why this gates the org-handle editor's visibility rather than just its submit handler.
+  loader: () => myOrgRoles(),
   component: SettingsPage,
 })
 
 function SettingsPage() {
   const { session } = Route.useRouteContext()
+  const orgRoles = Route.useLoaderData()
   if (!session) return null
 
   return (
@@ -28,7 +33,7 @@ function SettingsPage() {
 
       <Separator />
 
-      {session.org && (
+      {session.org && orgRoles.includes('owner') && (
         <>
           <section>
             <HandleSection handle={session.org.slug} appUrl={window.location.origin} />
@@ -66,8 +71,15 @@ function ProfileSection({ name, email }: { name: string; email: string }) {
   )
 }
 
-/** Wires `HandleField` (kept server-free so it can be unit-tested) to the Go `setHandle` API call,
- * refreshing the session afterwards so every booking link picks the new handle up. */
+/**
+ * Wires `HandleField` (kept server-free so it can be unit-tested) to the Go `setHandle` API call,
+ * refreshing the session afterwards so every booking link picks the new handle up.
+ *
+ * Only ever rendered for an org owner — `SettingsPage` gates it on `myOrgRoles()` including
+ * `"owner"` — since `POST /api/v1/org/handle` is itself gated server-side by `RequireOwnerRole`
+ * (internal/bookings/authz.go): a non-owner member used to see this same editable field and only
+ * find out it wasn't theirs to change from a 403 toast after submitting.
+ */
 function HandleSection({ handle, appUrl }: { handle: string | null; appUrl: string }) {
   const router = useRouter()
 

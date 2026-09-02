@@ -25,19 +25,20 @@ export type AuthUser = {
   name: string
   email: string
   emailVerified: boolean
+  isStaff: boolean
 }
 
 /**
- * Limen's default `UserSchema.Serialize` deletes the id column before the response is built, and
- * this backend configures no `WithPublicIDs` to replace it — so `GET /me` (and every other Limen
- * response carrying a user) may come back with NO usable id at all. `toAuthUser` reads whichever
- * of `id`/`ID` happens to be present and otherwise leaves it `""`; this is flagged as an open
- * concern in the task report (it would break the `participant.userId === session.user.id`
- * ownership checks in PollPage/Comments) and needs verifying against a running server.
+ * Limen's default user serialization would come back with NO usable id at all: `UserSchema.Serialize`
+ * deletes the id column outright, and this backend configures no `WithPublicIDs` to replace it —
+ * see `buildLimenConfig`'s own `sessionTransformer` (internal/auth/auth.go) for the fix, registered
+ * via `limen.WithHTTPSessionTransformer`. Every signin/signup/me response is routed through that
+ * transformer instead, which rebuilds the payload with `id` as a string of digits and adds
+ * `isStaff` (backed by `staff_users`) — both guaranteed present on every response `toAuthUser` sees,
+ * so this reads them directly rather than guessing between `id`/`ID` or probing a separate endpoint.
  */
 function toAuthUser(raw: Record<string, unknown>): AuthUser {
-  const idValue = raw.id ?? raw.ID
-  const id = typeof idValue === 'string' ? idValue : typeof idValue === 'number' ? String(idValue) : ''
+  const id = typeof raw.id === 'string' ? raw.id : ''
   const firstName = typeof raw.first_name === 'string' ? raw.first_name : ''
   const lastName = typeof raw.last_name === 'string' ? raw.last_name : ''
   const email = typeof raw.email === 'string' ? raw.email : ''
@@ -46,6 +47,7 @@ function toAuthUser(raw: Record<string, unknown>): AuthUser {
     name: `${firstName} ${lastName}`.trim() || email,
     email,
     emailVerified: raw.email_verified_at != null,
+    isStaff: raw.isStaff === true,
   }
 }
 
@@ -161,6 +163,27 @@ export async function activeOrganization(): Promise<ActiveOrg | null> {
     return { slug, name }
   } catch (err) {
     if (err instanceof ApiError && (err.status === 403 || err.status === 404)) return null
+    throw err
+  }
+}
+
+/**
+ * `GET /organizations/me` — the caller's own role names in the active organization (e.g.
+ * `["owner"]`; internal/auth/routes.txt's `organizations:member-get`). Used by settings.tsx's
+ * `HandleSection` to decide whether to render the org-handle editor at all: `POST /api/v1/org/handle`
+ * is gated server-side by `RequireOwnerRole` (internal/bookings/authz.go) — every non-owner org
+ * member used to see the same editable field as the owner and only find out via a 403 toast after
+ * submitting. `[]` when there is no active organization, the same non-error treatment
+ * `activeOrganization()` already gives a 403/404 there.
+ */
+export async function myOrgRoles(): Promise<string[]> {
+  try {
+    const member = await api<Record<string, unknown>>('GET', '/api/v1/auth/organizations/me')
+    return Array.isArray(member.roles)
+      ? member.roles.filter((role): role is string => typeof role === 'string')
+      : []
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 403 || err.status === 404)) return []
     throw err
   }
 }

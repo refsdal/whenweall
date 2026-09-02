@@ -1,7 +1,5 @@
 import { useRouteContext } from '@tanstack/react-router'
 import * as authApi from '#/api/auth'
-import { ApiError } from '#/api/client'
-import { fetchAdminStats } from '#/api/admin'
 
 /**
  * The Limen-backed replacement for better-auth's `useSession`. The session itself is fetched once
@@ -22,31 +20,19 @@ export type SessionOrg = { slug: string; name: string } | null
 
 export type Session = { user: SessionUser; org: SessionOrg; isStaff: boolean } | null
 
-/**
- * There is no "am I staff" field on Limen's own session (staff is our own concept — a
- * `staff_users` row, checked server-side by `auth.Service.RequireStaff` on every
- * `/api/v1/admin/*` route — internal/admin/handlers.go's own doc comment). Absent a dedicated
- * endpoint, this probes the cheapest staff-gated route and reads success/403 as the signal: a
- * real, server-verified answer rather than a guess, at the cost of one extra request per signed-in
- * session load.
- */
-async function probeIsStaff(): Promise<boolean> {
-  try {
-    await fetchAdminStats()
-    return true
-  } catch (err) {
-    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) return false
-    throw err
-  }
-}
-
 /** Fetches the current session: `null` when signed out. Called once from `__root.tsx`'s
- * `beforeLoad` (and again on every `router.invalidate()`). */
+ * `beforeLoad` (and again on every `router.invalidate()`).
+ *
+ * `isStaff` used to require its own request — a probe against a staff-gated admin route, reading
+ * success/403 as the signal, since Limen's `/me` carried no such field on its own. `auth.Service`'s
+ * `sessionTransformer` (internal/auth/auth.go) now puts `isStaff` directly on `/me`'s user object
+ * (backed by `staff_users`, the same source that probe was standing in for), so this reads it off
+ * `authApi.me()`'s result instead of making a second round trip. */
 export async function fetchSession(): Promise<Session> {
   const user = await authApi.me()
   if (!user) return null
-  const [org, isStaff] = await Promise.all([authApi.activeOrganization(), probeIsStaff()])
-  return { user, org, isStaff }
+  const org = await authApi.activeOrganization()
+  return { user, org, isStaff: user.isStaff }
 }
 
 /** Reads the session the root route already resolved. Throws outside a router tree — same
