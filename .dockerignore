@@ -3,7 +3,4 @@ dist
 .git
 e2e
 test-results
-.wrangler
 docs
-src
-spike
