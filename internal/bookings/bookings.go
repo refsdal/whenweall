@@ -41,12 +41,10 @@ package bookings
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -82,11 +80,13 @@ type BookInput struct {
 }
 
 // BookingResult is Book's and Reschedule's shared return value. ManageToken is only ever
-// populated by Book — the plaintext manage token, returned exactly once (only its sha256 hash is
-// stored; see hashToken/tokenMatches below) — Reschedule never mints a new one, so its
-// ManageToken is always "". PreviousStartAt/Changed are only meaningful coming from Reschedule
-// (ported from rescheduleBooking's own {changed, previousStartAt} return); Book always reports
-// Changed: true with a zero PreviousStartAt (there was no previous slot to report).
+// populated by Book — the visitor's manage token for this booking, deterministically derived (see
+// Service.manageToken below) rather than randomly minted, so it is never itself persisted —
+// Reschedule never mints a new one either (a booking's manage token is fixed for its whole
+// lifetime, derived from its own id), so its ManageToken is always "". PreviousStartAt/Changed are
+// only meaningful coming from Reschedule (ported from rescheduleBooking's own {changed,
+// previousStartAt} return); Book always reports Changed: true with a zero PreviousStartAt (there
+// was no previous slot to report).
 type BookingResult struct {
 	BookingID       string
 	ManageToken     string
@@ -94,35 +94,37 @@ type BookingResult struct {
 	Changed         bool
 }
 
-// generateToken ports tokens.ts's generateToken: 32 crypto-random bytes, base64url with no
-// padding — a 43-character opaque manage token.
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+// manageTokenHMACPrefix namespaces the HMAC input below — see Service.manageToken's own doc
+// comment for why a plain HMAC(secret, bookingID) alone isn't quite enough.
+const manageTokenHMACPrefix = "booking-manage:"
+
+// manageToken derives bookingID's own visitor manage token: base64url (no padding) of
+// HMAC-SHA256(s.manageSecret, "booking-manage:"+bookingID) — I4's replacement for the prior
+// random-token-plus-stored-hash scheme (tokens.ts's own generateToken/hashToken, and this
+// package's own history before this fix). Deterministic and never persisted: Book "mints" a
+// token by computing it (there is no bookings.manage_token_hash column left to write it to), and
+// Cancel/Reschedule/ManagedBooking verify a caller-supplied one the same way, by recomputing and
+// comparing — see verifyManageToken. The prefix keeps this HMAC's input namespaced to this one
+// purpose, so the same (secret, id) pair used for some future, differently-purposed token (were
+// one ever added) can never collide with a booking's own manage token by accident. Panics only if
+// s.manageSecret is empty and the caller didn't already guard for that — every call site either
+// checks s.manageSecret first (Book) or only ever reaches here once a booking already exists,
+// which Book could not have created without that same non-empty secret.
+func (s *Service) manageToken(bookingID string) string {
+	mac := hmac.New(sha256.New, []byte(s.manageSecret))
+	mac.Write([]byte(manageTokenHMACPrefix + bookingID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// hashToken ports tokens.ts's hashToken: the hex-encoded SHA-256 digest stored as
-// bookings.manage_token_hash — the plaintext token itself is never persisted.
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
-
-// tokenMatches ports tokens.ts's verifyToken: hashes the candidate token and compares it against
-// the stored hash in constant time (crypto/subtle), so a booking's real hash can't be recovered
-// by timing a byte-by-byte comparison.
-func tokenMatches(token, hash string) bool {
-	if hash == "" {
+// verifyManageToken reports whether token is bookingID's own manage token — recomputed via
+// manageToken and compared in constant time (hmac.Equal), never against a stored hash. false for
+// an empty secret or an empty token (rather than treating a misconfigured, empty-secret service
+// as though every token were valid against manageToken("")'s own degenerate output).
+func (s *Service) verifyManageToken(bookingID, token string) bool {
+	if s.manageSecret == "" || token == "" {
 		return false
 	}
-	candidate := hashToken(token)
-	if len(candidate) != len(hash) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(candidate), []byte(hash)) == 1
+	return hmac.Equal([]byte(s.manageToken(bookingID)), []byte(token))
 }
 
 // pageRulesFrom ports pageRulesFrom (bookings.ts): the PageRules Slots/IsSlotAvailable need, read
@@ -239,6 +241,13 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 	if err := in.Validate(); err != nil {
 		return nil, err
 	}
+	// I4: a booking's manage token is derived from s.manageSecret (manageToken above) — an empty
+	// secret (config.Load's own AuthSecret >= 32 chars rule means this is a misconfiguration, not
+	// a real runtime state) must fail loudly here rather than mint every booking a manage token
+	// that would fail verifyManageToken's own same-check for the rest of that booking's life.
+	if s.manageSecret == "" {
+		return nil, errors.New("bookings: manage token secret is not configured")
+	}
 
 	// I1: resolve the org/page read-only, and run the (network-bound) Google Calendar freebusy
 	// lookup, BEFORE ever opening the transaction that takes the page row lock below — see this
@@ -315,10 +324,6 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 	}
 
 	endAt := in.StartAt.Add(time.Duration(page.SlotDurationMin) * time.Minute)
-	manageToken, err := generateToken()
-	if err != nil {
-		return nil, err
-	}
 	bookingID := db.NewID()
 
 	if err := q.InsertBooking(ctx, queries.InsertBookingParams{
@@ -332,7 +337,6 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 		VisitorLocale:   optionalTrimmedString(in.Locale),
 		VisitorTimezone: in.Timezone,
 		Status:          "confirmed",
-		ManageTokenHash: hashToken(manageToken),
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}); err != nil {
@@ -369,7 +373,7 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 		return nil, err
 	}
 
-	return &BookingResult{BookingID: bookingID, ManageToken: manageToken, Changed: true}, nil
+	return &BookingResult{BookingID: bookingID, ManageToken: s.manageToken(bookingID), Changed: true}, nil
 }
 
 // Cancel ports the auth-check half of getBookingForManage plus cancelBooking (bookings.ts),
@@ -397,7 +401,7 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 	if err != nil {
 		return err
 	}
-	if !byOrganiser && !tokenMatches(manageToken, booking.ManageTokenHash) {
+	if !byOrganiser && !s.verifyManageToken(bookingID, manageToken) {
 		return ErrInvalidToken
 	}
 
@@ -468,7 +472,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
-	if !tokenMatches(manageToken, preLockBooking.ManageTokenHash) {
+	if !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 	from, to := bookingWindow(newStart)
@@ -497,7 +501,7 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	if err != nil {
 		return nil, err
 	}
-	if !tokenMatches(manageToken, booking.ManageTokenHash) {
+	if !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 	if booking.Status == "cancelled" {
@@ -624,7 +628,7 @@ func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken str
 	if err != nil {
 		return nil, err
 	}
-	if !tokenMatches(manageToken, booking.ManageTokenHash) {
+	if !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 

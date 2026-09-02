@@ -108,7 +108,7 @@ func serve() int {
 	// Calendar client (nil — sync off — when the capability itself isn't configured; see
 	// NewGoogleSync's own doc comment), BEFORE RegisterJobs so "google:sync" jobs the worker picks
 	// up immediately after Run starts see a fully wired Service, never a half-built one.
-	bookingsSvc := bookings.NewService(sqlDB)
+	bookingsSvc := bookings.NewService(cfg, sqlDB)
 	bookingsSvc.SetGoogleSync(bookings.NewGoogleSync(cfg, sqlDB))
 	bookingsSvc.RegisterJobs(worker, m)
 

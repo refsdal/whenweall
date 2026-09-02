@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/refsdal/whenweall/internal/bookings"
+	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
 
@@ -84,7 +85,7 @@ func setupBookablePage(t *testing.T, mutate func(*bookings.PageInput)) bookableP
 	t.Helper()
 	ctx := context.Background()
 	d := testdb.New(t)
-	s := bookings.NewService(d)
+	s := bookings.NewService(testConfig(t), d)
 	orgID, ownerID := seedOrgAndUser(t, d)
 	handle := uniqueHandle()
 	if err := s.SetOrgSlug(ctx, orgID, handle); err != nil {
@@ -267,6 +268,28 @@ func TestBook(t *testing.T) {
 		_, err = p.svc.Book(ctx, "no-such-org", "no-such-page", in)
 		if !errors.As(err, &verr) {
 			t.Errorf("unknown org/page: err = %v (%T), want *ValidationError", err, err)
+		}
+	})
+
+	// I4: Book must fail loudly, rather than mint an unverifiable manage token, when the service
+	// was built with no manage-token secret at all (config.Load's own AuthSecret >= 32 chars rule
+	// means this can't happen in a real running server — but Book still checks it explicitly).
+	t.Run("I4: fails when the manage token secret is not configured", func(t *testing.T) {
+		ctx := context.Background()
+		d := testdb.New(t)
+		s := bookings.NewService(&config.Config{}, d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		handle := uniqueHandle()
+		if err := s.SetOrgSlug(ctx, orgID, handle); err != nil {
+			t.Fatalf("SetOrgSlug: %v", err)
+		}
+		page, err := s.CreatePage(ctx, orgID, ownerID, openPageInput(nil))
+		if err != nil {
+			t.Fatalf("CreatePage: %v", err)
+		}
+
+		if _, err := s.Book(ctx, handle, page.Slug, bookInput(futureUTCSlot(3, 9, 0), "a@example.com")); err == nil {
+			t.Error("Book with an empty manage secret: err = nil, want an error")
 		}
 	})
 }
@@ -555,6 +578,42 @@ func TestManagedBooking(t *testing.T) {
 		p := setupBookablePage(t, nil)
 		if _, err := p.svc.ManagedBooking(ctx, "missing", "whatever"); !errors.Is(err, bookings.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+
+	// I4: a booking's manage token is now derived from its own id (HMAC-SHA256(secret,
+	// "booking-manage:"+id)) rather than a random value stored per-row — this proves that
+	// derivation is actually keyed by id: booking A's token must never open booking B, even on
+	// the same page/service (same secret) and even though both tokens are the same 43-character
+	// shape.
+	t.Run("I4: booking A's manage token is rejected for booking B", func(t *testing.T) {
+		p := setupBookablePage(t, nil)
+		startA := futureUTCSlot(3, 9, 0)
+		startB := futureUTCSlot(3, 11, 0)
+		a, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(startA, "a@example.com"))
+		if err != nil {
+			t.Fatalf("Book A: %v", err)
+		}
+		b, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(startB, "b@example.com"))
+		if err != nil {
+			t.Fatalf("Book B: %v", err)
+		}
+		if a.ManageToken == b.ManageToken {
+			t.Fatalf("A and B minted the same manage token: %q", a.ManageToken)
+		}
+
+		if _, err := p.svc.ManagedBooking(ctx, b.BookingID, a.ManageToken); !errors.Is(err, bookings.ErrInvalidToken) {
+			t.Errorf("B with A's token: err = %v, want ErrInvalidToken", err)
+		}
+		if _, err := p.svc.ManagedBooking(ctx, a.BookingID, b.ManageToken); !errors.Is(err, bookings.ErrInvalidToken) {
+			t.Errorf("A with B's token: err = %v, want ErrInvalidToken", err)
+		}
+		// Each still opens its own.
+		if _, err := p.svc.ManagedBooking(ctx, a.BookingID, a.ManageToken); err != nil {
+			t.Errorf("A with A's own token: err = %v, want nil", err)
+		}
+		if _, err := p.svc.ManagedBooking(ctx, b.BookingID, b.ManageToken); err != nil {
+			t.Errorf("B with B's own token: err = %v, want nil", err)
 		}
 	})
 }

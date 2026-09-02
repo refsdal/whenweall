@@ -55,7 +55,6 @@ CREATE TABLE bookings (
   visitor_timezone text NOT NULL,
   status text NOT NULL DEFAULT 'confirmed',
   cancelled_by text,
-  manage_token_hash text NOT NULL,
   google_event_id text,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,

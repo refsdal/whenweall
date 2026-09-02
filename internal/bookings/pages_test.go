@@ -16,7 +16,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -91,7 +90,7 @@ func TestCreatePage(t *testing.T) {
 
 	t.Run("creates a page and rejects a second one with the same (org, slug)", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 
 		view, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
@@ -123,7 +122,7 @@ func TestCreatePage(t *testing.T) {
 
 	t.Run("allows the same slug for two different orgs", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		org1, owner1 := seedOrgAndUser(t, d)
 		org2, owner2 := seedOrgAndUser(t, d)
 
@@ -137,7 +136,7 @@ func TestCreatePage(t *testing.T) {
 
 	t.Run("allows reusing a slug after the page that held it is soft-deleted", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 
 		first, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
@@ -164,7 +163,7 @@ func TestCreatePage(t *testing.T) {
 
 	t.Run("rejects invalid input with field-level ValidationError", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 
 		_, err := s.CreatePage(ctx, orgID, ownerID, baseInput(func(in *bookings.PageInput) {
@@ -189,7 +188,7 @@ func TestUpdatePage(t *testing.T) {
 
 	t.Run("updates fields and enforces NOT_FOUND/SLUG_TAKEN", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 
 		page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
@@ -238,7 +237,7 @@ func TestDeletePage(t *testing.T) {
 
 	t.Run("soft-deletes so the page disappears from ListMyPages and GetOwnedPage", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 
 		page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
@@ -263,7 +262,7 @@ func TestDeletePage(t *testing.T) {
 
 	t.Run("wrong org gets NOT_FOUND, not a silent no-op", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 		otherOrgID, _ := seedOrgAndUser(t, d)
 
@@ -282,7 +281,7 @@ func TestListMyPages(t *testing.T) {
 
 	t.Run("reports upcomingCount from confirmed future bookings", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUser(t, d)
 
 		page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
@@ -314,7 +313,7 @@ func TestGetPublicPage(t *testing.T) {
 
 	t.Run("resolves by handle (org slug) + page slug and includes the owner name and status", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUserNamed(t, d, "Grace")
 		if err := s.SetOrgSlug(ctx, orgID, "grace"); err != nil {
 			t.Fatalf("SetOrgSlug: %v", err)
@@ -349,7 +348,7 @@ func TestGetPublicPage(t *testing.T) {
 
 	t.Run("still returns a paused page (so the route can show a paused message)", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUserNamed(t, d, "Hedy")
 		if err := s.SetOrgSlug(ctx, orgID, "hedy"); err != nil {
 			t.Fatalf("SetOrgSlug: %v", err)
@@ -378,7 +377,7 @@ func TestGetPublicPage(t *testing.T) {
 
 	t.Run("returns nil for a deleted page, unknown handle, or unknown slug", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUserNamed(t, d, "Ida")
 		if err := s.SetOrgSlug(ctx, orgID, "ida"); err != nil {
 			t.Fatalf("SetOrgSlug: %v", err)
@@ -405,7 +404,7 @@ func TestGetPublicPage(t *testing.T) {
 
 	t.Run("only exposes the fields the public client actually uses", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, ownerID := seedOrgAndUserNamed(t, d, "Iris")
 		if err := s.SetOrgSlug(ctx, orgID, "iris"); err != nil {
 			t.Fatalf("SetOrgSlug: %v", err)
@@ -432,7 +431,7 @@ func TestSetOrgSlug(t *testing.T) {
 
 	t.Run("sets the org slug and rejects a second org taking the same one", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		org1, _ := seedOrgAndUser(t, d)
 		org2, _ := seedOrgAndUser(t, d)
 
@@ -446,7 +445,7 @@ func TestSetOrgSlug(t *testing.T) {
 
 	t.Run("rejects an invalid handle with ValidationError", func(t *testing.T) {
 		d := testdb.New(t)
-		s := bookings.NewService(d)
+		s := bookings.NewService(testConfig(t), d)
 		orgID, _ := seedOrgAndUser(t, d)
 
 		err := s.SetOrgSlug(ctx, orgID, "AB")
@@ -468,10 +467,10 @@ func makeBooking(t *testing.T, d *sql.DB, pageID string, startAt time.Time, stat
 	if _, err := d.ExecContext(context.Background(), `
 		INSERT INTO bookings (
 			id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_timezone,
-			status, manage_token_hash, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+			status, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
 		id, pageID, startAt.UTC(), startAt.UTC().Add(30*time.Minute), "Visitor", "visitor@example.com",
-		"Europe/Oslo", status, "hash-"+strconv.FormatInt(n, 10), now,
+		"Europe/Oslo", status, now,
 	); err != nil {
 		t.Fatalf("seeding booking: %v", err)
 	}

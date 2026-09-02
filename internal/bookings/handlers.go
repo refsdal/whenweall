@@ -45,9 +45,9 @@ import (
 // from auth.Service, kept as an interface so tests can substitute a fake session source). This
 // package's own manage-token flow (Book/Cancel/Reschedule/ManagedBooking) never touches
 // VerifyGuestToken/MintGuestToken at all — those are polls' guest-*participant* token scheme; a
-// booking's manage token is this package's own opaque credential (bookings.go's
-// generateToken/tokenMatches), carried over HTTP as this file's own `?t=` query parameter (see
-// manageTokenFromQuery) rather than through the Auth seam.
+// booking's manage token is this package's own credential, deterministically derived from its
+// booking id (bookings.go's Service.manageToken/verifyManageToken), carried over HTTP as this
+// file's own `?t=` query parameter (see manageTokenFromQuery) rather than through the Auth seam.
 type Auth = httpserver.Auth
 
 // Register mounts this package's whole HTTP surface on mux, following internal/polls/
@@ -95,7 +95,7 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 // src/routes/booking/$id/index.tsx's `searchSchema`/its own doc comment: "`?t=` is the manage
 // token from the confirmation email"), deliberately NOT httpserver.ExtractGuestToken's `?token=`/
 // X-Guest-Token convention: that seam is polls' guest-*participant* token, verified through
-// auth.Service; this one is verified entirely inside bookings.go's own tokenMatches. "" means no
+// auth.Service; this one is verified entirely inside bookings.go's own verifyManageToken. "" means no
 // token was supplied — every one of this file's token-consuming handlers treats that as "try the
 // owner-session path instead" (handleCancel) or lets the service's own ErrInvalidToken/ErrNotFound
 // report it (handleManagedBooking, handleReschedule).

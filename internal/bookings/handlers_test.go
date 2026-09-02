@@ -121,7 +121,7 @@ func testConfigWithTurnstile(t *testing.T) *config.Config {
 // fresh mux via a fakeAuth, and wraps that mux in the fake's own Middleware — the same shape
 // internal/polls/handlers_test.go's own newTestHandler builds for the sibling package.
 func newTestHandler(d *sql.DB, cfg *config.Config) (http.Handler, *fakeAuth, *bookings.Service) {
-	s := bookings.NewService(d)
+	s := bookings.NewService(cfg, d)
 	a := newFakeAuth()
 	mux := http.NewServeMux()
 	s.Register(mux, a, cfg)

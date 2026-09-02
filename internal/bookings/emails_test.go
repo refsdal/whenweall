@@ -417,6 +417,7 @@ type mailpitAttachment struct {
 
 type mailpitMessageDetail struct {
 	ID          string              `json:"ID"`
+	Text        string              `json:"Text"`
 	Attachments []mailpitAttachment `json:"Attachments"`
 }
 
@@ -546,10 +547,39 @@ func TestMailBookingDeliversRealMail(t *testing.T) {
 		t.Errorf("attachment ContentType = %q, want %q", att.ContentType, "text/calendar")
 	}
 
-	wantURL := m.AppURL() + "/booking/" + result.BookingID
+	// I4: the .ics invite's own URL property now carries a working manage token (bookingManageURL,
+	// emails.go's own doc comment on the conscious call this is) — this port's mail always goes
+	// through the async "mail:booking" job (never Book's own return value directly), so this also
+	// proves the job independently re-derives the SAME token from the booking id alone. Unfolded
+	// first (RFC 5545 line folding, icsFoldLine/ics.go): the token pushes this one property line
+	// past 75 octets, so the raw wire form now legitimately splits it across a "\r\n " fold this
+	// plain Contains would otherwise miss.
+	wantURL := m.AppURL() + "/booking/" + result.BookingID + "?t=" + result.ManageToken
 	icsBody := fetchMailpitAttachmentContent(t, apiBaseURL, detail.ID, att.PartID)
-	if !strings.Contains(icsBody, "URL:"+wantURL) {
+	unfoldedICS := strings.ReplaceAll(icsBody, "\r\n ", "")
+	if !strings.Contains(unfoldedICS, "URL:"+wantURL) {
 		t.Errorf(".ics body missing absolute URL %q: %q", wantURL, icsBody)
+	}
+
+	// The confirmation body itself (not just the .ics attachment) carries the same working link —
+	// extract the token straight out of the delivered mail (rather than assuming it matches
+	// result.ManageToken) and prove it's accepted by ManagedBooking.
+	linkPrefix := m.AppURL() + "/booking/" + result.BookingID + "?t="
+	idx := strings.Index(detail.Text, linkPrefix)
+	if idx < 0 {
+		t.Fatalf("confirmation body missing a %q link: %q", linkPrefix, detail.Text)
+	}
+	rest := detail.Text[idx+len(linkPrefix):]
+	end := strings.IndexAny(rest, " \r\n")
+	if end < 0 {
+		end = len(rest)
+	}
+	deliveredToken := rest[:end]
+	if deliveredToken != result.ManageToken {
+		t.Errorf("token in mail body = %q, want %q", deliveredToken, result.ManageToken)
+	}
+	if _, err := p.svc.ManagedBooking(ctx, result.BookingID, deliveredToken); err != nil {
+		t.Errorf("ManagedBooking with the mail's own token: %v", err)
 	}
 
 	organiserDetail := fetchMailpitMessageTo(t, apiBaseURL, owner)

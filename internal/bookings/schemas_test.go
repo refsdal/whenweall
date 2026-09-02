@@ -63,7 +63,7 @@ func TestPageInputHandleAndSlug(t *testing.T) {
 // invalid cases are asserted here without a database; the valid path is covered behaviorally by
 // TestSetOrgSlug in pages_test.go, which needs a real org row to update.
 func TestValidateHandle(t *testing.T) {
-	s := bookings.NewService(nil)
+	s := bookings.NewService(testConfig(t), nil)
 	for _, v := range []string{"ab", strings.Repeat("a", 31), "Anders", "-abc", "abc-", "ab_c", "ab c"} {
 		err := s.SetOrgSlug(context.Background(), "1", v)
 		var verr *bookings.ValidationError

@@ -68,8 +68,8 @@ SELECT * FROM booking_pages WHERE id = $1 AND deleted_at IS NULL FOR UPDATE;
 -- name: InsertBooking :exec
 INSERT INTO bookings (
   id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale,
-  visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
+  visitor_timezone, status, cancelled_by, google_event_id, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- name: GetBooking :one
 SELECT * FROM bookings WHERE id = $1;

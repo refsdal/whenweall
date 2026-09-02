@@ -48,7 +48,7 @@ func (q *Queries) DisableGoogleSyncForMember(ctx context.Context, arg DisableGoo
 }
 
 const getBooking = `-- name: GetBooking :one
-SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings WHERE id = $1
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, google_event_id, created_at, updated_at FROM bookings WHERE id = $1
 `
 
 func (q *Queries) GetBooking(ctx context.Context, id string) (Booking, error) {
@@ -66,7 +66,6 @@ func (q *Queries) GetBooking(ctx context.Context, id string) (Booking, error) {
 		&i.VisitorTimezone,
 		&i.Status,
 		&i.CancelledBy,
-		&i.ManageTokenHash,
 		&i.GoogleEventID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -323,8 +322,8 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 const insertBooking = `-- name: InsertBooking :exec
 INSERT INTO bookings (
   id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale,
-  visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+  visitor_timezone, status, cancelled_by, google_event_id, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 `
 
 type InsertBookingParams struct {
@@ -339,7 +338,6 @@ type InsertBookingParams struct {
 	VisitorTimezone string
 	Status          string
 	CancelledBy     sql.NullString
-	ManageTokenHash string
 	GoogleEventID   sql.NullString
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -358,7 +356,6 @@ func (q *Queries) InsertBooking(ctx context.Context, arg InsertBookingParams) er
 		arg.VisitorTimezone,
 		arg.Status,
 		arg.CancelledBy,
-		arg.ManageTokenHash,
 		arg.GoogleEventID,
 		arg.CreatedAt,
 		arg.UpdatedAt,
@@ -505,7 +502,7 @@ func (q *Queries) ListBookingPagesByOrg(ctx context.Context, organizationID int6
 }
 
 const listBookingsInRange = `-- name: ListBookingsInRange :many
-SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, google_event_id, created_at, updated_at FROM bookings
 WHERE page_id = $1
   AND start_at < $2
   AND end_at > $3
@@ -541,7 +538,6 @@ func (q *Queries) ListBookingsInRange(ctx context.Context, arg ListBookingsInRan
 			&i.VisitorTimezone,
 			&i.Status,
 			&i.CancelledBy,
-			&i.ManageTokenHash,
 			&i.GoogleEventID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -560,7 +556,7 @@ func (q *Queries) ListBookingsInRange(ctx context.Context, arg ListBookingsInRan
 }
 
 const listConfirmedBookingsInRange = `-- name: ListConfirmedBookingsInRange :many
-SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, manage_token_hash, google_event_id, created_at, updated_at FROM bookings
+SELECT id, page_id, start_at, end_at, visitor_name, visitor_email, visitor_note, visitor_locale, visitor_timezone, status, cancelled_by, google_event_id, created_at, updated_at FROM bookings
 WHERE page_id = $1
   AND status = 'confirmed'
   AND start_at < $2
@@ -597,7 +593,6 @@ func (q *Queries) ListConfirmedBookingsInRange(ctx context.Context, arg ListConf
 			&i.VisitorTimezone,
 			&i.Status,
 			&i.CancelledBy,
-			&i.ManageTokenHash,
 			&i.GoogleEventID,
 			&i.CreatedAt,
 			&i.UpdatedAt,

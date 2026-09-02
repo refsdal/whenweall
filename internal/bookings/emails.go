@@ -337,13 +337,26 @@ func bookingWhenText(start time.Time, end *time.Time, timezone string) string {
 }
 
 // bookingManageURL/bookingDashboardURL/bookingPublicPageURL mirror emails.ts's manageUrl/
-// dashboardUrl/publicPageUrl. bookingManageURL never carries a manage token here — unlike TS's
-// live (non-retry) send, this port's mail always goes through the job queue, whose payload is
-// ids-only (see this file's package doc comment); the visitor's own browser restores the token
-// client-side from its own copy, exactly as TS's retry path (and this port's every path) already
-// relies on.
-func bookingManageURL(appURL, bookingID string) string {
-	return appURL + "/booking/" + bookingID
+// dashboardUrl/publicPageUrl. I4: bookingManageURL is now a Service method (it needs s.manageToken
+// to append a real `?t=` credential) — unlike the prior random-token-plus-stored-hash scheme,
+// where the plaintext token existed only once, at Book's own return, and this file's ids-only mail
+// job payload (see this file's package doc comment) had no way to recover it later, a booking's
+// manage token is now deterministically re-derivable from its id alone at ANY later point,
+// including from inside this queued, re-read-fresh job handler. So every mail carrying this URL
+// (confirmed/rescheduled/reminder, plus the .ics invite's own URL property, built from the same
+// call below) now links straight to a working manage page, with no client-side "restore the token
+// from what I already have" step required — closing the gap the prior scheme's own doc comment
+// here used to describe as an accepted limitation.
+//
+// One conscious call folded into this: the visitor's own .ics calendar invite file (built by
+// BuildBookingICS, ics.go, called from sendBookingConfirmedMail/sendBookingRescheduledMail below)
+// gets this exact same manageURL as its URL property — meaning the token now also lives inside an
+// attachment that outlives the mail itself (synced into whatever calendar app the visitor uses,
+// potentially shared alongside other invites on that calendar). That's the same visitor's own
+// credential for their own booking either way — no more sensitive there than in the mail body
+// right above it — but worth naming explicitly rather than leaving implicit.
+func (s *Service) bookingManageURL(appURL, bookingID string) string {
+	return appURL + "/booking/" + bookingID + "?t=" + s.manageToken(bookingID)
 }
 
 func bookingDashboardURL(appURL, pageID string) string {
@@ -364,7 +377,7 @@ func (s *Service) sendBookingConfirmedMail(ctx context.Context, m *mailer.Mailer
 	}
 
 	location := pageLocationText(page)
-	manageURL := bookingManageURL(m.AppURL(), booking.ID)
+	manageURL := s.bookingManageURL(m.AppURL(), booking.ID)
 	ics := BuildBookingICS(booking.ID, page.Title, pageDescriptionText(page), location, booking.StartAt, booking.EndAt, manageURL)
 	attachments := []mailer.Attachment{{Filename: "calendar.ics", ContentType: "text/calendar", Content: ics}}
 
@@ -474,7 +487,7 @@ func (s *Service) sendBookingRescheduledMail(ctx context.Context, m *mailer.Mail
 	}
 
 	location := pageLocationText(page)
-	manageURL := bookingManageURL(m.AppURL(), booking.ID)
+	manageURL := s.bookingManageURL(m.AppURL(), booking.ID)
 	ics := BuildBookingICS(booking.ID, page.Title, pageDescriptionText(page), location, booking.StartAt, booking.EndAt, manageURL)
 	attachments := []mailer.Attachment{{Filename: "calendar.ics", ContentType: "text/calendar", Content: ics}}
 
@@ -539,7 +552,7 @@ func (s *Service) sendBookingReminderMail(ctx context.Context, m *mailer.Mailer,
 	}
 
 	location := pageLocationText(page)
-	manageURL := bookingManageURL(m.AppURL(), booking.ID)
+	manageURL := s.bookingManageURL(m.AppURL(), booking.ID)
 
 	if err := m.Send(ctx, mailer.Message{
 		To:       booking.VisitorEmail,

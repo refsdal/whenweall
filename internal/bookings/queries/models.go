@@ -38,7 +38,6 @@ type Booking struct {
 	VisitorTimezone string
 	Status          string
 	CancelledBy     sql.NullString
-	ManageTokenHash string
 	GoogleEventID   sql.NullString
 	CreatedAt       time.Time
 	UpdatedAt       time.Time

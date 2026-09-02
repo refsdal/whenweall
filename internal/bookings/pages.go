@@ -17,6 +17,7 @@ import (
 	"github.com/sqlc-dev/pqtype"
 
 	"github.com/refsdal/whenweall/internal/bookings/queries"
+	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
 )
 
@@ -26,6 +27,12 @@ type Service struct {
 	db *sql.DB
 	q  *queries.Queries
 
+	// manageSecret derives every booking's HMAC manage token (bookings.go's Service.manageToken/
+	// verifyManageToken) — set from cfg.AuthSecret by NewService. Empty only if cfg itself carries
+	// an empty AuthSecret, which config.Load's own >= 32 chars rule never allows in a running
+	// server; Book still checks for it explicitly (its own doc comment) rather than trusting that.
+	manageSecret string
+
 	// google is nil ("sync off") unless SetGoogleSync wires in a real one (NewGoogleSync,
 	// google.go) — every Google-touching code path in this package treats a nil google exactly
 	// like a page with googleSync off, so PublicAvailability/Book/Cancel/Reschedule behave
@@ -33,9 +40,10 @@ type Service struct {
 	google GoogleSync
 }
 
-// NewService builds a Service bound to sqlDB, with Google Calendar sync off (see SetGoogleSync).
-func NewService(sqlDB *sql.DB) *Service {
-	return &Service{db: sqlDB, q: queries.New(sqlDB)}
+// NewService builds a Service bound to sqlDB, with Google Calendar sync off (see SetGoogleSync)
+// and its manage-token secret set from cfg.AuthSecret (I4 — see manageSecret's own doc comment).
+func NewService(cfg *config.Config, sqlDB *sql.DB) *Service {
+	return &Service{db: sqlDB, q: queries.New(sqlDB), manageSecret: cfg.AuthSecret}
 }
 
 // SetGoogleSync wires g (typically NewGoogleSync's result) into s. A setter rather than a
