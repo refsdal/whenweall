@@ -47,6 +47,11 @@ type Job struct {
 	Payload     json.RawMessage // nil when none
 	Attempts    int
 	MaxAttempts int
+	// LastError is the most recent failure's error text (fail's own truncateLastError-capped
+	// value), nil once a job has never failed. Added for the admin console's dead-letter screen
+	// (internal/admin/handlers.go's GET /api/v1/admin/jobs/failed) — every scanJob caller now
+	// selects it, not just Dead, since scanJob's column list is shared with ClaimDue.
+	LastError *string
 }
 
 // ScheduleInput describes a job to schedule.
@@ -201,7 +206,7 @@ func ClaimDue(ctx context.Context, tx db.DBTX, replicaID string, limit int) ([]J
 		SET locked_by = $2, locked_at = now(), attempts = j.attempts + 1
 		FROM due
 		WHERE j.id = due.id
-		RETURNING j.id, j.kind, j.room_key, j.run_at, j.payload, j.attempts, j.max_attempts
+		RETURNING j.id, j.kind, j.room_key, j.run_at, j.payload, j.attempts, j.max_attempts, j.last_error
 	`, limit, replicaID)
 	if err != nil {
 		return nil, err
@@ -273,7 +278,7 @@ func fail(ctx context.Context, tx db.DBTX, id, errMsg string) (willRetry, rowFou
 // Dead is the dead-letter view: jobs that exhausted their attempts. Nothing reclaims these.
 func Dead(ctx context.Context, tx db.DBTX, limit int) ([]Job, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, kind, room_key, run_at, payload, attempts, max_attempts
+		SELECT id, kind, room_key, run_at, payload, attempts, max_attempts, last_error
 		FROM scheduled_jobs
 		WHERE attempts >= max_attempts
 		ORDER BY run_at DESC
@@ -332,8 +337,12 @@ func scanJob(s rowScanner) (Job, error) {
 	var j Job
 	var roomKey sql.NullString
 	var payload []byte
-	if err := s.Scan(&j.ID, &j.Kind, &roomKey, &j.RunAt, &payload, &j.Attempts, &j.MaxAttempts); err != nil {
+	var lastError sql.NullString
+	if err := s.Scan(&j.ID, &j.Kind, &roomKey, &j.RunAt, &payload, &j.Attempts, &j.MaxAttempts, &lastError); err != nil {
 		return Job{}, err
+	}
+	if lastError.Valid {
+		j.LastError = &lastError.String
 	}
 	if roomKey.Valid {
 		j.RoomKey = &roomKey.String

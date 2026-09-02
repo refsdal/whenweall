@@ -17,6 +17,7 @@ import (
 
 	_ "time/tzdata" // scratch has no /usr/share/zoneinfo; scheduling needs real tz data.
 
+	"github.com/refsdal/whenweall/internal/admin"
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/bookings"
 	"github.com/refsdal/whenweall/internal/config"
@@ -157,6 +158,7 @@ func serve() int {
 		pollsSvc.Register(mux, authSvc, cfg)
 		bookingsSvc.Register(mux, authSvc, cfg)
 		rooms.Register(mux, hub, authSvc, pollsSvc, bookingsSvc, statsSvc, cfg)
+		admin.Register(mux, authSvc, sqlDB)
 	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
