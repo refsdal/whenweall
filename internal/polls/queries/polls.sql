@@ -1,6 +1,9 @@
 -- name: GetPoll :one
 SELECT * FROM polls WHERE id = $1 AND deleted_at IS NULL;
 
+-- name: PollExists :one
+SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL);
+
 -- name: InsertPoll :exec
 INSERT INTO polls (
   id, organization_id, created_by, type, title, description, location, timezone,

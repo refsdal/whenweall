@@ -776,6 +776,17 @@ func (q *Queries) MemberHasManagingRole(ctx context.Context, arg MemberHasManagi
 	return has_role, err
 }
 
+const pollExists = `-- name: PollExists :one
+SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL)
+`
+
+func (q *Queries) PollExists(ctx context.Context, id string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, pollExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const setNotificationSubscriptionChannels = `-- name: SetNotificationSubscriptionChannels :exec
 UPDATE notification_subscriptions SET channels = $4::jsonb, updated_at = $5
 WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3

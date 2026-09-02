@@ -31,11 +31,23 @@ type PollViewer struct {
 	GuestParticipantID string
 }
 
-// PollService is the narrow seam Register needs from polls.Service for the poll WS route: build
-// pollID's WS snapshot for viewer — the same *PollView JSON as GET /api/v1/polls/{id} — or (nil,
-// nil), NOT an error, for a missing or soft-deleted poll (mirroring polls.Service.GetView's own
-// contract exactly); pollWSHandler below is what turns that nil into this route's 404.
+// PollService is the narrow seam Register needs from polls.Service for the poll WS route.
+//
+// PollExists is the route's Authorize gate (pollWSHandler): a cheap existence check (respecting
+// soft-delete) run BEFORE Hub.Subscribe, so it must never build (or cache) a full snapshot itself
+// — see the C1 fix below for why that distinction is load-bearing.
+//
+// PollSnapshot builds pollID's WS snapshot for viewer — the same *PollView JSON as GET
+// /api/v1/polls/{id} — or (nil, nil), NOT an error, for a missing or soft-deleted poll (mirroring
+// polls.Service.GetView's own contract exactly). pollWSHandler calls this FRESH, every time, from
+// ws.go's Snapshot hook — which ServeWS only ever invokes after Subscribe has already registered
+// this connection's listener (see ws.go's own ordering comment). Memoizing this result across the
+// Authorize and Snapshot calls (as an earlier version of pollWSHandler did) would reopen a real
+// gap: an update committing between Authorize and Subscribe is invisible to a stale cached
+// snapshot AND invisible to the live channel (this connection wasn't subscribed yet), so only a
+// snapshot query that runs fresh, after Subscribe, can still observe it.
 type PollService interface {
+	PollExists(ctx context.Context, pollID string) (bool, error)
 	PollSnapshot(ctx context.Context, pollID string, viewer PollViewer) (any, error)
 }
 
@@ -71,10 +83,13 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 // request data (the path's poll id, the caller's resolved viewer identity), which WSOptions has
 // nowhere else to carry.
 //
-// load caches svc.PollSnapshot's result for the lifetime of one connection attempt: ServeWS
-// (ws.go) always calls Authorize before Snapshot, and both need the very same lookup here (one
-// to decide 404 vs proceed, the other to use as the connection's first frame) — without this
-// cache, a successful connection would build the same PollView twice for no reason.
+// Authorize and Snapshot deliberately do NOT share a memoized result (an earlier version of this
+// handler did, via a `load` cache) — see PollService's own doc comment for why that was a bug, not
+// an optimization: Snapshot must run its own fresh PollSnapshot query, since ws.go's ServeWS only
+// calls it after Subscribe has already registered this connection's listener, which is what
+// closes the authorize-window gap. Authorize's PollExists call and Snapshot's PollSnapshot call
+// are two genuinely separate queries as a result — the same trade-off bookingWSHandler already
+// makes below for the same reason (its own doc comment).
 func pollWSHandler(h *Hub, a httpserver.Auth, svc PollService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pollID := r.PathValue("id")
@@ -83,32 +98,19 @@ func pollWSHandler(h *Hub, a httpserver.Auth, svc PollService) http.HandlerFunc 
 			viewer.UserID = sess.UserID
 		}
 
-		var (
-			cachedView any
-			cachedErr  error
-			loaded     bool
-		)
-		load := func(ctx context.Context) (any, error) {
-			if !loaded {
-				cachedView, cachedErr = svc.PollSnapshot(ctx, pollID, viewer)
-				loaded = true
-			}
-			return cachedView, cachedErr
-		}
-
 		h.ServeWS(WSOptions{
 			Authorize: func(rq *http.Request) (string, error) {
-				view, err := load(rq.Context())
+				exists, err := svc.PollExists(rq.Context(), pollID)
 				if err != nil {
 					return "", err
 				}
-				if view == nil {
+				if !exists {
 					return "", ErrNotFound
 				}
 				return "poll:" + pollID, nil
 			},
 			Snapshot: func(ctx context.Context, _ string) (any, error) {
-				return load(ctx)
+				return svc.PollSnapshot(ctx, pollID, viewer)
 			},
 			Presence: true,
 		})(w, r)

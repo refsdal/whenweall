@@ -27,8 +27,21 @@ import (
 // pollID, or (nil, nil) for an unknown id — mirroring polls.Service.PollSnapshot's own
 // missing/soft-deleted contract (internal/polls/ws.go) exactly, which is what lets
 // pollWSHandler's nil-check turn "unknown poll" into a 404 with no special-casing here.
+//
+// onExists, when set, runs as a side effect of PollExists (Authorize's own gate) BEFORE it
+// returns — TestPollWS_SnapshotObservesChangeDuringAuthorize uses it to simulate a write landing
+// exactly in the authorize-window C1 closes: between Authorize returning and Subscribe running.
 type fakePollService struct {
-	byID map[string]any
+	byID     map[string]any
+	onExists func(pollID string)
+}
+
+func (f *fakePollService) PollExists(_ context.Context, pollID string) (bool, error) {
+	if f.onExists != nil {
+		f.onExists(pollID)
+	}
+	view, ok := f.byID[pollID]
+	return ok && view != nil, nil
 }
 
 func (f *fakePollService) PollSnapshot(_ context.Context, pollID string, _ rooms.PollViewer) (any, error) {
@@ -231,6 +244,36 @@ func TestBookingWS_ManagerConnects(t *testing.T) {
 	frame := readWSFrame(t, conn, 5*time.Second)
 	if frame["type"] != "snapshot" {
 		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+}
+
+// TestPollWS_SnapshotObservesChangeDuringAuthorize is C1's regression test: a write that lands
+// while Authorize (PollExists) is still running — before ws.go's ServeWS ever calls Subscribe —
+// must still be visible to this connection. It can only be visible through a FRESH Snapshot call
+// (PollSnapshot queried again, after Subscribe), never through a memoized value computed at
+// Authorize-time: this connection wasn't subscribed yet when the write landed, so the live channel
+// never had a chance to deliver it either. A pollWSHandler that still cached Authorize's own
+// PollSnapshot lookup for Snapshot to reuse (the pre-C1 shape) would serve the STALE title here.
+func TestPollWS_SnapshotObservesChangeDuringAuthorize(t *testing.T) {
+	server, _, polls, _ := newTestMux(t)
+	polls.byID["p1"] = map[string]any{"id": "p1", "title": "before"}
+	polls.onExists = func(pollID string) {
+		polls.byID[pollID] = map[string]any{"id": pollID, "title": "after"}
+	}
+
+	conn := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws", nil)
+	defer func() { _ = conn.CloseNow() }()
+
+	frame := readWSFrame(t, conn, 5*time.Second)
+	if frame["type"] != "snapshot" {
+		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+	data, ok := frame["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot data = %v, want an object", frame["data"])
+	}
+	if data["title"] != "after" {
+		t.Errorf("snapshot title = %v, want after (Snapshot must query fresh, post-Subscribe, not reuse a value memoized during Authorize)", data["title"])
 	}
 }
 

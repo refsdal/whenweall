@@ -63,6 +63,7 @@ type Querier interface {
 	// in organizationId? (The creator-manages-their-own-content half is checked separately by the
 	// caller against polls.created_by — this query only ever answers the role question.)
 	MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error)
+	PollExists(ctx context.Context, id string) (bool, error)
 	// $4 is NULL to clear an override back to the user's defaults (setScopeChannels's own doc
 	// comment in subscriptions.ts).
 	SetNotificationSubscriptionChannels(ctx context.Context, arg SetNotificationSubscriptionChannelsParams) error
