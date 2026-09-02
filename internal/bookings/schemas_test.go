@@ -231,3 +231,88 @@ func TestPageInputValidate(t *testing.T) {
 		}
 	})
 }
+
+// baseBookInput mirrors baseInput's role, for BookInput.Validate's own rule set (bookSlotSchema,
+// schemas.ts): a valid visitor-facing booking request with every checked field populated.
+func baseBookInput(mutate func(*bookings.BookInput)) bookings.BookInput {
+	note := "See you then"
+	in := bookings.BookInput{
+		StartAt:  time.Now().Add(24 * time.Hour),
+		Name:     "Ada Lovelace",
+		Email:    "ada@example.com",
+		Note:     &note,
+		Timezone: "Europe/Oslo",
+	}
+	if mutate != nil {
+		mutate(&in)
+	}
+	return in
+}
+
+func TestBookInputValidate(t *testing.T) {
+	t.Run("accepts a valid booking", func(t *testing.T) {
+		if err := baseBookInput(nil).Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("name: required, trimmed, at most 80 characters", func(t *testing.T) {
+		cases := []func(*bookings.BookInput){
+			func(in *bookings.BookInput) { in.Name = "" },
+			func(in *bookings.BookInput) { in.Name = "   " },
+			func(in *bookings.BookInput) { in.Name = strings.Repeat("a", 81) },
+		}
+		for _, mutate := range cases {
+			in := baseBookInput(mutate)
+			fields := fieldsOf(t, in.Validate())
+			if _, ok := fields["name"]; !ok {
+				t.Errorf("Fields = %+v, want a name entry", fields)
+			}
+		}
+		// Exactly the limit, and leading/trailing space trimmed off before counting, both pass.
+		in := baseBookInput(func(in *bookings.BookInput) { in.Name = "  " + strings.Repeat("a", 80) + "  " })
+		if err := in.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("email: required and must be a valid address, at most 254 characters", func(t *testing.T) {
+		cases := []string{"", "not-an-email", "bob@", "Bob <bob@example.com>", strings.Repeat("a", 250) + "@a.co"}
+		for _, email := range cases {
+			in := baseBookInput(func(in *bookings.BookInput) { in.Email = email })
+			fields := fieldsOf(t, in.Validate())
+			if _, ok := fields["email"]; !ok {
+				t.Errorf("email %q: Fields = %+v, want an email entry", email, fields)
+			}
+		}
+		valid := baseBookInput(func(in *bookings.BookInput) { in.Email = "ada@example.com" })
+		if err := valid.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("note: optional, trimmed, at most 1000 characters", func(t *testing.T) {
+		in := baseBookInput(func(in *bookings.BookInput) { in.Note = nil })
+		if err := in.Validate(); err != nil {
+			t.Errorf("nil note: Validate() = %v, want nil", err)
+		}
+
+		tooLong := strings.Repeat("a", 1001)
+		in = baseBookInput(func(in *bookings.BookInput) { in.Note = &tooLong })
+		fields := fieldsOf(t, in.Validate())
+		if _, ok := fields["note"]; !ok {
+			t.Errorf("Fields = %+v, want a note entry", fields)
+		}
+	})
+
+	t.Run("timezone: 1-64 characters and a real IANA zone", func(t *testing.T) {
+		cases := []string{"", "Not/AZone", strings.Repeat("a", 65)}
+		for _, tz := range cases {
+			in := baseBookInput(func(in *bookings.BookInput) { in.Timezone = tz })
+			fields := fieldsOf(t, in.Validate())
+			if _, ok := fields["timezone"]; !ok {
+				t.Errorf("timezone %q: Fields = %+v, want a timezone entry", tz, fields)
+			}
+		}
+	})
+}

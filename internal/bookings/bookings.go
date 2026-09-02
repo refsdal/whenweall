@@ -220,6 +220,10 @@ func (s *Service) PublicAvailability(ctx context.Context, orgSlug, pageSlug stri
 // slot to book against a page that doesn't exist), matching createBooking's own `if (!page ...)
 // throw NOT_FOUND`.
 func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInput) (*BookingResult, error) {
+	if err := in.Validate(); err != nil {
+		return nil, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

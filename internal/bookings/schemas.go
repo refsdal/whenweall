@@ -2,6 +2,7 @@ package bookings
 
 import (
 	"fmt"
+	"net/mail"
 	"regexp"
 	"sort"
 	"strings"
@@ -27,6 +28,11 @@ const (
 	LimitMinNoticeMax   = 10080
 	LimitMaxDaysAheadLo = 1
 	LimitMaxDaysAheadHi = 365
+	// LimitNote/LimitName/LimitEmail port bookSlotSchema's own LIMITS.note/name and z.email().max(254)
+	// (schemas.ts) — BookInput.Validate's own field caps, below.
+	LimitNote  = 1000
+	LimitName  = 80
+	LimitEmail = 254
 )
 
 var (
@@ -111,10 +117,8 @@ func (in PageInput) Validate() error {
 		fields["location"] = fmt.Sprintf("location must be at most %d characters", LimitLocation)
 	}
 
-	if len(in.Timezone) < 1 || len(in.Timezone) > 64 {
-		fields["timezone"] = "timezone must be 1-64 characters"
-	} else if _, err := time.LoadLocation(in.Timezone); err != nil {
-		fields["timezone"] = "invalid IANA timezone"
+	if msg := validateTimezone(in.Timezone); msg != "" {
+		fields["timezone"] = msg
 	}
 
 	if in.SlotDurationMin < LimitSlotDurMin || in.SlotDurationMin > LimitSlotDurMax {
@@ -204,6 +208,66 @@ func toMinutes(hhmm string) int {
 	var h, m int
 	_, _ = fmt.Sscanf(hhmm, "%2d:%2d", &h, &m)
 	return h*60 + m
+}
+
+// validateTimezone ports timezoneSchema (schemas.ts): 1-64 characters, and a real IANA zone
+// time.LoadLocation recognizes. Returns "" when tz is valid, else the message to report under the
+// caller's own field key — shared by PageInput.Validate (its own "timezone" field) and
+// BookInput.Validate below (same rule, same field name).
+func validateTimezone(tz string) string {
+	if len(tz) < 1 || len(tz) > 64 {
+		return "timezone must be 1-64 characters"
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return "invalid IANA timezone"
+	}
+	return ""
+}
+
+// validateEmail ports bookSlotSchema's `z.email().max(254)` (schemas.ts): a syntactically valid
+// address (mail.ParseAddress, Go's closest stdlib equivalent to zod's own email check) of at most
+// LimitEmail characters. mail.ParseAddress alone would also accept a display-name form
+// ("Bob <bob@example.com>") that zod's z.email() rejects — the round-trip comparison against
+// addr.Address below (an address with no display name always parses back to exactly the input
+// string) closes that gap.
+func validateEmail(email string) bool {
+	if email == "" || len(email) > LimitEmail {
+		return false
+	}
+	addr, err := mail.ParseAddress(email)
+	return err == nil && addr.Address == email
+}
+
+// BookInput ports bookSlotSchema (schemas.ts) — see BookInput's own doc comment (bookings.go) for
+// the type's fields; StartAt/Busy carry no validation of their own here (StartAt's only rule,
+// "not in the past", is BOOKING_PAST, a Book-time conflict rather than a shape check — see
+// bookings.go's own ErrBookingPast; Busy is this port's own internal parameter, never user input).
+func (in BookInput) Validate() error {
+	fields := map[string]string{}
+
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		fields["name"] = "name is required"
+	} else if len(name) > LimitName {
+		fields["name"] = fmt.Sprintf("name must be at most %d characters", LimitName)
+	}
+
+	if !validateEmail(in.Email) {
+		fields["email"] = "must be a valid email address"
+	}
+
+	if in.Note != nil && len(strings.TrimSpace(*in.Note)) > LimitNote {
+		fields["note"] = fmt.Sprintf("note must be at most %d characters", LimitNote)
+	}
+
+	if msg := validateTimezone(in.Timezone); msg != "" {
+		fields["timezone"] = msg
+	}
+
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
 }
 
 // validateHandle ports handleSchema — the org-slug ("handle") counterpart of a page's own slug,

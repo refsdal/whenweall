@@ -247,6 +247,28 @@ func TestBook(t *testing.T) {
 			t.Errorf("err = %v, want ErrSlotTaken", err)
 		}
 	})
+
+	t.Run("rejects invalid input before ever touching the page/db (ValidationError, not NOT_FOUND)", func(t *testing.T) {
+		p := setupBookablePage(t, nil)
+		start := futureUTCSlot(3, 9, 0)
+		in := bookInput(start, "not-an-email")
+
+		_, err := p.svc.Book(ctx, p.orgSlug, p.slug, in)
+		var verr *bookings.ValidationError
+		if !errors.As(err, &verr) {
+			t.Fatalf("err = %v (%T), want *ValidationError", err, err)
+		}
+		if _, ok := verr.Fields["email"]; !ok {
+			t.Errorf("Fields = %+v, want an email entry", verr.Fields)
+		}
+
+		// Also proven against an org/page that doesn't even exist: validation runs before any
+		// lookup, so this is still ValidationError, never ErrNotFound.
+		_, err = p.svc.Book(ctx, "no-such-org", "no-such-page", in)
+		if !errors.As(err, &verr) {
+			t.Errorf("unknown org/page: err = %v (%T), want *ValidationError", err, err)
+		}
+	})
 }
 
 func TestBookedIntervals(t *testing.T) {
