@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/refsdal/whenweall/internal/db"
 )
 
 // housekeepingRoomKey is the RoomKey every housekeeping job schedules under. None of these three
@@ -33,12 +35,25 @@ const (
 // needing the attempt budget itself to be the safety net.
 const housekeepingMaxAttempts = 1_000_000
 
+// broadcastPresenceTotal is rooms.BroadcastPresenceTotal's exact signature, redeclared here (not
+// imported) so this package never depends on internal/rooms: that package already imports
+// internal/httpserver -> internal/auth -> internal/mailer -> internal/jobs, so the reverse edge
+// would be a compile-time import cycle. RegisterHousekeeping's caller (cmd/whenweall/main.go, which
+// already imports both packages with no such cycle) passes rooms.BroadcastPresenceTotal itself as
+// this parameter — the two signatures match exactly, so no adapter is needed.
+type broadcastPresenceTotal func(ctx context.Context, sqlDB db.DBTX, roomKey string) error
+
 // RegisterHousekeeping wires the three self-rescheduling housekeeping jobs into w: pruning old
 // room_events rows, sweeping stale ws_presence rows, and sweeping expired rate_limits rows. Each
 // handler deletes its rows and then reschedules its own next run, so once EnsureScheduled has
 // seeded the first run, the chain keeps itself alive without a cron process or external
 // scheduler.
-func RegisterHousekeeping(w *Worker, sqlDB *sql.DB) {
+//
+// broadcastPresence is called once per distinct room the presence sweep just deleted a stale row
+// from, after the DELETE commits — see this job's own doc comment below and
+// rooms.BroadcastPresenceTotal's for why a sweep that only deletes and never re-broadcasts leaves
+// every live subscriber's count wrong.
+func RegisterHousekeeping(w *Worker, sqlDB *sql.DB, broadcastPresence broadcastPresenceTotal) {
 	w.Register(roomsPruneKind, func(ctx context.Context, _ Job) error {
 		if _, err := sqlDB.ExecContext(ctx, `DELETE FROM room_events WHERE created_at < now() - interval '1 hour'`); err != nil {
 			return err
@@ -47,8 +62,20 @@ func RegisterHousekeeping(w *Worker, sqlDB *sql.DB) {
 	})
 
 	w.Register(presenceSweepKind, func(ctx context.Context, _ Job) error {
-		if _, err := sqlDB.ExecContext(ctx, `DELETE FROM ws_presence WHERE heartbeat_at < now() - interval '90 seconds'`); err != nil {
+		deletedRoomKeys, err := deleteStalePresenceRows(ctx, sqlDB)
+		if err != nil {
 			return err
+		}
+		// Every room a stale row was just deleted from now has a wrong (too-high) total in every
+		// live subscriber's own last-known count — broadcast the corrected total so they catch up
+		// (see rooms.BroadcastPresenceTotal's own doc comment). Best-effort: a broadcast failure
+		// here is a live-UX nit, never a reason to fail the sweep itself or block its own
+		// reschedule below (housekeepingMaxAttempts already treats this whole chain as one that
+		// must never die from a transient blip).
+		for roomKey := range deletedRoomKeys {
+			if err := broadcastPresence(ctx, sqlDB, roomKey); err != nil {
+				w.log.Error("presence sweep: broadcast corrected total", "room_key", roomKey, "error", err)
+			}
 		}
 		return rescheduleHousekeeping(ctx, sqlDB, presenceSweepKind, presenceSweepInterval)
 	})
@@ -59,6 +86,31 @@ func RegisterHousekeeping(w *Worker, sqlDB *sql.DB) {
 		}
 		return rescheduleHousekeeping(ctx, sqlDB, ratelimitSweepKind, ratelimitSweepInterval)
 	})
+}
+
+// deleteStalePresenceRows deletes every ws_presence row whose heartbeat has lapsed past 90s and
+// returns the distinct set of room_key values it touched — the rooms whose live total is now
+// wrong (too high, by exactly what was just deleted) until a corrected broadcast goes out.
+func deleteStalePresenceRows(ctx context.Context, sqlDB *sql.DB) (map[string]struct{}, error) {
+	rows, err := sqlDB.QueryContext(ctx,
+		`DELETE FROM ws_presence WHERE heartbeat_at < now() - interval '90 seconds' RETURNING room_key`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	roomKeys := make(map[string]struct{})
+	for rows.Next() {
+		var roomKey string
+		if err := rows.Scan(&roomKey); err != nil {
+			return nil, err
+		}
+		roomKeys[roomKey] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return roomKeys, nil
 }
 
 // EnsureScheduled seeds all three housekeeping jobs to run shortly after boot, but only the

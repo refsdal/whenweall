@@ -2,20 +2,57 @@ package jobs_test
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/jobs"
+	"github.com/refsdal/whenweall/internal/rooms"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
+
+// awaitHubListening blocks until hub's dedicated LISTEN connection is confirmed active, probing
+// with real Emits on a private room rather than a fixed sleep (the same technique
+// internal/rooms's own hub_test.go uses for the identical reason — a NOTIFY sent before LISTEN is
+// established is gone forever, so a test that ran the sweep before this returned could flake).
+func awaitHubListening(t *testing.T, hub *rooms.Hub, sqlDB *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	probeRoom := "probe:" + db.NewID()
+	frames, unsubscribe := hub.Subscribe(probeRoom)
+	defer unsubscribe()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		tx, err := sqlDB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rooms.Emit(ctx, tx, probeRoom, "probe", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case <-frames:
+			return
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	t.Fatal("timed out waiting for hub to start listening")
+}
 
 func TestRoomsPruneDeletesOldEventsAndReschedules(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()
 
 	w := jobs.NewWorker(d, "w1", slog.Default())
-	jobs.RegisterHousekeeping(w, d)
+	jobs.RegisterHousekeeping(w, d, rooms.BroadcastPresenceTotal)
 
 	if _, err := d.ExecContext(ctx,
 		`INSERT INTO room_events (room_key, event, created_at) VALUES ('room-1', '{}'::jsonb, now() - interval '2 hours')`,
@@ -67,7 +104,7 @@ func TestPresenceSweepDeletesStaleRowsAndReschedules(t *testing.T) {
 	ctx := context.Background()
 
 	w := jobs.NewWorker(d, "w1", slog.Default())
-	jobs.RegisterHousekeeping(w, d)
+	jobs.RegisterHousekeeping(w, d, rooms.BroadcastPresenceTotal)
 
 	if _, err := d.ExecContext(ctx,
 		`INSERT INTO ws_presence (room_key, replica_id, count, heartbeat_at) VALUES ('room-1', 'stale-replica', 1, now() - interval '5 minutes')`,
@@ -114,12 +151,84 @@ func TestPresenceSweepDeletesStaleRowsAndReschedules(t *testing.T) {
 	}
 }
 
+// TestPresenceSweepBroadcastsCorrectedTotal is I1's regression test: deleting a stale replica's
+// ws_presence row leaves every live subscriber's own last-known count wrong (too high) until
+// something re-broadcasts the corrected total — the sweep itself must do that, not just delete the
+// row and move on.
+func TestPresenceSweepBroadcastsCorrectedTotal(t *testing.T) {
+	url, d := testdb.URL(t)
+	ctx := context.Background()
+
+	hub := rooms.NewHub(url, d, slog.Default())
+	hubCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = hub.Run(hubCtx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	awaitHubListening(t, hub, d)
+
+	const roomKey = "poll:presence-sweep-test"
+	frames, unsubscribe := hub.Subscribe(roomKey)
+	defer unsubscribe()
+
+	// One stale replica row (past the 90s heartbeat threshold) and one fresh one: the corrected
+	// total the sweep broadcasts must reflect only the survivor's count.
+	if _, err := d.ExecContext(ctx,
+		`INSERT INTO ws_presence (room_key, replica_id, count, heartbeat_at) VALUES ($1, 'stale-replica', 3, now() - interval '5 minutes')`,
+		roomKey,
+	); err != nil {
+		t.Fatalf("insert stale row: %v", err)
+	}
+	if _, err := d.ExecContext(ctx,
+		`INSERT INTO ws_presence (room_key, replica_id, count, heartbeat_at) VALUES ($1, 'fresh-replica', 2, now())`,
+		roomKey,
+	); err != nil {
+		t.Fatalf("insert fresh row: %v", err)
+	}
+
+	w := jobs.NewWorker(d, "w1", slog.Default())
+	jobs.RegisterHousekeeping(w, d, rooms.BroadcastPresenceTotal)
+	room := "global"
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "presence:sweep", RoomKey: &room, RunAt: time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if _, err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	select {
+	case frame, ok := <-frames:
+		if !ok {
+			t.Fatal("subscriber channel closed unexpectedly")
+		}
+		var got map[string]any
+		if err := json.Unmarshal(frame, &got); err != nil {
+			t.Fatalf("unmarshal frame %s: %v", frame, err)
+		}
+		if got["type"] != "presence" {
+			t.Fatalf("frame type = %v, want presence", got["type"])
+		}
+		if count, ok := got["count"].(float64); !ok || int(count) != 2 {
+			t.Errorf("presence count = %v, want 2 (only the fresh replica's row survives the sweep)", got["count"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a corrected presence broadcast after the sweep")
+	}
+}
+
 func TestRatelimitSweepDeletesExpiredRowsAndReschedules(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()
 
 	w := jobs.NewWorker(d, "w1", slog.Default())
-	jobs.RegisterHousekeeping(w, d)
+	jobs.RegisterHousekeeping(w, d, rooms.BroadcastPresenceTotal)
 
 	if _, err := d.ExecContext(ctx,
 		`INSERT INTO rate_limits (key, count, reset_at) VALUES ('old-key', 1, now() - interval '2 hours')`,

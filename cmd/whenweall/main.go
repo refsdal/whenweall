@@ -95,7 +95,11 @@ func serve() int {
 	worker := jobs.NewWorker(sqlDB, hostname+"-"+db.NewID()[:6], slog.Default())
 	m := mailer.New(cfg)
 	m.RegisterHandler(worker)
-	jobs.RegisterHousekeeping(worker, sqlDB)
+	// rooms.BroadcastPresenceTotal is a package-level function, not tied to any particular Hub
+	// instance, so it can be wired in here even though the Hub itself isn't constructed until
+	// below — see jobs.RegisterHousekeeping's own doc comment for why this indirection exists at
+	// all (internal/jobs cannot import internal/rooms directly without an import cycle).
+	jobs.RegisterHousekeeping(worker, sqlDB, rooms.BroadcastPresenceTotal)
 
 	// hub is this replica's realtime fan-out (internal/rooms, plan 6): it owns its own dedicated
 	// LISTEN session (Run) independent of sqlDB's pooled connections, so it's started here,

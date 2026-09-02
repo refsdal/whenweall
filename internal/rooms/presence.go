@@ -5,7 +5,10 @@ package rooms
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/refsdal/whenweall/internal/db"
 )
 
 // presenceHeartbeatInterval is how often presenceHeartbeatLoop re-stamps this replica's
@@ -53,34 +56,46 @@ func (h *Hub) presenceLeave(ctx context.Context, roomKey string) {
 	h.broadcastPresence(ctx, roomKey)
 }
 
-// broadcastPresence reads roomKey's current total across every replica's row — no staleness
-// filter here, unlike presence.ts's readPresence, which excludes rows whose heartbeat has lapsed
-// at READ time. This design's staleness backstop is a DELETE, not a read-time filter (see
-// internal/jobs/housekeeping.go's presence:sweep job): an abandoned replica's row is removed
-// outright once its heartbeat lapses past 90s, at which point it simply stops existing to sum
-// over; a row still present here is, by definition, either live or not yet past that threshold —
-// and the constant recomputation on every join/leave (rather than only periodically, the way the
-// sweep runs) means a genuinely abandoned row's brief overcounting window is bounded by the
-// sweep's own cadence, not by this function.
-//
-// Then it Emits the total as a "presence" event, so every replica's own local subscribers see the
-// update too — Emit's local dispatch is entirely this-hub-only; only Postgres NOTIFY crosses
-// replica boundaries (see hub.go's package doc comment). This runs OUTSIDE any transaction,
-// deliberately: presenceJoin/presenceLeave's write has already committed by the time this
-// executes, and a reader racing in between that commit and this Emit seeing a briefly stale total
-// is an acceptable, self-correcting condition (the very next join/leave on this room corrects it)
-// — not worth paying for a cross-statement transaction here.
+// broadcastPresence reads roomKey's current total and Emits it as this room's "presence" event —
+// see BroadcastPresenceTotal, which does the actual work; this is just that function bound to the
+// hub's own sqlDB, with errors logged rather than returned (a presence miscount is a UX nit, never
+// a reason to fail whatever join/leave call triggered it).
 func (h *Hub) broadcastPresence(ctx context.Context, roomKey string) {
-	var total int64
-	if err := h.sqlDB.QueryRowContext(ctx,
-		`SELECT coalesce(sum(count), 0) FROM ws_presence WHERE room_key = $1`, roomKey,
-	).Scan(&total); err != nil {
-		h.log.Error("rooms: presence total", "room_key", roomKey, "error", err)
-		return
-	}
-	if err := Emit(ctx, h.sqlDB, roomKey, "presence", map[string]any{"count": total}); err != nil {
+	if err := BroadcastPresenceTotal(ctx, h.sqlDB, roomKey); err != nil {
 		h.log.Error("rooms: presence broadcast", "room_key", roomKey, "error", err)
 	}
+}
+
+// BroadcastPresenceTotal re-reads roomKey's current total across every replica's ws_presence row
+// and Emits it as this room's "presence" event ({"type":"presence","count":N}) — the same
+// broadcast presenceJoin/presenceLeave trigger on every join/leave, exported so a caller with no
+// Hub reference can trigger the identical broadcast. internal/jobs's presence:sweep housekeeping
+// job (housekeeping.go) is that caller: it DELETEs stale ws_presence rows outright rather than
+// filtering them at read time (see this function's own callers' doc comments for why), which means
+// every live subscriber's last-known count for an affected room is now wrong by exactly the
+// deleted rows' contribution — this is what corrects it, once per swept room, right after the
+// DELETE that made the correction necessary.
+//
+// No staleness filter here, unlike presence.ts's readPresence, which excludes lapsed rows at READ
+// time — this design's staleness backstop is the DELETE itself; a row still present when this
+// query runs is, by definition, either live or not yet past the sweep's own threshold.
+//
+// Runs OUTSIDE any transaction, deliberately: whatever write made this total correct (a join/leave
+// UPDATE, or the sweep's own DELETE) has already committed by the time this executes, and a reader
+// racing in between that commit and this Emit seeing a briefly stale total is an acceptable,
+// self-correcting condition (the very next join/leave/sweep on this room corrects it) — not worth
+// paying for a cross-statement transaction here.
+func BroadcastPresenceTotal(ctx context.Context, sqlDB db.DBTX, roomKey string) error {
+	var total int64
+	if err := sqlDB.QueryRowContext(ctx,
+		`SELECT coalesce(sum(count), 0) FROM ws_presence WHERE room_key = $1`, roomKey,
+	).Scan(&total); err != nil {
+		return fmt.Errorf("rooms: presence total: %w", err)
+	}
+	if err := Emit(ctx, sqlDB, roomKey, "presence", map[string]any{"count": total}); err != nil {
+		return fmt.Errorf("rooms: presence broadcast: %w", err)
+	}
+	return nil
 }
 
 // presenceBootSweep deletes any ws_presence rows already tagged with this replica's id, called
