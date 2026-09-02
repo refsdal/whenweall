@@ -130,6 +130,31 @@ func TestSeed_DefaultsToAVerifiedSignInableUser(t *testing.T) {
 	}
 }
 
+// TestSeed_ManySeedsAgainstOneServerNeverRateLimit is the regression test for the rate-limiter
+// finding: Limen's own credential-password plugin caps /signup/credential and /signin/credential
+// at 5 requests/10s each, keyed per (IP, path) — and httptest.NewRequest's fixed default
+// RemoteAddr ("192.0.2.1:1234") would otherwise make every seeded signup in a real, long-lived
+// server process look like the same caller. seedTestServer builds exactly ONE Server/auth.Service
+// pair (mirroring a real server, unlike every other test in this file, each of which also only
+// seeds a couple of users but would never have noticed a shared-bucket problem on its own), and
+// this drives eight seed+signin round trips — well past the old 5/10s ceiling — against it.
+// Passing proves both fixes: internal/auth.httpConfigOptions disabling Limen's own rate limiter
+// under EnableTestRoutes, and this package's routes() skipping the Postgres-backed one.
+func TestSeed_ManySeedsAgainstOneServerNeverRateLimit(t *testing.T) {
+	srv, _, _, _ := seedTestServer(t)
+
+	const seedCount = 8
+	for i := 0; i < seedCount; i++ {
+		seeded := postSeed(t, srv, map[string]any{})
+		email := stringField(t, seeded, "email")
+		password := stringField(t, seeded, "password")
+
+		if cookies := signIn(t, srv, email, password); len(cookies) == 0 {
+			t.Fatalf("seed #%d: signin/credential set no cookies", i)
+		}
+	}
+}
+
 func TestSeed_WithPollCreatesAPollTheUserOwns(t *testing.T) {
 	srv, _, pollsSvc, _ := seedTestServer(t)
 

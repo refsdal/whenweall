@@ -33,6 +33,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
@@ -200,6 +201,22 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 // token and Set-Cookie are all whatever Limen itself produces — nothing here reaches into
 // Limen's own tables directly. autoSignInOnSignUp (buildLimenConfig's default, unchanged) means
 // signup alone mints a session; there is no separate signin call to make.
+// seedRemoteAddrCounter backs nextSeedRemoteAddr — see its own doc comment.
+var seedRemoteAddrCounter atomic.Uint32
+
+// nextSeedRemoteAddr hands each seedSignUp call a distinct synthetic client address, rather than
+// letting every one of them share httptest.NewRequest's fixed default ("192.0.2.1:1234"). Belt-
+// and-braces alongside the two real fixes for the rate-limiter-trips-on-repeated-seeding problem
+// this address sharing would otherwise cause (internal/auth.httpConfigOptions disables Limen's
+// own rate limiter, and this package's routes() skips its Postgres-backed one, both gated on
+// EnableTestRoutes exactly like this route is) — belt-and-braces because a future change to
+// either of those two gates should not silently reintroduce "every seeded signup looks like the
+// same IP" as a second, independent way to trip a limiter keyed on it.
+func nextSeedRemoteAddr() string {
+	n := seedRemoteAddrCounter.Add(1)
+	return fmt.Sprintf("10.%d.%d.%d:%d", (n>>16)&0xff, (n>>8)&0xff, n&0xff, 40000+(n%20000))
+}
+
 func seedSignUp(authSvc *auth.Service, email, password string) ([]*http.Cookie, error) {
 	payload, err := json.Marshal(map[string]string{"email": email, "password": password})
 	if err != nil {
@@ -208,6 +225,7 @@ func seedSignUp(authSvc *auth.Service, email, password string) ([]*http.Cookie, 
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup/credential", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = nextSeedRemoteAddr()
 	rec := httptest.NewRecorder()
 	authSvc.Handler().ServeHTTP(rec, req)
 

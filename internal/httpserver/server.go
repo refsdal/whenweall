@@ -110,7 +110,20 @@ func (s *Server) routes() {
 	// internal/auth.buildLimenConfig) unmodified either way. CheckOrigin is applied globally in
 	// Handler() below (scoped to /api/ via APIOnly) rather than per-route here, so it also covers
 	// whatever else RegisterAPI mounts on this same mux — see Handler()'s doc comment.
-	s.mux.Handle("/api/v1/auth/", s.authRateLimitMiddleware(lockedAuthHandler))
+	//
+	// EnableTestRoutes skips this budget entirely rather than raising it: the same e2e traffic
+	// this flag exists for (internal/httpserver's Task 5 seed route, one fresh signup per fixture,
+	// one sign-in per spec, all against ONE long-lived server process) is exactly what this 10/min
+	// ceiling is sized to catch as abuse, and a deployment that has already accepted
+	// EnableTestRoutes's own premise — the seed route resets/creates data on demand, config.Load
+	// hard-fails it alongside APP_ENV=production — has no reason to also defend this budget
+	// against its own test traffic. Mirrors internal/auth.httpConfigOptions's identical call on
+	// Limen's own built-in rate limiter, for the identical reason.
+	authRouteHandler := lockedAuthHandler
+	if !s.cfg.EnableTestRoutes {
+		authRouteHandler = s.authRateLimitMiddleware(lockedAuthHandler)
+	}
+	s.mux.Handle("/api/v1/auth/", authRouteHandler)
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.

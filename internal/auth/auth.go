@@ -195,29 +195,54 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 				s.enqueueTokenMail(email, "verify_email", "/verify-email", token)
 			}),
 		)),
-		HTTP: limen.NewDefaultHTTPConfig(
-			limen.WithHTTPBasePath("/api/v1/auth"),
-			// Secure only when the app itself is served over https: an http-served local/dev
-			// deployment (cfg.AppURL "http://...") would otherwise get a cookie the browser
-			// silently refuses to send back over that same http connection, breaking sessions
-			// entirely rather than just weakening them.
-			limen.WithHTTPCookieSecure(strings.HasPrefix(cfg.AppURL, "https://")),
-			// Every signin/signup/me (and two-factor/magic-link/oauth) response is routed
-			// through this transformer instead of Limen's default user serialization — see
-			// sessionTransformer's own doc comment for why the default is missing a usable id.
-			limen.WithHTTPSessionTransformer(s.sessionTransformer),
-			// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
-			// (this package's first attempt at the personal-org invariant) turns out to miss most
-			// real signups. ctx.GetAuthResult() is only populated when the route handler itself
-			// calls Responder.SessionResponse — but this config's oauth plugin runs in its
-			// default redirect mode (RedirectWithSession), which redirects the browser instead of
-			// calling SessionResponse, and magic-link's verify (autoCreateUser default true) has
-			// the same gap. A hook keyed to specific route IDs silently no-ops for both. The
-			// invariant is instead enforced lazily, once per user per process, in
-			// resolveSession (session.go) — see ensurePersonalOrgOnce.
-		),
-		CLI: cliCfg,
+		HTTP: limen.NewDefaultHTTPConfig(httpConfigOptions(cfg, s)...),
+		CLI:  cliCfg,
 	}
+}
+
+// httpConfigOptions builds buildLimenConfig's HTTP options, split out so the test-mode rate
+// limiter override below reads as one clearly-labeled addition rather than a change buried inside
+// an already-long literal.
+func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption {
+	opts := []limen.HTTPConfigOption{
+		limen.WithHTTPBasePath("/api/v1/auth"),
+		// Secure only when the app itself is served over https: an http-served local/dev
+		// deployment (cfg.AppURL "http://...") would otherwise get a cookie the browser
+		// silently refuses to send back over that same http connection, breaking sessions
+		// entirely rather than just weakening them.
+		limen.WithHTTPCookieSecure(strings.HasPrefix(cfg.AppURL, "https://")),
+		// Every signin/signup/me (and two-factor/magic-link/oauth) response is routed
+		// through this transformer instead of Limen's default user serialization — see
+		// sessionTransformer's own doc comment for why the default is missing a usable id.
+		limen.WithHTTPSessionTransformer(s.sessionTransformer),
+		// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
+		// (this package's first attempt at the personal-org invariant) turns out to miss most
+		// real signups. ctx.GetAuthResult() is only populated when the route handler itself
+		// calls Responder.SessionResponse — but this config's oauth plugin runs in its
+		// default redirect mode (RedirectWithSession), which redirects the browser instead of
+		// calling SessionResponse, and magic-link's verify (autoCreateUser default true) has
+		// the same gap. A hook keyed to specific route IDs silently no-ops for both. The
+		// invariant is instead enforced lazily, once per user per process, in
+		// resolveSession (session.go) — see ensurePersonalOrgOnce.
+	}
+
+	// EnableTestRoutes means /api/test/seed (internal/httpserver's Task 5 route) is live, and
+	// with it, e2e specs signing up a fresh user per fixture against ONE long-lived server
+	// process. Limen's own built-in rate limiter (NewDefaultRateLimiterConfig, unconditionally
+	// wired in whenever this option is absent) is a single in-memory bucket per (IP, path) —
+	// credential-password's own PluginHTTPConfig caps /signup/credential and /signin/credential
+	// at 5 requests/10s each, which a real Playwright run blows through in seconds (one seed call
+	// per fixture, one sign-in per spec) regardless of how many distinct e2e users those requests
+	// are for. A deployment that has already accepted "the seed route resets/creates data on
+	// demand" (EnableTestRoutes's whole premise, config.Load's own hard-fail keeps this off
+	// production) has no reason to also defend Limen's routes against its OWN test traffic, so
+	// this disables Limen's rate limiter outright rather than trying to raise its ceiling high
+	// enough to guess right for an unknown suite size.
+	if cfg.EnableTestRoutes {
+		opts = append(opts, limen.WithHTTPRateLimiter(limen.WithRateLimiterEnabled(false)))
+	}
+
+	return opts
 }
 
 // Handler returns Limen's own http.Handler, already mounted at the base path configured above
