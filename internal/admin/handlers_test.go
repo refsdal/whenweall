@@ -150,6 +150,37 @@ func seedDeadJob(t *testing.T, d *sql.DB) string {
 	return id
 }
 
+// seedLiveClaimedJob schedules a "mail:send" job with room to fail more than once
+// (max_attempts: 3) and claims it — attempts=1, still < max_attempts, i.e. live: neither
+// dead-lettered nor untouched. Used by TestHandleRetryJob_LiveJobReturns409 to prove Retry is
+// refused for anything jobs.Dead itself wouldn't surface.
+func seedLiveClaimedJob(t *testing.T, d *sql.DB) string {
+	t.Helper()
+	ctx := context.Background()
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind:        "mail:send",
+		RunAt:       time.Now().Add(-time.Second),
+		Payload:     map[string]string{"to": "still-live@example.com"},
+		MaxAttempts: 3,
+	}); err != nil {
+		t.Fatalf("scheduling live job: %v", err)
+	}
+	claimed, err := jobs.ClaimDue(ctx, d, "handlers-test-worker-live", 10)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	var id string
+	for _, j := range claimed {
+		if j.Kind == "mail:send" {
+			id = j.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("seeded live job was not claimed")
+	}
+	return id
+}
+
 // --- staff gate ---------------------------------------------------------------------------------
 
 // adminRoutes is the full endpoint table this task's brief specifies — every one of them must be
@@ -573,6 +604,55 @@ func TestHandleRetryJob_ResurrectsDeadJobAndAudits(t *testing.T) {
 	}
 	if !auditRowExists(t, d, "job.retry", jobID) {
 		t.Error("POST .../retry left no admin_audit_log row")
+	}
+}
+
+// TestHandleRetryJob_LiveJobReturns409 is I2's own regression test: retrying a job that exists
+// but isn't dead-lettered (attempts < max_attempts — here, one that's already claimed and being
+// worked) must be refused with 409 "conflict", not silently reset out from under whatever already
+// has it claimed.
+func TestHandleRetryJob_LiveJobReturns409(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	client := staffClient(t, h, "staff-retry-live@example.com")
+	jobID := seedLiveClaimedJob(t, d)
+
+	var attemptsBefore, lockedByBefore sql.NullString
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT attempts::text, locked_by FROM scheduled_jobs WHERE id = $1`, jobID,
+	).Scan(&attemptsBefore, &lockedByBefore); err != nil {
+		t.Fatalf("reading job state before retry: %v", err)
+	}
+
+	resp := h.requestJSON(t, client, http.MethodPost, "/api/v1/admin/jobs/"+jobID+"/retry", nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error.Code != "conflict" {
+		t.Errorf("error.code = %q, want conflict", body.Error.Code)
+	}
+
+	var attemptsAfter, lockedByAfter sql.NullString
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT attempts::text, locked_by FROM scheduled_jobs WHERE id = $1`, jobID,
+	).Scan(&attemptsAfter, &lockedByAfter); err != nil {
+		t.Fatalf("reading job state after retry: %v", err)
+	}
+	if attemptsAfter != attemptsBefore || lockedByAfter != lockedByBefore {
+		t.Errorf("job state changed after a rejected retry: before (attempts=%v, locked_by=%v), after (attempts=%v, locked_by=%v)",
+			attemptsBefore, lockedByBefore, attemptsAfter, lockedByAfter)
+	}
+	if auditRowExists(t, d, "job.retry", jobID) {
+		t.Error("rejected retry left a job.retry audit row")
 	}
 }
 

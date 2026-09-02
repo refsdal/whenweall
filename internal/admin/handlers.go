@@ -30,11 +30,13 @@
 //	                            read off the underlying jobs.Job at all (see FailedJobView's own
 //	                            doc comment), since a dead-lettered mail job's payload can carry a
 //	                            recipient address or an unsubscribe/verification token.
-//	POST jobs/{id}/retry     -> {"ok": true}
+//	POST jobs/{id}/retry     -> {"ok": true} (404 "not_found" for an unknown job id, 409
+//	                            "conflict" for one that exists but isn't dead-lettered yet)
 package admin
 
 import (
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -323,15 +325,28 @@ func handleRetryJob(sqlDB *sql.DB) http.HandlerFunc {
 		}
 		defer func() { _ = tx.Rollback() }()
 
-		var exists bool
-		if err := tx.QueryRowContext(r.Context(),
-			`SELECT EXISTS(SELECT 1 FROM scheduled_jobs WHERE id = $1)`, id,
-		).Scan(&exists); err != nil {
+		// FOR UPDATE locks the row for the rest of this tx, so a concurrent claim (the worker's
+		// own ClaimDue) can't slip in between this check and Retry's own UPDATE below. Distinguishes
+		// three outcomes, not two: absent entirely -> 404 "not_found" (the pre-existing contract,
+		// e.g. a stale link); found but still live (attempts < max_attempts, e.g. already
+		// re-claimed by the worker, or never actually failed) -> 409 "conflict", since retrying a
+		// job that isn't dead-lettered would stomp on whatever is already working it; found and
+		// dead-lettered -> proceed. Retrying only ever makes sense for the dead-letter queue this
+		// route's own handleFailedJobs surfaces (attempts >= max_attempts) — resurrecting a job
+		// that's merely mid-flight is never the support console's intent.
+		var attempts, maxAttempts int
+		err = tx.QueryRowContext(r.Context(),
+			`SELECT attempts, max_attempts FROM scheduled_jobs WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&attempts, &maxAttempts)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			httpserver.Err(w, http.StatusNotFound, "not_found", "job not found", nil)
+			return
+		case err != nil:
 			writeInternalError(w, err)
 			return
-		}
-		if !exists {
-			httpserver.Err(w, http.StatusNotFound, "not_found", "job not found", nil)
+		case attempts < maxAttempts:
+			httpserver.Err(w, http.StatusConflict, "conflict", "job is not dead-lettered", nil)
 			return
 		}
 
