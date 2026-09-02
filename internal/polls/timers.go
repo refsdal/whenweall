@@ -96,17 +96,21 @@ func armDeadline(ctx context.Context, tx db.DBTX, pollID string, deadlineAt *tim
 // EnqueueDigestItem ports PollRoom.enqueueDigest's storage+debounce semantics, using the pending
 // "poll.digest" scheduled_jobs row (keyed by room_key "poll:"+pollID) as the accumulator in place
 // of a durable object's own storage: the first item for a poll arms the job DIGEST_DELAY_MS from
-// now; every item after that appends to the same row's payload without resetting the timer (read-
-// modify-write inside one transaction, so two activities racing each other can't drop one).
+// now; every item after that appends to the same row's payload without resetting the timer.
+//
+// The read-modify-write below is NOT safe on its own: the SELECT takes no row lock, and
+// jobs.Schedule's upsert (ON CONFLICT DO UPDATE SET payload = EXCLUDED.payload) blindly overwrites
+// whatever's there with this call's own computed payload — two concurrent calls for the SAME poll
+// under READ COMMITTED could both read the same pending payload, each append their own item to
+// that same stale snapshot, and the second commit to land would silently clobber the first
+// caller's item. The pg_advisory_xact_lock below closes that gap by serializing every
+// EnqueueDigestItem call for a given poll: PollRoom's own equivalent needs no such lock, since a
+// durable object serializes all its own storage access by construction (see #serialize call sites
+// throughout PollRoom.ts) — there's no concurrent-write race to guard against there at all.
 //
 // event must be one of the digest-batched events (isDigestEvent) — an immediate event has no
 // debounce window and must go through its own dedicated path instead (e.g. Finalize/Claim's
 // direct enqueueMailPoll calls, or the "poll.deadline" handler's "closed" mail).
-//
-// Nothing in this task calls EnqueueDigestItem yet: wiring AddParticipant/UpdateParticipant/
-// AddComment (participants.go) to raise response.created/comment.created/etc. activity is out of
-// this task's file list (see the task report) — this method is the produced capability for
-// whichever task wires that up next, and is exercised directly by this package's own tests.
 func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item DigestItem) error {
 	if !isDigestEvent(item.Event) {
 		return fmt.Errorf("polls: %q is not a digest-batched event", item.Event)
@@ -117,6 +121,15 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// Blocks until any other in-flight EnqueueDigestItem transaction holding this SAME poll's
+	// lock commits or rolls back — see this function's own doc comment for why the
+	// read-modify-write immediately below needs it. hashtext(...) folds the poll-scoped key into
+	// the single bigint pg_advisory_xact_lock takes; the "_xact_" variant releases automatically
+	// at this transaction's commit/rollback, never held past this function returning.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('poll.digest:' || $1))`, pollID); err != nil {
+		return err
+	}
 
 	roomKey := "poll:" + pollID
 

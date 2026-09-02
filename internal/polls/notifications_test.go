@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -809,5 +810,89 @@ func TestMailPollDeliversRealMail(t *testing.T) {
 	icsBody := fetchMailpitAttachmentContent(t, apiBaseURL, detail.ID, att.PartID)
 	if !strings.Contains(icsBody, "URL:"+wantURL) {
 		t.Errorf(".ics body missing absolute URL %q: %q", wantURL, icsBody)
+	}
+}
+
+// TestEnqueueDigestItemConcurrentRace is I4's evidence: two goroutines racing EnqueueDigestItem
+// for the SAME poll must both land their item in the accumulator, not have one silently clobber
+// the other. Without the pg_advisory_xact_lock in EnqueueDigestItem (timers.go), the read-modify-
+// write there has no row lock of its own, and jobs.Schedule's upsert blindly overwrites the whole
+// payload with whatever the calling transaction computed — so two concurrent calls that both read
+// the same starting payload can each append their own item to that same stale snapshot, and
+// whichever commits last wins, silently dropping the other's item.
+func TestEnqueueDigestItemConcurrentRace(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+	var wg sync.WaitGroup
+	names := make([]string, 20)
+	for i := range names {
+		names[i] = fmt.Sprintf("Racer%d", i)
+	}
+	errs := make(chan error, len(names))
+	start := make(chan struct{})
+	for _, name := range names {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			<-start
+			errs <- s.EnqueueDigestItem(ctx, created.ID, polls.DigestItem{
+				Event: polls.EventResponseCreated, Name: name,
+			})
+		}(name)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("EnqueueDigestItem: %v", err)
+		}
+	}
+
+	rows, err := d.QueryContext(ctx,
+		`SELECT payload FROM scheduled_jobs WHERE kind = $1 AND room_key = $2`,
+		"poll.digest", "poll:"+created.ID)
+	if err != nil {
+		t.Fatalf("query scheduled_jobs: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var payloads []struct {
+		PollID string             `json:"pollId"`
+		Items  []polls.DigestItem `json:"items"`
+	}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan payload: %v", err)
+		}
+		var p struct {
+			PollID string             `json:"pollId"`
+			Items  []polls.DigestItem `json:"items"`
+		}
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		payloads = append(payloads, p)
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("poll.digest rows for this poll = %d, want 1 (one accumulator row)", len(payloads))
+	}
+
+	gotNames := map[string]bool{}
+	for _, item := range payloads[0].Items {
+		gotNames[item.Name] = true
+	}
+	for _, name := range names {
+		if !gotNames[name] {
+			t.Errorf("digest items = %+v, missing %q (lost update — the advisory lock isn't serializing concurrent accumulation)", payloads[0].Items, name)
+		}
+	}
+	if len(payloads[0].Items) != len(names) {
+		t.Errorf("len(Items) = %d, want %d: %+v", len(payloads[0].Items), len(names), payloads[0].Items)
 	}
 }
