@@ -140,8 +140,8 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
 
 - **No account needed.** Type a name, tap the cells, done. An e-mail address is optional
   unless the organiser required one.
-- **Change your mind later** — a guest's answer stays editable from the same browser via a
-  hashed edit token; signed-in voters can edit from any device.
+- **Change your mind later** — a guest's answer stays editable from the same browser via an
+  HMAC-signed edit token (nothing stored at rest); signed-in voters can edit from any device.
 - **Live grid.** Other people's votes, comments and presence appear without a refresh.
 - **Your time zone, not the organiser's.** Date-time options render in the viewer's zone
   with a "Times shown in Europe/Oslo · change" control.
@@ -219,7 +219,7 @@ flowchart LR
   G["Google Calendar API<br/>freebusy · events (optional)"]
 
   B -- "fetch: /api/v1/*" --> H
-  B -. "WebSocket: /api/v1/polls/:id/ws, /bookings/:id/ws" .-> RM
+  B -. "WebSocket: /api/v1/polls/:id/ws, /api/v1/booking-pages/:id/ws" .-> RM
   H -- "reads and writes: source of truth" --> PG
   RM -- "LISTEN/NOTIFY room_events" --> PG
   J -- "claims scheduled_jobs, FOR UPDATE SKIP LOCKED" --> PG
@@ -230,13 +230,17 @@ flowchart LR
 
 **A vote, end to end.** The browser calls `POST /api/v1/polls/:id/participants`. The
 handler verifies the captcha token (if configured and the caller is anonymous), checks
-the rate limiter, re-checks that the poll is still open, then inserts the participant and
-their votes in a single transaction. Only after Postgres commits does the same handler
-insert a `room_events` row and `pg_notify` it — every replica's hub picks that up and
-relays a `poll.changed` frame to each connected client, which refetches the poll and
-re-renders. If the notify path fails for any reason, the vote is still saved and the
-request still succeeds — realtime is a nice-to-have layered on top of a plain HTTP write,
-never a dependency of it.
+the rate limiter, re-checks that the poll is still open, then — inside a single
+transaction — inserts the participant and their votes, appends a `room_events` row, and
+`pg_notify`s a pointer to it (`internal/rooms.Emit`, spec §4). All three writes commit or
+roll back together, so an event exists if and only if the vote that produced it does:
+there is no way for the notify to fail while the vote survives, or vice versa. Once that
+transaction commits, every replica's hub — listening on the same Postgres channel — reads
+the new `room_events` row and fans out a `poll.changed` frame to each connected client,
+which refetches the poll and re-renders. Delivery to the browser is at-least-once, not
+exactly-once (a redundant `NOTIFY`, or a resync after reconnect, can redeliver a frame the
+client already applied), so the client dedupes by the event's `seq`, never assuming
+each one arrives exactly once — see `internal/rooms/PROTOCOL.md`.
 
 **A claim, end to end.** Sign-up sheets are a third poll type, `signup`, whose options
 carry a `capacity` (`null` = unlimited). A claim is just a vote row with `answer = 'yes'`
@@ -496,7 +500,7 @@ web/                      the SPA — React 19, TanStack Router, Vite, Tailwind
 e2e/                      Playwright specs and fixtures — the oracle this whole rewrite was proven against
 docs/                     admin runbook, Limen schema-regen steps, screenshot script docs
 compose.yaml              self-host deployment: one app container, one Postgres
-Dockerfile                two-stage build: bun builds web/, go build embeds it into the binary
+Dockerfile                three-stage build: bun builds web/, go build embeds it into the binary, scratch runs it
 ```
 
 ## Internationalisation

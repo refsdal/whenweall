@@ -1,7 +1,7 @@
 /**
- * Constants shared between playwright.config.ts's `webServer`, `global-setup.ts` (starts the
+ * Constants shared between playwright.config.ts's `webServer` (its `run-server.sh` starts the
  * throwaway Postgres/Mailpit containers) and `global-teardown.ts` (stops them) — one place so the
- * container names/ports/credentials can't drift apart between the three files that need them.
+ * container names/ports/credentials can't drift apart between the files that need them.
  *
  * Ports are deliberately different from compose.yaml's own dev/smoke ports (5433/1025/8025), so
  * this suite can run alongside a `docker compose up` session without colliding.
