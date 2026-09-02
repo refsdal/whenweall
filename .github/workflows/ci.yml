@@ -5,79 +5,82 @@ on:
 permissions: { contents: read }
 concurrency: { group: 'ci-${{ github.ref }}', cancel-in-progress: true }
 jobs:
-  checks:
+  # Backend: vet + lint + the full suite against a real Postgres (testcontainers-go spins up its
+  # own container — nothing to provision here), plus a second, narrower pass under the race
+  # detector for the handful of packages where "two requests racing the same slot" is the actual
+  # thing under test.
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v9
+      - run: go test ./...
+      # internal/rooms runs UNFILTERED: this whole package IS the concurrency-sensitive surface
+      # (the hub's watermark/dispatch state, presence counting, the keepalive goroutine racing
+      # read/write pumps, ...), not just the handful of tests a name filter would happen to catch.
+      # internal/polls and internal/bookings stay scoped by name to keep the job fast: only their
+      # own concurrent-writer tests (claim races, digest batching, double-booking, ...) actually
+      # benefit from -race, not their whole suite.
+      - run: go test -race ./internal/rooms/...
+      - run: go test -race -run 'Race|Concurrent|Winner|LateCommitter|Slow' ./internal/polls/... ./internal/bookings/...
+
+  # Frontend: the SPA under web/ has its own toolchain (bun) entirely separate from the root
+  # package.json, which exists only for Playwright's e2e suite below.
+  web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
-      # `setup-bun` caches the bun binary, not the module cache bun installs from. Keying on
-      # bun.lock means a run only pays the network cost when a dependency actually changed.
+        with: { bun-version-file: web/.bun-version }
       - uses: actions/cache@v4
         with:
           {
             path: ~/.bun/install/cache,
-            key: "bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
-            restore-keys: 'bun-${{ runner.os }}-',
+            key: "bun-web-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}",
+            restore-keys: 'bun-web-${{ runner.os }}-',
           }
-      - run: bun install --frozen-lockfile
-      - run: cp .dev.vars.example .dev.vars
-      - run: bun run cf-typegen
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run format:check
-      - run: bun run build
+      - run: cd web && bun install --frozen-lockfile
+      - run: cd web && bun run typecheck
+      - run: cd web && bun run lint
+      - run: cd web && bunx vitest run
 
-  # Split out of `checks` so the ~1m of typecheck/lint/format/build runs *beside* the suite
-  # instead of ahead of it, and sharded because the workers project is pinned to `maxWorkers: 4`
-  # (see vitest.config.ts) — on a 4-core runner that is the ceiling, not spare headroom, so the
-  # only way to add parallelism is to add runners.
-  #
-  # Two shards, deliberately not more: e2e is ~2m40s and cannot be shortened by sharding this
-  # suite, so once a shard drops below that it stops moving the critical path and just costs
-  # another runner. Vitest shards by file count rather than duration, so the two are uneven
-  # (measured locally: 75s and 116s of a 168s whole) — the slower one is what to watch.
-  test:
+  # A plain, unpushed build of the exact image release.yml publishes — catches a broken
+  # Dockerfile (a missing build-arg, a stage that no longer compiles) on every PR, not just at
+  # release time.
+  docker:
     runs-on: ubuntu-latest
-    strategy:
-      # Report both shards' failures rather than cancelling the sibling on the first red one.
-      fail-fast: false
-      matrix: { shard: [1, 2] }
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
-      - uses: actions/cache@v4
-        with:
-          {
-            path: ~/.bun/install/cache,
-            key: "bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
-            restore-keys: 'bun-${{ runner.os }}-',
-          }
-      - run: bun install --frozen-lockfile
-      - run: cp .dev.vars.example .dev.vars
-      # `bun run` appends what follows `--` to the script, so this expands to
-      # `vitest run --shard=N/2` — the shard split stays in the workflow, not in package.json.
-      - run: bun run test -- --shard=${{ matrix.shard }}/2
+      - run: docker build .
 
-  # Deliberately NOT `needs:` anything. e2e builds and exercises the app itself, so it does not
-  # depend on lint/typecheck/unit results — gating it behind them only added its ~2min to the
-  # critical path of every green run. A broken PR now burns one extra runner instead.
+  # Playwright is the oracle for the whole rewrite: it drives the real, built SPA served by the
+  # real Go binary (e2e/run-server.sh, this job's own webServer command) against two throwaway
+  # `docker run` containers (Postgres, Mailpit) — needs the Docker daemon ubuntu-latest already
+  # ships with, nothing else to provision.
   e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: .bun-version }
+        with: { bun-version-file: web/.bun-version }
       - uses: actions/cache@v4
         with:
           {
             path: ~/.bun/install/cache,
-            key: "bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
-            restore-keys: 'bun-${{ runner.os }}-',
+            key: "bun-e2e-${{ runner.os }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}",
+            restore-keys: 'bun-e2e-${{ runner.os }}-',
           }
       - run: bun install --frozen-lockfile
-      - run: cp .dev.vars.example .dev.vars
+      - run: cd web && bun install --frozen-lockfile
       # Keyed on the resolved @playwright/test version so a browser bump misses the cache and
       # re-downloads, rather than silently testing against a stale Chromium.
       - id: pw
@@ -95,34 +98,7 @@ jobs:
         run: bunx playwright install-deps chromium
       - if: steps.pw-cache.outputs.cache-hit != 'true'
         run: bunx playwright install --with-deps chromium
-      - run: bun run db:migrate:local
-      - run: bun run test:e2e
+      - run: bunx playwright test
       - uses: actions/upload-artifact@v7
         if: failure()
         with: { name: playwright-report, path: playwright-report, retention-days: 7 }
-
-  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.25'
-          cache: true
-      - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v9
-      - run: go test ./...
-      # A second pass under the race detector: CGO_ENABLED needs a C compiler, which isn't
-      # guaranteed on every machine this suite runs on (it wasn't in the sandbox this was developed
-      # in), but GitHub's ubuntu-latest runners do have gcc.
-      #
-      # internal/rooms runs UNFILTERED (M11): this whole package IS the concurrency-sensitive
-      # surface plan 6 built (the hub's watermark/dispatch/pendingNotify state, presence counting,
-      # the keepalive goroutine racing writePumpLoop/readPumpLoop, ...), not just the handful of
-      # tests a name filter would happen to catch — a name-filtered pass here already missed real
-      # races in earlier review rounds. internal/polls and internal/bookings stay scoped by name to
-      # keep the job fast: only their own concurrent-writer tests (claim races, digest batching,
-      # ...) actually benefit from -race, not their whole suite.
-      - run: go test -race ./internal/rooms/...
-      - run: go test -race -run 'Race|Concurrent|Winner|LateCommitter|Slow' ./internal/polls/... ./internal/bookings/...
-      - run: docker build .

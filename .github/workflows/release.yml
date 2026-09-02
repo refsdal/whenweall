@@ -1,0 +1,65 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+permissions:
+  contents: read
+  packages: write
+# Never cancel a publish mid-push — a half-pushed multi-arch manifest is worse than a slightly
+# stale queue. One release at a time per ref is still enough to avoid two runs racing the same tag.
+concurrency: { group: 'release-${{ github.ref }}', cancel-in-progress: false }
+jobs:
+  build-and-push:
+    # Guards a fork from trying (and failing, loudly) to push into the upstream owner's package
+    # registry under its own copy of this workflow.
+    if: github.repository == 'refsdal/whenweall'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # cmd/whenweall's own `version` subcommand and the Docker image label both want a real
+      # version string: the pushed tag for a release, a "main-<short sha>" marker for a rolling
+      # main build. Kept as a plain shell step rather than leaning on docker/metadata-action's own
+      # `version` output, which is resolved from tag-priority rules not obviously the same thing.
+      - name: Resolve the VERSION build-arg
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=main-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Image tags: a version tag push (v1.2.3) publishes semver tags (1.2.3, 1.2); a push to
+      # main additionally (and only then) publishes `latest`, so `latest` always tracks main, not
+      # whatever the most recent release tag happened to be.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/refsdal/whenweall
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+          sbom: true
+          provenance: true
