@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/refsdal/whenweall/internal/auth"
 )
 
 // Limits ported from src/server/bookings/schemas.ts's LIMITS.
@@ -274,13 +276,11 @@ func (in BookInput) Validate() error {
 }
 
 // validateHandle ports handleSchema — the org-slug ("handle") counterpart of a page's own slug,
-// used by SetOrgSlug. Same length bounds and character rules as a page slug, but reported under
-// the "handle" field key (Task 6's accumulated requirement (b): the org-handle HTTP endpoint's
-// request body names this field "handle", not "slug" — pageSchema's own "slug" field is a
-// different resource entirely, so the two never look like they share a validator instance by
-// accident).
+// used by SetOrgSlug. The rule itself lives in internal/auth.ValidateOrgSlug (Limen's organization
+// hooks enforce the identical rule on its own routes, so the two can't drift); this reports it
+// under the "handle" field key the org-handle HTTP endpoint's request body uses.
 func validateHandle(handle string) error {
-	if !handleSlugRegexp.MatchString(handle) || len(handle) < LimitHandleMin || len(handle) > LimitHandleMax {
+	if err := auth.ValidateOrgSlug(handle); err != nil {
 		return &ValidationError{Fields: map[string]string{
 			"handle": "handle must be lowercase letters, digits and hyphens, 3-30 characters",
 		}}

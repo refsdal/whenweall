@@ -297,7 +297,7 @@ near the actual typo, is worse than refusing to light up at all.
 | `TURNSTILE_SECRET_KEY`  | no       | —                                  | See above. Without this pair, public endpoints have no captcha — fine for a private instance, worth knowing for one on the open internet. |
 | `GOOGLE_CLIENT_ID`      | no       | —                                  | Optional "Continue with Google" and Google Calendar sync. Needs `GOOGLE_CLIENT_SECRET` too.        |
 | `GOOGLE_CLIENT_SECRET`  | no       | —                                  | See above.                                                                                          |
-| `OIDC_ISSUER`           | no       | —                                  | Optional external SSO. Needs `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` too (all three, not a pair). |
+| `OIDC_ISSUER`           | no       | —                                  | Optional external SSO. Needs `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` too (all three, not a pair). The issuer must assert `email_verified: true` in its userinfo/ID token: a sign-in whose email is not verified by the IdP is refused, because an OIDC email is what links the sign-in to an existing account. |
 | `OIDC_CLIENT_ID`        | no       | —                                  | See above.                                                                                          |
 | `OIDC_CLIENT_SECRET`    | no       | —                                  | See above.                                                                                          |
 | `OIDC_NAME`             | no       | `sso`                                | Label on the OIDC sign-in button.                                                                  |

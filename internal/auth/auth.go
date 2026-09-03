@@ -176,6 +176,7 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 			organization.WithSendInvitationMail(func(ctx context.Context, d *organization.SendInvitationMailData) {
 				s.enqueueInviteMail(ctx, d)
 			}),
+			organization.WithHooks(organizationHooks()),
 		),
 	}
 
@@ -200,7 +201,12 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 				oauthgeneric.WithClientSecret(cfg.OIDCClientSecret),
 			))
 		}
-		plugins = append(plugins, oauth.New(oauth.WithProviders(providers...)))
+		plugins = append(plugins, oauth.New(
+			oauth.WithProviders(providers...),
+			// See verifiedEmailUserInfo: only the generic OIDC provider is guarded; when OIDC is
+			// off, cfg.OIDCName matches no provider and this is a pure pass-through.
+			oauth.WithGetUserInfo(verifiedEmailUserInfo(providers, cfg.OIDCName)),
+		))
 	}
 
 	var cliCfg *limen.CLIConfig
@@ -496,25 +502,44 @@ func isOrganizationSlugConflict(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_organizations_slug"
 }
 
+// maxOrgSlugLen is the upper bound ValidateOrgSlug enforces.
+const maxOrgSlugLen = 30
+
 // personalOrgSlug derives a per-user-unique slug from email's local part and userID: lowercased,
-// every run of non-alphanumeric characters collapsed to a single '-'. Uniqueness comes from
-// userID, not the local part alone — see createPersonalOrgIfMissing's doc comment for why that
-// matters. Limen's own slug generator would additionally normalize this the same way if
-// normalizeSlugs is left at its default (true), but this doesn't rely on that: the slug handed to
-// CreateOrganization is already exactly what ends up stored.
+// every run of non-alphanumeric characters collapsed to a single '-', truncated so that
+// local + "-" + userID never exceeds maxOrgSlugLen, with leading/trailing hyphens trimmed so the
+// result satisfies ValidateOrgSlug (which organizationHooks now enforces on every create —
+// including this one). Uniqueness comes from userID, not the local part alone — see
+// createPersonalOrgIfMissing's doc comment for why that matters. The slug handed to
+// CreateOrganization is already exactly what ends up stored (normalizeSlugs is off).
 func personalOrgSlug(email, userID string) string {
 	local := nameFromEmail(email)
 	var b strings.Builder
+	lastHyphen := false
 	for _, r := range strings.ToLower(local) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
-		} else {
+			lastHyphen = false
+		} else if !lastHyphen {
 			b.WriteRune('-')
+			lastHyphen = true
 		}
 	}
 	normalized := b.String()
+
+	maxLocal := maxOrgSlugLen - 1 - len(userID)
+	if maxLocal < 1 {
+		maxLocal = 1
+	}
+	if len(normalized) > maxLocal {
+		normalized = normalized[:maxLocal]
+	}
+	normalized = strings.Trim(normalized, "-")
 	if normalized == "" {
 		normalized = "org"
+		if len(normalized) > maxLocal {
+			normalized = normalized[:maxLocal]
+		}
 	}
 	return normalized + "-" + userID
 }
