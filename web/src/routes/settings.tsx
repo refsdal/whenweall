@@ -1,11 +1,18 @@
-import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { useState, type FormEvent } from 'react'
+import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
+import { toast } from 'sonner'
+import { DeleteAccountDialog } from '#/components/auth/DeleteAccountDialog'
 import { HandleField } from '#/components/booking/HandleField'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
+import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
+import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
+import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { requireVerifiedSession } from '#/lib/session-guard'
 import { setHandle } from '#/api/bookings'
-import { myOrgRoles } from '#/api/auth'
+import { deleteOwnAccount, myOrgRoles, updateProfile } from '#/api/auth'
 
 export const Route = createFileRoute('/settings')({
   beforeLoad: ({ context }) => requireVerifiedSession(context, '/settings'),
@@ -18,6 +25,8 @@ export const Route = createFileRoute('/settings')({
 function SettingsPage() {
   const { session } = Route.useRouteContext()
   const orgRoles = Route.useLoaderData()
+  const router = useRouter()
+  const navigate = useNavigate()
   if (!session) return null
 
   return (
@@ -47,22 +56,67 @@ function SettingsPage() {
         </div>
         <LocaleSwitcher />
       </section>
+
+      <Separator />
+
+      <DeleteAccountDialog
+        hasPassword={session.user.hasPassword}
+        onDelete={async (password) => {
+          try {
+            await deleteOwnAccount(password)
+          } catch (error) {
+            // invalid_password / password_required: the dialog stays open for another try.
+            toast.error(
+              errorCode(error) === 'invalid_password' || errorCode(error) === 'password_required'
+                ? m.settings_delete_error()
+                : m.auth_error_generic(),
+            )
+            return
+          }
+          toast.success(m.settings_delete_success())
+          await router.invalidate()
+          await navigate({ to: '/' })
+        }}
+      />
     </div>
   )
 }
 
-/**
- * Read-only for now: there is no profile-update route in `internal/auth/routes.txt` at all (Limen's
- * credential-password plugin only ever reads `email`/`password` off a signup/signin body — see
- * `#/api/auth.ts`'s own doc comment), so a name typed here has nowhere to save to. Kept as its own
- * section (rather than deleted outright, the way billing/passkeys were) since email display is
- * still useful, and a future task adding a profile-update endpoint only needs to add the form back.
- */
+/** Editable display name (PATCH /api/v1/me); the email is read-only — it is the account's identity. */
 function ProfileSection({ name, email }: { name: string; email: string }) {
+  const router = useRouter()
+  const [value, setValue] = useState(name)
+  const [saving, setSaving] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const trimmed = value.trim()
+    if (!trimmed || trimmed.length > 80) return
+
+    setSaving(true)
+    try {
+      await updateProfile({ name: trimmed })
+      toast.success(m.settings_name_saved())
+      await router.invalidate()
+    } catch {
+      toast.error(m.auth_error_generic())
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <section className="flex flex-col gap-3">
       <h2 className="text-sm font-semibold">{m.settings_profile_title()}</h2>
-      <p className="text-sm font-medium">{name}</p>
+      <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex flex-1 flex-col gap-1.5">
+          <Label htmlFor="settings-name">{m.settings_name_label()}</Label>
+          <Input id="settings-name" value={value} onChange={(e) => setValue(e.target.value)} maxLength={80} />
+        </div>
+        <Button type="submit" disabled={saving || !value.trim() || value.trim() === name}>
+          {m.settings_name_save()}
+        </Button>
+      </form>
       <p className="text-sm text-muted-foreground">{email}</p>
     </section>
   )

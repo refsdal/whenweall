@@ -1,6 +1,8 @@
 import { appConfig, type AppLocale } from '#/app.config'
 import { getLocale, m, setLocale } from '#/lib/i18n'
+import { useSession } from '#/lib/use-session'
 import { cn } from '#/lib/utils'
+import { updateProfile } from '#/api/auth'
 
 const LOCALE_LABELS: Record<AppLocale, () => string> = {
   en: m.locale_en,
@@ -8,14 +10,25 @@ const LOCALE_LABELS: Record<AppLocale, () => string> = {
 }
 
 export function LocaleSwitcher({ className }: { className?: string }) {
+  const session = useSession()
   const activeLocale = getLocale()
 
-  function handleSelect(locale: AppLocale) {
+  async function handleSelect(locale: AppLocale) {
     if (locale === activeLocale) return
 
-    // Sets the `whenweall_locale` cookie and reloads the page by default. The Go backend's `users`
-    // table (migrations/00002_auth.sql) has no `locale` column at all, unlike the old better-auth
-    // schema — there is no server-side profile locale to persist anymore, only this cookie.
+    // Signed in: persist first (PATCH /api/v1/me writes user_preferences.locale, which every mail
+    // to this user renders in), THEN switch the cookie — setLocale reloads the page, and a
+    // fire-and-forget request would be aborted by that navigation. Works for unverified users
+    // too (the route allows it), so the resent verification mail comes in the new language. A
+    // failure is not worth blocking the UI switch over.
+    if (session) {
+      try {
+        await updateProfile({ locale })
+      } catch {
+        // cookie-only switch still happens below
+      }
+    }
+    // Sets the `whenweall_locale` cookie and reloads the page by default.
     setLocale(locale)
   }
 
@@ -23,17 +36,14 @@ export function LocaleSwitcher({ className }: { className?: string }) {
     <div
       role="group"
       aria-label={m.locale_switch_label()}
-      className={cn(
-        'inline-flex items-center gap-0.5 rounded-full border border-border/70 p-0.5',
-        className,
-      )}
+      className={cn('inline-flex items-center gap-0.5 rounded-full border border-border/70 p-0.5', className)}
     >
       {appConfig.locales.map((locale) => (
         <button
           key={locale}
           type="button"
           aria-pressed={locale === activeLocale}
-          onClick={() => handleSelect(locale)}
+          onClick={() => void handleSelect(locale)}
           className={cn(
             'focus-ring rounded-full px-2.5 py-1 text-xs font-medium tracking-wide text-muted-foreground uppercase transition-colors',
             'hover:text-foreground aria-pressed:bg-secondary aria-pressed:text-foreground',
