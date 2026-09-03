@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { ArrowLeft, MapPin, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { appConfig } from '#/app.config'
@@ -10,6 +10,7 @@ import { CopyIcon } from '#/components/ui/copy-icon'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { m } from '#/lib/i18n'
+import { requireVerifiedSession } from '#/lib/session-guard'
 import { useCopy } from '#/lib/use-copy'
 import { cn } from '#/lib/utils'
 import { cancelBooking, getBookingPage, listPageBookings } from '#/api/bookings'
@@ -18,11 +19,7 @@ import { cancelBooking, getBookingPage, listPageBookings } from '#/api/bookings'
 const WINDOW_MS = 365 * 86_400_000
 
 export const Route = createFileRoute('/bookings/$id/')({
-  beforeLoad: ({ context, params }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: `/bookings/${params.id}` } })
-    }
-  },
+  beforeLoad: ({ context, params }) => requireVerifiedSession(context, `/bookings/${params.id}`),
   loader: async ({ params }) => {
     const now = new Date()
     const [page, bookings] = await Promise.all([

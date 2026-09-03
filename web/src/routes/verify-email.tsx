@@ -1,81 +1,131 @@
-import { useState } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { useEffect, useRef, useState } from 'react'
+import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router'
+import { toast } from 'sonner'
 import * as z from 'zod'
 import { AuthCard } from '#/components/auth/AuthCard'
 import { Button, buttonVariants } from '#/components/ui/button'
+import { authErrorMessage } from '#/lib/auth-errors'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
-import { requestEmailVerification } from '#/api/auth'
+import { requestEmailVerification, signOut, verifyEmail } from '#/api/auth'
 import { useSession } from '#/lib/use-session'
 
 export const Route = createFileRoute('/verify-email')({
-  // TanStack Router's default search parser turns a number-looking value like `?done=1` into a
-  // JS number, not a string — accept either without transforming (a `z.coerce` here would change
-  // the value's type and make the router re-stringify + redirect to canonicalize the URL).
+  // `token` is what the verify_email mail links to (internal/auth.enqueueTokenMail builds
+  // `${APP_URL}/verify-email?token=<t>`). `done`/`error` are kept for old links. TanStack's
+  // default search parser turns `?done=1` into a number, so accept either without transforming.
   validateSearch: z.object({
+    token: z.string().optional(),
     done: z.union([z.string(), z.number()]).optional(),
     error: z.string().optional(),
   }),
   component: VerifyEmailPage,
 })
 
+/**
+ * Four states, decided in order:
+ *   1. `?token=` present → consume it via POST /api/v1/auth/verify-email (public route), then the
+ *      done card. The session, if any, is refreshed so the router sees `emailVerified: true`.
+ *   2. Signed in and verified (or a legacy `?done=1`) → the done card.
+ *   3. Signed in, unverified (the route guard sends every gated page here) → the pending card:
+ *      resend (POST /email-verifications — needs exactly this session) and sign out.
+ *   4. Signed out, no token → the expired card with a link to sign in.
+ */
 function VerifyEmailPage() {
-  const { done } = Route.useSearch()
+  const { token, done } = Route.useSearch()
+  const session = useSession()
 
-  if (String(done) === '1') {
+  if (token) return <VerifyWithToken token={token} />
+  if (String(done) === '1' || session?.user.emailVerified) return <VerifyDone />
+  if (session) return <VerifyPending email={session.user.email} />
+  return <VerifyExpired />
+}
+
+/** Exported for `verify-email.test.tsx`: the one piece of this route with real logic worth
+ * unit-testing in isolation (the token round trip), rather than through the full route tree. */
+export function VerifyWithToken({ token }: { token: string }) {
+  const router = useRouter()
+  const [state, setState] = useState<'verifying' | 'done' | 'error'>('verifying')
+  const started = useRef(false)
+
+  useEffect(() => {
+    // The token is single-use; StrictMode's double effect (and a re-render) must not spend it
+    // twice — the second attempt would report "expired" for a link that just worked.
+    if (started.current) return
+    started.current = true
+    verifyEmail(token)
+      .then(async () => {
+        await router.invalidate()
+        setState('done')
+      })
+      .catch(() => setState('error'))
+  }, [router, token])
+
+  if (state === 'verifying') {
     return (
-      <AuthCard title={m.auth_verify_done_title()}>
-        <p className="text-sm text-muted-foreground">{m.auth_verify_done_body()}</p>
-        <Link to="/" className={cn(buttonVariants(), 'w-full')}>
-          {m.auth_verify_done_cta()}
-        </Link>
+      <AuthCard title={m.auth_verify_pending_title()}>
+        <p className="text-sm text-muted-foreground" role="status">
+          {m.auth_verify_verifying()}
+        </p>
       </AuthCard>
     )
   }
-
-  return <VerifyEmailExpired />
+  if (state === 'done') return <VerifyDone />
+  return <VerifyExpired />
 }
 
-/**
- * Limen's `email-verifications` (resend) route is protected and takes no target address — it
- * always resends to the CALLER'S OWN account (`internal/auth/routes.txt`), unlike the old
- * better-auth flow, which could resend to any typed-in address while signed out. Without a
- * session there is nothing to resend to, so this now asks the visitor to sign in first instead of
- * collecting an email/captcha.
- */
-function VerifyEmailExpired() {
-  const session = useSession()
+function VerifyDone() {
+  return (
+    <AuthCard title={m.auth_verify_done_title()}>
+      <p className="text-sm text-muted-foreground">{m.auth_verify_done_body()}</p>
+      <Link to="/dashboard" className={cn(buttonVariants(), 'w-full')}>
+        {m.auth_verify_done_cta()}
+      </Link>
+    </AuthCard>
+  )
+}
+
+function VerifyPending({ email }: { email: string }) {
+  const router = useRouter()
+  const navigate = useNavigate()
   const [submitting, setSubmitting] = useState(false)
-  const [sent, setSent] = useState(false)
 
   async function handleResend() {
     setSubmitting(true)
     try {
       await requestEmailVerification()
-      setSent(true)
+      toast.success(m.auth_verify_resent())
+    } catch (error) {
+      toast.error(authErrorMessage(error))
     } finally {
       setSubmitting(false)
     }
   }
 
+  async function handleSignOut() {
+    await signOut()
+    await router.invalidate()
+    await navigate({ to: '/' })
+  }
+
+  return (
+    <AuthCard title={m.auth_verify_pending_title()} subtitle={m.auth_verify_pending_body({ email })}>
+      <Button type="button" className="w-full" disabled={submitting} onClick={() => void handleResend()}>
+        {submitting ? m.auth_verify_resend_submitting() : m.auth_verify_resend_submit()}
+      </Button>
+      <Button type="button" variant="ghost" className="w-full" onClick={() => void handleSignOut()}>
+        {m.auth_verify_sign_out()}
+      </Button>
+    </AuthCard>
+  )
+}
+
+function VerifyExpired() {
   return (
     <AuthCard title={m.auth_verify_error_title()} subtitle={m.auth_verify_error_body()}>
-      {sent ? (
-        <p className="text-sm text-muted-foreground">{m.auth_verify_resend_success()}</p>
-      ) : session ? (
-        <Button
-          type="button"
-          className="w-full"
-          disabled={submitting}
-          onClick={() => void handleResend()}
-        >
-          {submitting ? m.auth_verify_resend_submitting() : m.auth_verify_resend_submit()}
-        </Button>
-      ) : (
-        <Link to="/login" className={cn(buttonVariants(), 'w-full')}>
-          {m.auth_login_link()}
-        </Link>
-      )}
+      <Link to="/login" className={cn(buttonVariants(), 'w-full')}>
+        {m.auth_login_link()}
+      </Link>
     </AuthCard>
   )
 }

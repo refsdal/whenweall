@@ -1,14 +1,11 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { appConfig } from '#/app.config'
 import { PageEditor } from '#/components/booking/PageEditor'
 import { m } from '#/lib/i18n'
+import { requireVerifiedSession } from '#/lib/session-guard'
 
 export const Route = createFileRoute('/bookings/new')({
-  beforeLoad: ({ context }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: '/bookings/new' } })
-    }
-  },
+  beforeLoad: ({ context }) => requireVerifiedSession(context, '/bookings/new'),
   head: () => ({
     meta: [{ title: `${m.booking_editor_new_title()} — ${appConfig.name}` }],
   }),

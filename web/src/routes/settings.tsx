@@ -1,17 +1,14 @@
-import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { HandleField } from '#/components/booking/HandleField'
 import { LocaleSwitcher } from '#/components/layout/LocaleSwitcher'
 import { Separator } from '#/components/ui/separator'
 import { m } from '#/lib/i18n'
+import { requireVerifiedSession } from '#/lib/session-guard'
 import { setHandle } from '#/api/bookings'
 import { myOrgRoles } from '#/api/auth'
 
 export const Route = createFileRoute('/settings')({
-  beforeLoad: ({ context }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: '/settings' } })
-    }
-  },
+  beforeLoad: ({ context }) => requireVerifiedSession(context, '/settings'),
   // The caller's own membership roles in the active org — see HandleSection's doc comment for
   // why this gates the org-handle editor's visibility rather than just its submit handler.
   loader: () => myOrgRoles(),

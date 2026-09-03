@@ -1,5 +1,6 @@
-import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { AcceptInvitationCard } from '#/components/auth/AcceptInvitationCard'
+import { requireVerifiedSession } from '#/lib/session-guard'
 
 /**
  * Where the OrgInvite email's CTA lands (see `sendInvitationEmail` in `#/server/auth/auth.ts`).
@@ -9,11 +10,7 @@ import { AcceptInvitationCard } from '#/components/auth/AcceptInvitationCard'
  * on route hydration, since this URL is also hit by email link-safety scanners and unfurlers.
  */
 export const Route = createFileRoute('/accept-invitation/$id')({
-  beforeLoad: ({ context, params }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: `/accept-invitation/${params.id}` } })
-    }
-  },
+  beforeLoad: ({ context, params }) => requireVerifiedSession(context, `/accept-invitation/${params.id}`),
   component: AcceptInvitationPage,
 })
 

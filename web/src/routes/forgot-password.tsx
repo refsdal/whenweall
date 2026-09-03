@@ -37,7 +37,7 @@ function ForgotPasswordPage() {
 
     setSubmitting(true)
     try {
-      await requestPasswordReset(email)
+      await requestPasswordReset(email, captchaToken)
     } finally {
       // Always show the success state, whether or not the address has an account — the request
       // endpoint must not let an attacker learn which emails are registered.

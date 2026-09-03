@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, CalendarClock } from 'lucide-react'
 import { toast } from 'sonner'
@@ -6,17 +6,14 @@ import { appConfig } from '#/app.config'
 import { EmptyState } from '#/components/dashboard/EmptyState'
 import { PollCard } from '#/components/dashboard/PollCard'
 import { m } from '#/lib/i18n'
+import { requireVerifiedSession } from '#/lib/session-guard'
 import { cn } from '#/lib/utils'
 import { staggerContainer, staggerItem, useReducedMotion } from '#/lib/motion'
 import { buttonVariants } from '#/components/ui/button'
 import { deletePoll, duplicatePoll, listMyPolls } from '#/api/polls'
 
 export const Route = createFileRoute('/dashboard')({
-  beforeLoad: ({ context }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: '/dashboard' } })
-    }
-  },
+  beforeLoad: ({ context }) => requireVerifiedSession(context, '/dashboard'),
   loader: () => listMyPolls(),
   head: () => ({
     meta: [{ title: `${m.dashboard_title()} — ${appConfig.name}` }],

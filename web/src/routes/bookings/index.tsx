@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { CalendarClock, Plus } from 'lucide-react'
 import { motion } from 'motion/react'
 import { appConfig } from '#/app.config'
@@ -6,16 +6,13 @@ import { PageCard } from '#/components/booking/PageCard'
 import { bookingPrefix } from '#/components/booking/HandleField'
 import { Button, buttonVariants } from '#/components/ui/button'
 import { m } from '#/lib/i18n'
+import { requireVerifiedSession } from '#/lib/session-guard'
 import { staggerContainer, staggerItem } from '#/lib/motion'
 import { cn } from '#/lib/utils'
 import { listMyBookingPages } from '#/api/bookings'
 
 export const Route = createFileRoute('/bookings/')({
-  beforeLoad: ({ context }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: '/bookings' } })
-    }
-  },
+  beforeLoad: ({ context }) => requireVerifiedSession(context, '/bookings'),
   loader: () => listMyBookingPages(),
   head: () => ({
     meta: [{ title: `${m.bookings_title()} — ${appConfig.name}` }],

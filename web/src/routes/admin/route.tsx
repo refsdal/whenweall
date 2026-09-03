@@ -12,7 +12,7 @@ import { cn } from '#/lib/utils'
  */
 export const Route = createFileRoute('/admin')({
   beforeLoad: ({ context }) => {
-    if (!context.session?.isStaff) throw notFound()
+    if (!context.session?.isStaff || !context.session.user.emailVerified) throw notFound()
   },
   head: () => ({
     meta: [

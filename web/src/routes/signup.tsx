@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import * as z from 'zod'
 import { AuthCard } from '#/components/auth/AuthCard'
 import { GoogleButton } from '#/components/auth/GoogleButton'
+import { OidcButton } from '#/components/auth/OidcButton'
 import { TurnstileField } from '#/components/auth/TurnstileField'
 import { Button, buttonVariants } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -61,6 +62,7 @@ function SignupPage() {
   const [submittedEmail, setSubmittedEmail] = useState<string | null>(null)
 
   const strength = passwordStrength(password)
+  const showProviders = publicConfig.googleEnabled || publicConfig.oidcEnabled
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -79,7 +81,9 @@ function SignupPage() {
 
     setSubmitting(true)
     try {
-      await signUpWithCredential(email, password, name.trim())
+      // `name`/`locale` ride along in the body for internal/auth's signup hook; signup mints no
+      // session, so the success card below tells the user to go verify.
+      await signUpWithCredential(email, password, name.trim(), captchaToken)
       setSubmittedEmail(email)
     } catch (error) {
       toast.error(authErrorMessage(error))
@@ -192,14 +196,17 @@ function SignupPage() {
         </Button>
       </form>
 
-      {publicConfig.googleEnabled && (
+      {showProviders && (
         <>
           <div className="flex items-center gap-3">
             <Separator className="flex-1" />
             <span className="text-xs text-muted-foreground uppercase">{m.auth_or()}</span>
             <Separator className="flex-1" />
           </div>
-          <GoogleButton next={safeNext(next)} />
+          {publicConfig.googleEnabled && <GoogleButton next={safeNext(next)} />}
+          {publicConfig.oidcEnabled && publicConfig.oidcName && (
+            <OidcButton provider={publicConfig.oidcName} name={publicConfig.oidcName} next={safeNext(next)} />
+          )}
         </>
       )}
     </AuthCard>

@@ -18,6 +18,7 @@ import {
 } from '#/components/ui/dialog'
 import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
+import { requireVerifiedSession } from '#/lib/session-guard'
 import {
   getPoll,
   updatePoll,
@@ -28,11 +29,7 @@ import {
 import type { PollView } from '#/api/types'
 
 export const Route = createFileRoute('/p/$id/edit')({
-  beforeLoad: ({ context, params }) => {
-    if (!context.session) {
-      throw redirect({ to: '/login', search: { next: `/p/${params.id}/edit` } })
-    }
-  },
+  beforeLoad: ({ context, params }) => requireVerifiedSession(context, `/p/${params.id}/edit`),
   loader: async ({ params }) => {
     const poll = await getPoll(params.id)
     if (!poll.isOwner) throw redirect({ to: '/p/$id', params: { id: params.id } })
