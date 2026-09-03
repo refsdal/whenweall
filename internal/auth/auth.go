@@ -71,6 +71,17 @@ type Service struct {
 	// ensurePersonalOrgOnce's doc comment for why the invariant is enforced here, lazily, rather
 	// than via a Limen HTTP hook.
 	personalOrgEnsured sync.Map
+
+	// pendingSignupProfiles bridges a signup request's submitted name/locale (captured by a
+	// Before hook, keyed by normalized email) across to enqueueTokenMail's verify_email dispatch,
+	// which happens synchronously inside credential-password's own
+	// SignUpWithCredentialAndPassword — strictly before the HTTP handler calls SessionResponse,
+	// and therefore strictly before this package's own After hook (afterSignup, signup_hook.go)
+	// ever runs to persist that data. Without this, the very first mail a new user gets would
+	// always be built from the pre-signup state (no row in user_preferences yet, first/last name
+	// still blank) regardless of what they typed on the signup form. The After hook removes the
+	// entry once the request completes, success or failure — see afterSignup's doc comment.
+	pendingSignupProfiles sync.Map
 }
 
 // New builds the Service: constructs the Limen configuration (every plugin the product needs,
@@ -218,14 +229,12 @@ func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption 
 		// instead of Limen's default user serialization — see sessionTransformer's own doc
 		// comment for why the default is missing a usable id.
 		limen.WithHTTPSessionTransformer(s.sessionTransformer),
-		// No limen.WithHTTPHooks here on purpose: an After hook on "signup"/"oauth-callback"
-		// (this package's first attempt at the personal-org invariant) turns out to miss most
-		// real signups. ctx.GetAuthResult() is only populated when the route handler itself
-		// calls Responder.SessionResponse — but this config's oauth plugin runs in its
-		// default redirect mode (RedirectWithSession), which redirects the browser instead of
-		// calling SessionResponse. A hook keyed to specific route IDs silently no-ops for that
-		// case. The invariant is instead enforced lazily, once per user per process, in
-		// resolveSession (session.go) — see ensurePersonalOrgOnce.
+		// After hook on credential-password's "signup" route: stores the display name and locale
+		// Limen's own handler ignores (see signup_hook.go for why body/auth-result access is safe
+		// there — and why an earlier hook-based attempt at the personal-org invariant was NOT:
+		// the OAuth callback redirects without calling SessionResponse, so it never had an auth
+		// result to read; the personal org therefore stays lazily enforced in resolveSession).
+		limen.WithHTTPHooks(s.signupHooks()),
 	}
 
 	// EnableTestRoutes means /api/test/seed (internal/httpserver's Task 5 route) is live, and
@@ -293,35 +302,46 @@ func (s *Service) MakeStaff(ctx context.Context, email string) error {
 // convention used everywhere else in this seam (fmt.Sprint(user.ID), see the users.id comment in
 // migrations/00002_auth.sql) rather than leaving it as whatever numeric type the driver returned.
 //
-// It also adds "isStaff", straight from staff_users, so the frontend no longer needs its own
-// separate admin-only probe just to learn whether the signed-in user is staff.
+// It also adds what the SPA needs to render an account without a second round trip: "isStaff"
+// (staff_users), "locale" (user_preferences, "en" when absent), "name" (DisplayName over
+// first_name/last_name/email), "emailVerified" (email_verified_at IS NOT NULL — the gate in
+// session.go keys on the same fact) and "hasPassword" (whether a credential exists — the settings
+// page's delete-account dialog asks for the current password only when there is one).
 func (s *Service) sessionTransformer(user map[string]any, _ *limen.SessionResult) (map[string]any, error) {
 	payload := maps.Clone(user)
+	payload["hasPassword"] = user["password"] != nil
 	delete(payload, "password")
 
 	rawID := user["id"]
+	email, _ := user["email"].(string)
+	first, _ := user["first_name"].(string)
+	last, _ := user["last_name"].(string)
+	staff, locale := s.lookupSessionExtras(rawID)
+
 	payload["id"] = fmt.Sprint(rawID)
-	payload["isStaff"] = s.lookupStaffForSessionResponse(rawID)
+	payload["isStaff"] = staff
+	payload["locale"] = locale
+	payload["name"] = DisplayName(first, last, email)
+	payload["emailVerified"] = user["email_verified_at"] != nil
 
 	return map[string]any{"user": payload}, nil
 }
 
-// lookupStaffForSessionResponse is sessionTransformer's staff_users check. Unlike
-// resolveSession's combined locked_users/staff_users query, this can't take a request context —
+// lookupSessionExtras is sessionTransformer's staff_users + user_preferences read, in one round
+// trip. Unlike resolveSession's combined query, this can't take a request context —
 // limen.SessionTransformer's signature carries none (Limen calls it outside any request scope) —
-// so it issues its own query against context.Background(). Fails safe to false on error: a
-// session response is not the place to turn a staff_users hiccup into a broken login, and
-// RequireStaff (session.go) is the actual gate on anything staff-only regardless of what this
-// reports.
-func (s *Service) lookupStaffForSessionResponse(userID any) bool {
-	var staff bool
-	if err := s.db.QueryRowContext(context.Background(),
-		"SELECT EXISTS(SELECT 1 FROM staff_users WHERE user_id = $1)", userID,
-	).Scan(&staff); err != nil {
-		s.logger.Error("auth: staff_users check failed in session transformer; defaulting to false", "user_id", fmt.Sprint(userID), "error", err)
-		return false
+// so it issues its own query against context.Background(). Fails safe (false, "en") on error: a
+// session response is not the place to turn a lookup hiccup into a broken login, and RequireStaff
+// (session.go) is the actual gate on anything staff-only regardless of what this reports.
+func (s *Service) lookupSessionExtras(userID any) (staff bool, locale string) {
+	if err := s.db.QueryRowContext(context.Background(), `
+		SELECT EXISTS(SELECT 1 FROM staff_users WHERE user_id = $1),
+		       coalesce((SELECT locale FROM user_preferences WHERE user_id = $1), 'en')
+	`, userID).Scan(&staff, &locale); err != nil {
+		s.logger.Error("auth: staff/locale lookup failed in session transformer; defaulting", "user_id", fmt.Sprint(userID), "error", err)
+		return false, "en"
 	}
-	return staff
+	return staff, normalizeLocale(locale)
 }
 
 // RevokeUserSessions revokes every session belonging to userID, for internal/admin's LockUser and
@@ -480,30 +500,56 @@ func parseLimenID(id string) any {
 
 // enqueueTokenMail builds the reset-password/verify-email link (Limen only ever passes the
 // callback a bare token, not a full URL) and enqueues it under templateName. path is the SPA
-// route that will read ?token= and complete the flow.
+// route that will read ?token= and complete the flow. Name and Locale come from the user's
+// profile — Limen hands over only the email, so the profile is looked up by it; a lookup failure
+// falls back to the email's local part and "en" rather than dropping the mail.
+//
+// For the verify_email dispatch specifically, the profile row this would otherwise read doesn't
+// exist yet — see pendingSignupProfiles' doc comment for why — so a pending entry from the
+// signup's own Before hook is preferred over the (not-yet-written) database row when present.
 func (s *Service) enqueueTokenMail(email, templateName, path, token string) {
+	name, locale := nameFromEmail(email), "en"
+	if pending, ok := s.pendingSignupProfiles.Load(limen.NormalizeEmail(email)); ok {
+		p := pending.(pendingSignupProfile)
+		if p.name != nil {
+			name = *p.name
+		}
+		locale = p.locale
+	} else if p, err := s.profileByEmail(context.Background(), email); err == nil {
+		name, locale = p.Name, p.Locale
+	}
 	s.sendMail(mailer.Message{
 		To:       email,
 		Template: templateName,
 		Data: map[string]any{
-			"URL":  s.cfg.AppURL + path + "?token=" + token,
-			"Name": nameFromEmail(email),
+			"URL":    s.cfg.AppURL + path + "?token=" + token,
+			"Name":   name,
+			"Locale": locale,
 		},
 	})
 }
 
 // enqueueInviteMail sends the org_invite mail. The link points at the SPA's accept-invitation
 // page (not a Limen backend route — there is no such route; the SPA reads the token from the
-// path and calls organization's respond-to-invitation API itself).
+// path and calls organization's respond-to-invitation API itself). InviterName is the inviter's
+// stored display name; Locale is the invitee's own stored locale when they already have an
+// account, else the inviter's (a Norwegian team inviting a colleague is the best guess available
+// for someone we know nothing about yet).
 func (s *Service) enqueueInviteMail(ctx context.Context, d *organization.SendInvitationMailData) {
 	if d == nil || d.Invitation == nil || d.Organization == nil {
 		s.logger.Error("auth: org invite mail callback missing invitation or organization data")
 		return
 	}
 
-	inviterName := ""
+	inviterName, locale := "", "en"
 	if d.Inviter != nil {
 		inviterName = nameFromEmail(d.Inviter.Email)
+		if p, err := s.GetProfile(ctx, fmt.Sprint(d.Inviter.ID)); err == nil {
+			inviterName, locale = p.Name, p.Locale
+		}
+	}
+	if p, err := s.profileByEmail(ctx, d.Invitation.Email); err == nil {
+		locale = p.Locale
 	}
 
 	s.sendMailCtx(ctx, mailer.Message{
@@ -513,6 +559,7 @@ func (s *Service) enqueueInviteMail(ctx context.Context, d *organization.SendInv
 			"URL":         s.cfg.AppURL + "/accept-invitation/" + d.Invitation.Token,
 			"InviterName": inviterName,
 			"OrgName":     d.Organization.Name,
+			"Locale":      locale,
 		},
 	})
 }
