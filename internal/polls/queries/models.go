@@ -26,6 +26,18 @@ type Account struct {
 	UpdatedAt            time.Time
 }
 
+type AdminAuditLog struct {
+	ID          string
+	ActorUserID sql.NullInt64
+	ActorEmail  string
+	Action      string
+	TargetType  string
+	TargetID    sql.NullString
+	Reason      sql.NullString
+	Metadata    pqtype.NullRawMessage
+	CreatedAt   time.Time
+}
+
 type Booking struct {
 	ID              string
 	PageID          string
@@ -84,6 +96,12 @@ type LimenRateLimit struct {
 	Key           string
 	Count         int32
 	LastRequestAt int64
+}
+
+type LockedUser struct {
+	UserID    int64
+	Reason    sql.NullString
+	CreatedAt time.Time
 }
 
 type NotificationPref struct {
@@ -252,6 +270,12 @@ type User struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	TwoFactorEnabled bool
+}
+
+type UserPreference struct {
+	UserID    int64
+	Locale    string
+	UpdatedAt time.Time
 }
 
 type Verification struct {
