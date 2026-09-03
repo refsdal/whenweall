@@ -13,6 +13,7 @@ import {
 import { FormError, nextFailure, type FormFailure } from '#/components/ui/form-error'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { m } from '#/lib/i18n'
 
 export type ClaimIdentityValues = {
@@ -48,6 +49,7 @@ export function IdentitySheet({
   submitting?: boolean
   onSubmit: (values: ClaimIdentityValues) => void | Promise<void>
 }) {
+  const captchaEnabled = useCaptchaEnabled()
   const [name, setName] = useState(defaultName)
   const [email, setEmail] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
@@ -68,7 +70,7 @@ export function IdentitySheet({
       setError((current) => nextFailure(current, m.poll_error_email_invalid()))
       return
     }
-    if (needsCaptcha && !captchaToken) {
+    if (needsCaptcha && captchaEnabled && !captchaToken) {
       setError((current) => nextFailure(current, m.poll_error_captcha()))
       return
     }

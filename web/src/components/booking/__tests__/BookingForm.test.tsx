@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BookingForm } from '#/components/booking/BookingForm'
+import { useCaptchaEnabled, useTurnstileSiteKey } from '#/lib/captcha'
 
 // The real widget loads Cloudflare's script and renders an iframe challenge — none of that runs
 // in jsdom. Same stand-in as `TurnstileField.test.tsx`: a button that fires `onSuccess`.
@@ -11,6 +12,11 @@ vi.mock('@marsidev/react-turnstile', () => ({
       mock turnstile
     </button>
   ),
+}))
+
+vi.mock('#/lib/captcha', () => ({
+  useTurnstileSiteKey: vi.fn(() => 'site-key'),
+  useCaptchaEnabled: vi.fn(() => true),
 }))
 
 afterEach(() => cleanup())
@@ -122,5 +128,26 @@ describe('BookingForm', () => {
     await user.click(screen.getByRole('button', { name: /confirm booking/i }))
 
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ note: undefined, name: 'Ada' }))
+  })
+
+  it('submits without a captcha when Turnstile is not configured', async () => {
+    vi.mocked(useCaptchaEnabled).mockReturnValue(false)
+    vi.mocked(useTurnstileSiteKey).mockReturnValue('')
+    try {
+      const user = userEvent.setup()
+      const { onSubmit } = renderForm()
+
+      expect(screen.queryByRole('button', { name: 'mock turnstile' })).not.toBeInTheDocument()
+      await user.type(screen.getByLabelText(/your name/i), 'Ada')
+      await user.type(screen.getByLabelText(/email/i), 'ada@example.com')
+      await user.click(screen.getByRole('button', { name: /confirm booking/i }))
+
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Ada', email: 'ada@example.com', turnstileToken: undefined }),
+      )
+    } finally {
+      vi.mocked(useCaptchaEnabled).mockReturnValue(true)
+      vi.mocked(useTurnstileSiteKey).mockReturnValue('site-key')
+    }
   })
 })

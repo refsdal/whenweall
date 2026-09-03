@@ -13,6 +13,11 @@ vi.mock('@marsidev/react-turnstile', () => ({
   ),
 }))
 
+vi.mock('#/lib/captcha', () => ({
+  useTurnstileSiteKey: vi.fn(() => 'site-key'),
+  useCaptchaEnabled: vi.fn(() => true),
+}))
+
 afterEach(() => cleanup())
 
 function renderSheet(overrides: Partial<React.ComponentProps<typeof IdentitySheet>> = {}) {

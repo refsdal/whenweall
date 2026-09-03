@@ -7,6 +7,7 @@ import type { ViewerState } from '#/components/poll/viewer'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Textarea } from '#/components/ui/textarea'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { errorCode } from '#/lib/errors'
 import { intlLocale, m } from '#/lib/i18n'
 import { listItem, useReducedMotion } from '#/lib/motion'
@@ -38,6 +39,7 @@ export function Comments({
   onChanged: () => void | Promise<void>
 }) {
   const reduceMotion = useReducedMotion()
+  const captchaEnabled = useCaptchaEnabled()
 
   const [name, setName] = useState(viewerName)
   const [body, setBody] = useState('')
@@ -70,7 +72,7 @@ export function Comments({
       return
     }
     if (!trimmedBody) return
-    if (isGuest && !captchaToken) {
+    if (isGuest && captchaEnabled && !captchaToken) {
       toast.error(m.poll_error_captcha())
       return
     }

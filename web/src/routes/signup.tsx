@@ -10,6 +10,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { authErrorMessage } from '#/lib/auth-errors'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { m } from '#/lib/i18n'
 import { nextSearchSchema, safeNext } from '#/lib/search'
 import { cn } from '#/lib/utils'
@@ -49,6 +50,7 @@ const STRENGTH_CLASS = ['bg-border', 'bg-destructive', 'bg-ifneedbe', 'bg-yes'] 
 function SignupPage() {
   const { next } = Route.useSearch()
   const { publicConfig } = Route.useRouteContext()
+  const captchaEnabled = useCaptchaEnabled()
 
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -70,7 +72,7 @@ function SignupPage() {
     if (password.length < 12) fieldErrors.password = m.auth_error_password_too_short()
     setErrors(fieldErrors)
     if (Object.keys(fieldErrors).length > 0) return
-    if (!captchaToken) {
+    if (captchaEnabled && !captchaToken) {
       toast.error(m.auth_error_captcha_required())
       return
     }

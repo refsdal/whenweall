@@ -6,6 +6,7 @@ import { TurnstileField } from '#/components/auth/TurnstileField'
 import { Button, buttonVariants } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
 import { requestPasswordReset } from '#/api/auth'
@@ -17,6 +18,7 @@ export const Route = createFileRoute('/forgot-password')({
 const emailSchema = z.email()
 
 function ForgotPasswordPage() {
+  const captchaEnabled = useCaptchaEnabled()
   const [email, setEmail] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -31,7 +33,7 @@ function ForgotPasswordPage() {
       return
     }
     setError(null)
-    if (!captchaToken) return
+    if (captchaEnabled && !captchaToken) return
 
     setSubmitting(true)
     try {
@@ -78,7 +80,7 @@ function ForgotPasswordPage() {
 
         <TurnstileField onToken={setCaptchaToken} />
 
-        <Button type="submit" className="w-full" disabled={submitting || !captchaToken}>
+        <Button type="submit" className="w-full" disabled={submitting || (captchaEnabled && !captchaToken)}>
           {submitting ? m.auth_forgot_submitting() : m.auth_forgot_submit()}
         </Button>
       </form>

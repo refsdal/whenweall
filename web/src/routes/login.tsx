@@ -10,6 +10,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Separator } from '#/components/ui/separator'
 import { authErrorMessage } from '#/lib/auth-errors'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { m } from '#/lib/i18n'
 import { nextSearchSchema, safeNext } from '#/lib/search'
 import { signInWithCredential } from '#/api/auth'
@@ -31,6 +32,7 @@ function LoginPage() {
   const { publicConfig } = Route.useRouteContext()
   const router = useRouter()
   const navigate = useNavigate()
+  const captchaEnabled = useCaptchaEnabled()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -46,7 +48,7 @@ function LoginPage() {
     if (password.length === 0) fieldErrors.password = m.auth_error_password_required()
     setErrors(fieldErrors)
     if (Object.keys(fieldErrors).length > 0) return
-    if (!captchaToken) {
+    if (captchaEnabled && !captchaToken) {
       toast.error(m.auth_error_captcha_required())
       return
     }

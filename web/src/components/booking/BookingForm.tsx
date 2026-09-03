@@ -15,6 +15,7 @@ import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
 import { Textarea } from '#/components/ui/textarea'
 import type { Interval } from '#/lib/availability'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { getLocale, intlLocale, m } from '#/lib/i18n'
 
 export type BookingFormValues = {
@@ -72,6 +73,7 @@ export function BookingForm({
   onSubmit: (values: BookingFormValues) => void | Promise<void>
 }) {
   const locale = getLocale()
+  const captchaEnabled = useCaptchaEnabled()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [note, setNote] = useState('')
@@ -101,7 +103,7 @@ export function BookingForm({
       setError((current) => nextFailure(current, m.poll_error_email_invalid()))
       return
     }
-    if (!captchaToken) {
+    if (captchaEnabled && !captchaToken) {
       setError((current) => nextFailure(current, m.poll_error_captcha()))
       return
     }
@@ -114,7 +116,7 @@ export function BookingForm({
       name: trimmedName,
       email: trimmedEmail,
       note: note.trim() || undefined,
-      turnstileToken: captchaToken,
+      turnstileToken: captchaToken ?? undefined,
     })
   }
 

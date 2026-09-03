@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import * as z from 'zod'
+import { useCaptchaEnabled } from '#/lib/captcha'
 import { celebrate } from '#/lib/confetti'
 import { saveEditToken } from '#/lib/edit-tokens'
 import { errorCode } from '#/lib/errors'
@@ -70,6 +71,7 @@ export function useAnswerDraft({
   guestToken?: string | null
   onSaved: () => void | Promise<void>
 }): AnswerDraft {
+  const captchaEnabled = useCaptchaEnabled()
   const [name, setName] = useState(existingParticipant?.name ?? session?.user.name ?? '')
   const [email, setEmail] = useState('')
   const [answers, setAnswers] = useState<Record<string, Answer>>(
@@ -92,7 +94,7 @@ export function useAnswerDraft({
 
   const isEditing = existingParticipant !== undefined
   const isGuest = session === null
-  const needsCaptcha = isGuest && !isEditing
+  const needsCaptcha = isGuest && !isEditing && captchaEnabled
   const requireEmail = poll.settings.requireParticipantEmail && !isEditing
 
   const setAnswer = useCallback((optionId: string, answer: Answer | null) => {

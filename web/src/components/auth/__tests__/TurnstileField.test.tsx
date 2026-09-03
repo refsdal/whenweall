@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TurnstileField } from '#/components/auth/TurnstileField'
+import { useCaptchaEnabled, useTurnstileSiteKey } from '#/lib/captcha'
 
 // The real widget loads Cloudflare's script and renders an iframe challenge — none of that runs
 // in jsdom. Stand in with a button that fires the same callback props the real component takes,
@@ -18,6 +19,11 @@ vi.mock('@marsidev/react-turnstile', () => ({
       mock turnstile
     </button>
   ),
+}))
+
+vi.mock('#/lib/captcha', () => ({
+  useTurnstileSiteKey: vi.fn(() => 'site-key'),
+  useCaptchaEnabled: vi.fn(() => true),
 }))
 
 afterEach(() => cleanup())
@@ -41,5 +47,14 @@ describe('TurnstileField', () => {
     // whenever `options.size` is set (e.g. 'flexible' or 'normal'). Leaving it unset is what lets
     // the container collapse to nothing when the production (invisible) widget renders no UI.
     expect(screen.getByRole('button', { name: 'mock turnstile' })).toHaveAttribute('data-size', '')
+  })
+
+  it('renders nothing at all when the deployment has no Turnstile site key', () => {
+    vi.mocked(useTurnstileSiteKey).mockReturnValueOnce('')
+    vi.mocked(useCaptchaEnabled).mockReturnValueOnce(false)
+    const { container } = render(<TurnstileField onToken={vi.fn()} />)
+
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByRole('button', { name: 'mock turnstile' })).not.toBeInTheDocument()
   })
 })
