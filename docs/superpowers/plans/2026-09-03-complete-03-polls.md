@@ -3348,3 +3348,14 @@ bunx playwright test
 | 13 dead web libs deleted; push flag left alone (explicit no-op) | 14 / Global Constraints |
 
 Type-consistency notes checked while writing: `BuildRosterCSV(ctx, pollID, locale)` is introduced in Task 8 and used with three arguments in Tasks 8–9; `optionLabelText(o, locale, timezone)` is introduced in Task 8 and its Task 10 call site passes the hoisted `locale`; `recordingMailer`/`drainJobs`/`fakeLocales` are defined once in Task 7 and reused in 8, 10, 11; `createDatedSignupPoll`, `fixtureStart/End`, `wantLabelEN/NB` are defined once in Task 8 and reused in 8 (handler test) and 10; `FinalizeWithCount` (Task 4) is the only new Service signature — `Finalize` keeps its shape for every other caller; `errFields` (Task 1) is reused in Task 2.
+
+---
+
+## Amendment (2026-09-03, from Plan A Task 12 review)
+
+`web/src/api/polls.ts`'s `updateParticipant` now sends a `locale` field, but
+`internal/polls/handlers.go`'s `updateParticipantRequest` struct has no `Locale` field, so Go
+silently drops it (no `DisallowUnknownFields`). Harmless today — that path sends no guest-facing
+mail, only an owner digest — but it is dead weight and contradicts this plan's premise that the
+polls handlers already accept `locale`. While doing Task 7 (email localization), either add
+`Locale` to `updateParticipantRequest` and thread it through, or drop the client-side field.
