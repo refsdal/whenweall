@@ -32,6 +32,7 @@ import (
 	oauthgoogle "github.com/thecodearcher/limen/plugins/oauth-google"
 	"github.com/thecodearcher/limen/plugins/organization"
 
+	"github.com/refsdal/whenweall/internal/clientip"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/mailer"
@@ -259,21 +260,42 @@ func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption 
 		limen.WithHTTPHooks(s.signupHooks()),
 	}
 
+	// Limen's own built-in limiter (NewDefaultRateLimiterConfig, unconditionally wired in whenever
+	// WithHTTPRateLimiter is absent) has two defaults this deployment cannot live with:
+	//
+	//   - Its key generator returns the raw X-Forwarded-For header verbatim (then X-Real-IP, then
+	//     RemoteAddr — utils.go's ipExtractorFromRemoteAddr). Without a trusted proxy that header
+	//     is attacker-controlled, so its 5-per-10s sign-in rule could be bypassed by varying the
+	//     header, or aimed at a victim by forging their address. Keying on clientip.FromRequest —
+	//     the same value internal/httpserver's own Postgres limiter uses — makes both limiters
+	//     agree on who the client is and honour TRUST_PROXY the same way.
+	//   - Its global 100/min-per-key rule covers every route, including GET /me and
+	//     GET /organizations/active, which the SPA reads on every navigation; a NATed office
+	//     would start seeing 429s from /me. Those two are read-only and cheap, and our own
+	//     limiter still guards the hot mutating routes, so they are exempted outright.
+	limiterOpts := []limen.RateLimiterOption{
+		limen.WithRateLimiterKeyGenerator(func(r *http.Request) string {
+			return clientip.FromRequest(r, cfg.TrustProxy)
+		}),
+		// Paths are joined onto the HTTP base path by Limen (path.Join("/api/v1/auth", "/me")).
+		limen.WithRateLimiterDisableForPaths("/me", "/organizations/active"),
+	}
+
 	// EnableTestRoutes means /api/test/seed (internal/httpserver's Task 5 route) is live, and
 	// with it, e2e specs signing up a fresh user per fixture against ONE long-lived server
-	// process. Limen's own built-in rate limiter (NewDefaultRateLimiterConfig, unconditionally
-	// wired in whenever this option is absent) is a single in-memory bucket per (IP, path) —
-	// credential-password's own PluginHTTPConfig caps /signup/credential and /signin/credential
-	// at 5 requests/10s each, which a real Playwright run blows through in seconds (one seed call
-	// per fixture, one sign-in per spec) regardless of how many distinct e2e users those requests
-	// are for. A deployment that has already accepted "the seed route resets/creates data on
-	// demand" (EnableTestRoutes's whole premise, config.Load's own hard-fail keeps this off
-	// production) has no reason to also defend Limen's routes against its OWN test traffic, so
-	// this disables Limen's rate limiter outright rather than trying to raise its ceiling high
-	// enough to guess right for an unknown suite size.
+	// process. Limen's limiter is a single in-memory bucket per (IP, path) — credential-password's
+	// own PluginHTTPConfig caps /signup/credential and /signin/credential at 5 requests/10s each,
+	// which a real Playwright run blows through in seconds (one seed call per fixture, one
+	// sign-in per spec) regardless of how many distinct e2e users those requests are for. A
+	// deployment that has already accepted "the seed route resets/creates data on demand"
+	// (EnableTestRoutes's whole premise, config.Load's own hard-fail keeps this off production)
+	// has no reason to also defend Limen's routes against its OWN test traffic, so this disables
+	// Limen's rate limiter outright rather than trying to raise its ceiling high enough to guess
+	// right for an unknown suite size.
 	if cfg.EnableTestRoutes {
-		opts = append(opts, limen.WithHTTPRateLimiter(limen.WithRateLimiterEnabled(false)))
+		limiterOpts = append(limiterOpts, limen.WithRateLimiterEnabled(false))
 	}
+	opts = append(opts, limen.WithHTTPRateLimiter(limiterOpts...))
 
 	return opts
 }

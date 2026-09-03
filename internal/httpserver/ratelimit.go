@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"log/slog"
 	"math"
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/refsdal/whenweall/internal/clientip"
 )
 
 // rateLimitSQL is a fixed-window counter: one statement so the read-modify-write of a window
@@ -71,31 +71,9 @@ func RateLimit(sqlDB *sql.DB, name string, limit int, window time.Duration, keyF
 	}
 }
 
-// ClientIP returns the request's client IP: the rightmost entry of X-Forwarded-For when
-// trustProxy is true (set from the app's TRUST_PROXY config — true only when a reverse proxy in
-// front of us is trusted to set that header honestly), otherwise the host portion of RemoteAddr.
-//
-// Rightmost, not leftmost: X-Forwarded-For is a client-supplied header up until the first proxy
-// that actually terminates the request touches it, and every hop after that only ever *appends*
-// its own observed peer address to the end of the list — it never rewrites what's already there.
-// So the leftmost entry is whatever the original client claimed for itself (trivially spoofed by
-// sending an X-Forwarded-For header of their own choosing), while the rightmost entry is the
-// address our own trusted proxy saw the connection come from — the only entry in the list this
-// process didn't just take the client's word for.
+// ClientIP is clientip.FromRequest under its historical name — every rate limiter and captcha
+// check in this package keys on it. The implementation moved to internal/clientip so
+// internal/auth can hand Limen's own limiter the identical key (see auth.httpConfigOptions).
 func ClientIP(r *http.Request, trustProxy bool) string {
-	if trustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			last := strings.TrimSpace(parts[len(parts)-1])
-			if last != "" {
-				return last
-			}
-		}
-	}
-
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return clientip.FromRequest(r, trustProxy)
 }
