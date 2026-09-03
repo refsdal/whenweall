@@ -102,6 +102,11 @@ func (s *Server) routes() {
 	// (invitations, /me, ...) directly.
 	guardedAuthHandler := s.authSvc.AuthMountGuard(authHandler)
 
+	// Captcha sits between the rate limit and the guard: cheapest check first (a counter), then
+	// the network round trip to Turnstile, then Limen. Not skipped under EnableTestRoutes — the
+	// e2e suite configures Cloudflare's always-pass test keys and exercises the real header.
+	captchaAuthHandler := s.authCaptchaMiddleware(guardedAuthHandler)
+
 	// The whole mount goes through one middleware that applies the hot, unauthenticated auth
 	// routes' 10/min-per-IP budget (see authRateLimitMiddleware for why this replaced a set of
 	// ServeMux exact-pattern registrations) before ever reaching Limen's own handler, which owns
@@ -118,9 +123,9 @@ func (s *Server) routes() {
 	// hard-fails it alongside APP_ENV=production — has no reason to also defend this budget
 	// against its own test traffic. Mirrors internal/auth.httpConfigOptions's identical call on
 	// Limen's own built-in rate limiter, for the identical reason.
-	authRouteHandler := guardedAuthHandler
+	authRouteHandler := captchaAuthHandler
 	if !s.cfg.EnableTestRoutes {
-		authRouteHandler = s.authRateLimitMiddleware(guardedAuthHandler)
+		authRouteHandler = s.authRateLimitMiddleware(captchaAuthHandler)
 	}
 	s.mux.Handle("/api/v1/auth/", authRouteHandler)
 

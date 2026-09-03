@@ -2,10 +2,9 @@ package httpserver
 
 // Ports src/server/http/turnstile.ts's verifyTurnstile (POSTs a Turnstile token to Cloudflare's
 // siteverify endpoint). requireTurnstile (throws CAPTCHA_FAILED when verification doesn't
-// succeed) is ported as requireCaptchaIfAnon (internal/polls/handlers.go) instead of the
-// middleware this package briefly also carried (RequireCaptcha, removed as dead code — nothing
-// ever wired it into a route; every public+captcha check in the actual HTTP surface calls
-// VerifyTurnstile directly through requireCaptchaIfAnon).
+// succeed) is ported twice: RequireCaptchaIfAnon (domainauth.go) for guest votes/comments/
+// bookings, and Server.authCaptchaMiddleware (captcha.go) for the sign-in/sign-up/password-reset
+// routes under the Limen mount.
 
 import (
 	"context"
