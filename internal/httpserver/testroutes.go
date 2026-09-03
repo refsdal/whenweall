@@ -10,11 +10,11 @@ package httpserver
 //   - No `plan: 'premium'` support: billing/subscriptions have no home in this rewrite (see
 //     internal/admin/stats.go's own doc comment), so there is nothing left to seed a subscription
 //     row into.
-//   - No manual "set email_verified" step: Limen's credential-password plugin signs a fresh
-//     signup straight in (autoSignInOnSignUp, the buildLimenConfig default) with no email-
-//     verification gate on sign-in at all, unlike the old Better-Auth config this replaced — see
-//     internal/auth/auth_test.go's TestSignupSigninMeFlow, which never touches the DB to unblock
-//     a fresh signup either.
+//   - The "set email_verified" step is authSvc.MarkEmailVerified: a fresh Limen signup is
+//     unverified and mints no session (internal/auth.buildLimenConfig turns auto-sign-in off), and
+//     every gated route refuses an unverified session (internal/auth/session.go's RequireSession
+//     and AuthMountGuard) — so, like seed.ts before it, this route marks the user verified and then
+//     signs them in itself to obtain the cookies its own seeding needs.
 //
 // Wiring cannot import internal/polls or internal/bookings directly: both already import this
 // package (handlers.go in each), so the reverse edge would be a compile-time cycle — the same
@@ -132,9 +132,17 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 			password = seedDefaultPassword
 		}
 
-		cookies, err := seedSignUp(authSvc, email, password)
-		if err != nil {
+		if err := seedSignUp(authSvc, email, password); err != nil {
 			Err(w, http.StatusInternalServerError, "internal", "seed: signup failed: "+err.Error(), nil)
+			return
+		}
+		if err := authSvc.MarkEmailVerified(r.Context(), email); err != nil {
+			Err(w, http.StatusInternalServerError, "internal", "seed: marking verified failed: "+err.Error(), nil)
+			return
+		}
+		cookies, err := seedSignIn(authSvc, email, password)
+		if err != nil {
+			Err(w, http.StatusInternalServerError, "internal", "seed: signin failed: "+err.Error(), nil)
 			return
 		}
 
@@ -196,12 +204,6 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 	}
 }
 
-// seedSignUp drives Limen's own signup route in-process (authSvc.Handler(), the exact handler
-// internal/httpserver.Server mounts at "/api/v1/auth/") via httptest, exactly the way a browser's
-// POST to /api/v1/auth/signup/credential would, so the created user's password hash, session
-// token and Set-Cookie are all whatever Limen itself produces — nothing here reaches into
-// Limen's own tables directly. autoSignInOnSignUp (buildLimenConfig's default, unchanged) means
-// signup alone mints a session; there is no separate signin call to make.
 // seedRemoteAddrCounter backs nextSeedRemoteAddr — see its own doc comment.
 var seedRemoteAddrCounter atomic.Uint32
 
@@ -218,13 +220,29 @@ func nextSeedRemoteAddr() string {
 	return fmt.Sprintf("10.%d.%d.%d:%d", (n>>16)&0xff, (n>>8)&0xff, n&0xff, 40000+(n%20000))
 }
 
-func seedSignUp(authSvc *auth.Service, email, password string) ([]*http.Cookie, error) {
-	payload, err := json.Marshal(map[string]string{"email": email, "password": password})
+// seedSignUp drives Limen's own signup route in-process (authSvc.Handler(), the exact handler
+// internal/httpserver.Server mounts at "/api/v1/auth/") via httptest, exactly the way a browser's
+// POST to /api/v1/auth/signup/credential would, so the created user's password hash is whatever
+// Limen itself produces — nothing here reaches into Limen's own tables directly. Signup mints no
+// session (auto-sign-in is off — see internal/auth.buildLimenConfig), so this returns nothing
+// but an error; seedSignIn below is what yields cookies.
+func seedSignUp(authSvc *auth.Service, email, password string) error {
+	_, err := seedAuthPost(authSvc, "/api/v1/auth/signup/credential", map[string]string{"email": email, "password": password})
+	return err
+}
+
+// seedSignIn drives Limen's signin route the same way and returns the session cookies it set.
+func seedSignIn(authSvc *auth.Service, email, password string) ([]*http.Cookie, error) {
+	return seedAuthPost(authSvc, "/api/v1/auth/signin/credential", map[string]string{"credential": email, "password": password})
+}
+
+func seedAuthPost(authSvc *auth.Service, path string, body map[string]string) ([]*http.Cookie, error) {
+	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("marshal signup body: %w", err)
+		return nil, fmt.Errorf("marshal %s body: %w", path, err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup/credential", bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = nextSeedRemoteAddr()
 	rec := httptest.NewRecorder()
@@ -234,7 +252,7 @@ func seedSignUp(authSvc *auth.Service, email, password string) ([]*http.Cookie, 
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		respBody, _ := io.ReadAll(res.Body)
-		return nil, fmt.Errorf("signup/credential: status %d: %s", res.StatusCode, respBody)
+		return nil, fmt.Errorf("%s: status %d: %s", path, res.StatusCode, respBody)
 	}
 	return res.Cookies(), nil
 }

@@ -87,7 +87,11 @@ func newTestServiceWithConfig(t *testing.T, cfg *config.Config) *testService {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/auth/", svc.Handler())
+	// AuthMountGuard wraps the Limen mount here the same way internal/httpserver.Server.routes
+	// wraps it in production — TestEmailVerificationGate (verification_test.go) exercises the
+	// Limen-mount half of the gate (e.g. GET /api/v1/auth/organizations/active) through this same
+	// testService, which would otherwise reach Limen's handler completely unguarded.
+	mux.Handle("/api/v1/auth/", svc.AuthMountGuard(svc.Handler()))
 
 	// /probe is this test's own route (not part of the seam's contract) exercising
 	// FromContext/RequireSession/RequireStaff the same way a later plan's handlers would.
@@ -104,6 +108,9 @@ func newTestServiceWithConfig(t *testing.T, cfg *config.Config) *testService {
 		w.WriteHeader(http.StatusOK)
 	}))
 	mux.HandleFunc("/probe/staff", svc.RequireStaff(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	mux.HandleFunc("/probe/session-unverified-ok", svc.RequireSessionAllowUnverified(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -161,6 +168,24 @@ func decodeJSON(t *testing.T, resp *http.Response) map[string]any {
 		t.Fatalf("decode response body: %v", err)
 	}
 	return body
+}
+
+// signUpVerifiedAndSignIn is the "give me a usable account" helper: signup (which mints no session
+// since auto-sign-in is off), MarkEmailVerified (the gate refuses unverified sessions everywhere
+// that matters), then signin on ts.client's cookie jar.
+func (ts *testService) signUpVerifiedAndSignIn(t *testing.T, email string) {
+	t.Helper()
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    email,
+		"password": signupPassword,
+	}), "signup")
+	if err := ts.svc.MarkEmailVerified(context.Background(), email); err != nil {
+		t.Fatalf("MarkEmailVerified(%q): %v", email, err)
+	}
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{
+		"credential": email,
+		"password":   signupPassword,
+	}), "signin")
 }
 
 // signupPassword satisfies credential-password's default validation: min 8 chars, at least one
@@ -245,10 +270,7 @@ func TestMeReflectsStaffFlagAfterMakeStaff(t *testing.T) {
 	ts := newTestService(t)
 	email := "future-staffer@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 
 	meBody := decodeJSON(t, ts.get(t, "/api/v1/auth/me"))
 	user, _ := meBody["user"].(map[string]any)
@@ -340,10 +362,7 @@ func TestStaffFlagAndRequireStaff(t *testing.T) {
 	ts := newTestService(t)
 	email := "staffer@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 
 	resp := ts.get(t, "/probe/staff")
 	defer func() { _ = resp.Body.Close() }()
@@ -454,10 +473,7 @@ func TestRequireOrgMemberForbiddenForNonMember(t *testing.T) {
 	ts := newTestService(t)
 
 	ownerEmail := "org-owner-b@example.com"
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    ownerEmail,
-		"password": signupPassword,
-	}), "signup owner")
+	ts.signUpVerifiedAndSignIn(t, ownerEmail)
 	triggerSessionResolution(t, ts)
 
 	ownerID := lookupUserID(t, ts, ownerEmail)
@@ -475,10 +491,7 @@ func TestRequireOrgMemberForbiddenForNonMember(t *testing.T) {
 	// user's org — same client/jar is fine since RequireOrgMember is called directly here, not
 	// through an HTTP round trip that would depend on which of the two is currently signed in.
 	outsiderEmail := "org-outsider@example.com"
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    outsiderEmail,
-		"password": signupPassword,
-	}), "signup outsider")
+	ts.signUpVerifiedAndSignIn(t, outsiderEmail)
 	triggerSessionResolution(t, ts)
 	outsiderID := lookupUserID(t, ts, outsiderEmail)
 
@@ -503,10 +516,7 @@ func TestRequireOrgMemberInternalErrorOnDBFailure(t *testing.T) {
 	ts := newTestService(t)
 	email := "internal-error-check@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 	triggerSessionResolution(t, ts)
 	userID := lookupUserID(t, ts, email)
 

@@ -96,11 +96,11 @@ func (s *Server) routes() {
 
 	authHandler := s.authSvc.Handler()
 
-	// LockedSessionMiddleware sits directly around Limen's own handler, inside the rate limit —
-	// see its own doc comment (internal/auth/session.go) for why resolveSession's locked check
-	// alone can't stop a locked user's fresh sign-in from reaching Limen's own routes (invitations,
-	// /me, ...) directly.
-	lockedAuthHandler := s.authSvc.LockedSessionMiddleware(authHandler)
+	// AuthMountGuard sits directly around Limen's own handler, inside the rate limit — see its
+	// own doc comment (internal/auth/session.go) for why resolveSession's lock/verification checks
+	// alone can't stop a locked or unverified user's fresh sign-in from reaching Limen's own routes
+	// (invitations, /me, ...) directly.
+	guardedAuthHandler := s.authSvc.AuthMountGuard(authHandler)
 
 	// The whole mount goes through one middleware that applies the hot, unauthenticated auth
 	// routes' 10/min-per-IP budget (see authRateLimitMiddleware for why this replaced a set of
@@ -118,9 +118,9 @@ func (s *Server) routes() {
 	// hard-fails it alongside APP_ENV=production — has no reason to also defend this budget
 	// against its own test traffic. Mirrors internal/auth.httpConfigOptions's identical call on
 	// Limen's own built-in rate limiter, for the identical reason.
-	authRouteHandler := lockedAuthHandler
+	authRouteHandler := guardedAuthHandler
 	if !s.cfg.EnableTestRoutes {
-		authRouteHandler = s.authRateLimitMiddleware(lockedAuthHandler)
+		authRouteHandler = s.authRateLimitMiddleware(guardedAuthHandler)
 	}
 	s.mux.Handle("/api/v1/auth/", authRouteHandler)
 

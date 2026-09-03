@@ -58,10 +58,7 @@ func TestPersonalOrgCreatedOnSignup(t *testing.T) {
 	ts := newTestService(t)
 	email := "org-owner@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 	triggerSessionResolution(t, ts)
 
 	userID := lookupUserID(t, ts, email)
@@ -94,10 +91,7 @@ func TestPersonalOrgEnsureIsIdempotentAtTheDBLevel(t *testing.T) {
 	ts := newTestService(t)
 	email := "repeat-signer@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 	triggerSessionResolution(t, ts)
 
 	userID := lookupUserID(t, ts, email)
@@ -128,10 +122,7 @@ func TestPersonalOrgRecreatedAfterCacheClearAndOrgDeleted(t *testing.T) {
 	ts := newTestService(t)
 	email := "cache-cleared@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 	triggerSessionResolution(t, ts)
 
 	userID := lookupUserID(t, ts, email)
@@ -179,10 +170,7 @@ func TestPersonalOrgConcurrentFirstRequestsCreateExactlyOne(t *testing.T) {
 	ts := newTestService(t)
 	email := "concurrent-first@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 
 	const n = 8
 	var wg sync.WaitGroup
@@ -229,10 +217,7 @@ func TestPersonalOrgSlugCollisionAcrossDomainsBothSucceed(t *testing.T) {
 
 	emails := []string{"ada@foo.example", "ada@bar.example"}
 	for _, email := range emails {
-		requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-			"email":    email,
-			"password": signupPassword,
-		}), "signup "+email)
+		ts.signUpVerifiedAndSignIn(t, email)
 	}
 
 	for _, email := range emails {
@@ -261,10 +246,7 @@ func TestActiveOrgIDDefaultsToPersonalOrgOnFirstProbe(t *testing.T) {
 	ts := newTestService(t)
 	email := "fresh-signup@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 
 	probeResp := ts.get(t, "/probe")
 	probeBody := decodeJSON(t, probeResp)
@@ -298,10 +280,7 @@ func TestRequireOrgMemberSucceedsForPersonalOrg(t *testing.T) {
 	ts := newTestService(t)
 	email := "member-check@example.com"
 
-	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
-		"email":    email,
-		"password": signupPassword,
-	}), "signup")
+	ts.signUpVerifiedAndSignIn(t, email)
 	triggerSessionResolution(t, ts)
 
 	userID := lookupUserID(t, ts, email)

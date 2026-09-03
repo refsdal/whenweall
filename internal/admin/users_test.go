@@ -481,7 +481,17 @@ const harnessPassword = "Str0ngPassw0rd"
 func (h *authHarness) signUpAndSignIn(t *testing.T, email string) {
 	t.Helper()
 	h.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{"email": email, "password": harnessPassword})
+	h.markVerified(t, email)
 	h.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{"credential": email, "password": harnessPassword})
+}
+
+// markVerified flips email_verified_at through the real auth.Service — every RequireSession/
+// RequireStaff route this harness probes refuses an unverified session (internal/auth/session.go).
+func (h *authHarness) markVerified(t *testing.T, email string) {
+	t.Helper()
+	if err := h.svc.MarkEmailVerified(context.Background(), email); err != nil {
+		t.Fatalf("MarkEmailVerified(%q): %v", email, err)
+	}
 }
 
 func (h *authHarness) postJSON(t *testing.T, path string, body map[string]any) {

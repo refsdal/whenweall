@@ -161,6 +161,13 @@ func buildLimenConfig(cfg *config.Config, sqlDB *sql.DB, s *Service, cliEnabled 
 			credentialpassword.WithPasswordMinLength(12),
 			credentialpassword.WithPasswordRequireUppercase(false),
 			credentialpassword.WithPasswordRequireNumbers(false),
+			// A fresh signup must NOT get a session: the account is unusable until the mailed
+			// verification token is consumed (see AuthMountGuard/RequireSession in session.go),
+			// and handing out a cookie first would only let the SPA discover that one request
+			// later. Signup responds with the user payload (through sessionTransformer, so the
+			// after-hook in signup_hook.go still sees the auth result) and no Set-Cookie; the
+			// user signs in explicitly afterwards.
+			credentialpassword.WithAutoSignInOnSignUp(false),
 		),
 		organization.New(
 			organization.WithSendInvitationMail(func(ctx context.Context, d *organization.SendInvitationMailData) {

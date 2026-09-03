@@ -75,6 +75,7 @@ func staffClient(t *testing.T, h *authHarness, email string) *http.Client {
 	t.Helper()
 	client := h.newClient(t)
 	h.postJSONWith(t, client, "/api/v1/auth/signup/credential", map[string]any{"email": email, "password": harnessPassword})
+	h.markVerified(t, email)
 	h.postJSONWith(t, client, "/api/v1/auth/signin/credential", map[string]any{"credential": email, "password": harnessPassword})
 	h.makeStaff(t, email)
 	return client

@@ -18,6 +18,11 @@ type Session struct {
 	Email       string
 	ActiveOrgID string // "" when the user has no active organization
 	Staff       bool
+	// EmailVerified mirrors users.email_verified_at IS NOT NULL. RequireSession/RequireStaff (and
+	// AuthMountGuard for Limen's own routes) refuse an unverified session with 403
+	// email_unverified; RequireSessionAllowUnverified is the explicit opt-out for the two account
+	// routes that must work before verification (PATCH/DELETE /api/v1/me).
+	EmailVerified bool
 }
 
 // sessionCtxKey is unexported so only this package can set/read the context value it names —
@@ -62,7 +67,7 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	// Limen's own /me, and every other route under /api/v1/auth/ authenticate against Limen's own
 	// session validation, which never calls FromContext at all. A locked user with a fresh,
 	// Limen-valid session could still call those directly, right past this check. The second half —
-	// LockedSessionMiddleware below, wrapped around the whole /api/v1/auth/ mount by
+	// AuthMountGuard below, wrapped around the whole /api/v1/auth/ mount by
 	// internal/httpserver — is what closes that gap; see its own doc comment for the full two-layer
 	// picture (also described in migrations/00007_admin_locks.sql).
 	//
@@ -112,9 +117,10 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	}
 
 	sess := &Session{
-		UserID: fmt.Sprint(validated.User.ID),
-		Email:  validated.User.Email,
-		Staff:  staff,
+		UserID:        fmt.Sprint(validated.User.ID),
+		Email:         validated.User.Email,
+		Staff:         staff,
+		EmailVerified: validated.User.EmailVerifiedAt != nil,
 	}
 
 	// Every authenticated request is where the personal-org invariant gets enforced (lazily,
@@ -156,11 +162,11 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 }
 
 // isUserLocked reports whether userID (Limen's `any` user id, same value resolveSession scans
-// off validated.User.ID) has a locked_users row. Used by LockedSessionMiddleware below, which only
+// off validated.User.ID) has a locked_users row. Used by AuthMountGuard below, which only
 // ever needs the lock half of resolveSession's own combined locked_users/staff_users query (that
 // query folds both into one round trip for its own reasons — see its doc comment — but this
 // middleware has no use for the staff flag at all, so there is no reason to fold it in here too).
-// The caller, not this helper, decides how to fail on err != nil; LockedSessionMiddleware fails
+// The caller, not this helper, decides how to fail on err != nil; AuthMountGuard fails
 // closed (treats "couldn't tell" as locked), matching resolveSession's own locked_users half.
 func (s *Service) isUserLocked(ctx context.Context, userID any) (bool, error) {
 	var locked bool
@@ -170,43 +176,63 @@ func (s *Service) isUserLocked(ctx context.Context, userID any) (bool, error) {
 	return locked, err
 }
 
-// authMountSignoutMethodAndPath is the one exception LockedSessionMiddleware carves out of the
-// auth mount for a locked user: signing out. A locked user has no legitimate reason to reach any
-// other Limen route (see LockedSessionMiddleware's doc comment), but blocking signout too would
-// leave them holding a cookie they can never clear themselves.
+// authMountSignoutMethodAndPath is the one exception AuthMountGuard carves out of the auth mount
+// for a LOCKED user: signing out. A locked user has no legitimate reason to reach any other Limen
+// route, but blocking signout too would leave them holding a cookie they can never clear.
 const authMountSignoutMethodAndPath = "POST /api/v1/auth/signout"
 
-// LockedSessionMiddleware wraps Limen's own handler — mounted at /api/v1/auth/ by
-// internal/httpserver — so a locked user's otherwise-valid Limen session cannot reach any route
-// under that mount except signout. This is the second, narrower layer resolveSession's own locked
-// check (above) can't provide on its own: that check only ever controls what auth.FromContext
-// returns for *this application's* handlers, because Limen's own plugin routes (organization's
-// invitations, Limen's own GET /me, an OAuth callback, ...) authenticate against Limen's *own*
-// session validation and never call FromContext at all. Concretely: a locked user can still
-// complete a fresh credential sign-in or an OAuth callback — none of Limen's plugins know
-// locked_users exists — minting a brand new, perfectly valid Limen
-// session; without this middleware they could then use that session against any Limen route
-// directly, right past resolveSession's check. Blocking every such route here, unconditionally,
-// is the actual containment: the fresh session still gets minted (there is no hook early enough to
-// stop that part), but it is useless the moment it tries to do anything except sign out.
+// authMountUnverifiedAllowed lists the Limen routes an UNVERIFIED (but valid) session may still
+// reach: reading itself, signing out, and completing/resending verification — plus the
+// credential routes that never depend on the caller's session at all (a browser that still
+// carries an unverified session cookie must be able to sign in as someone else or reset a
+// password). Everything else under /api/v1/auth/ — organizations, invitations, oauth linking,
+// password change — is refused with 403 email_unverified until POST /verify-email has run.
+var authMountUnverifiedAllowed = map[string]struct{}{
+	"GET /api/v1/auth/me":                       {},
+	"POST /api/v1/auth/signout":                 {},
+	"POST /api/v1/auth/verify-email":            {},
+	"POST /api/v1/auth/email-verifications":     {},
+	"POST /api/v1/auth/signin/credential":       {},
+	"POST /api/v1/auth/signup/credential":       {},
+	"POST /api/v1/auth/passwords/request-reset": {},
+	"POST /api/v1/auth/passwords/reset":         {},
+}
+
+// AuthMountGuard wraps Limen's own handler — mounted at /api/v1/auth/ by internal/httpserver — and
+// applies the two per-user restrictions Limen itself knows nothing about, in this order:
 //
-// Fails closed like resolveSession: a locked_users query error is treated as "locked" (blocks the
-// request) rather than "couldn't tell, so let it through" — see migrations/00007_admin_locks.sql
-// for the full two-layer picture this middleware and resolveSession's own comment together
-// describe.
-func (s *Service) LockedSessionMiddleware(next http.Handler) http.Handler {
+//  1. Lock (locked_users): a locked user's otherwise-valid Limen session cannot reach any route
+//     under the mount except signout. This is the second, narrower layer resolveSession's own
+//     locked check (above) can't provide on its own: that check only ever controls what
+//     auth.FromContext returns for *this application's* handlers, because Limen's own plugin
+//     routes (organization's invitations, Limen's own GET /me, an OAuth callback, ...)
+//     authenticate against Limen's *own* session validation and never call FromContext at all.
+//     Concretely: a locked user can still complete a fresh credential sign-in or an OAuth callback
+//     — none of Limen's plugins know locked_users exists — minting a brand new, perfectly valid
+//     Limen session; without this middleware they could then use that session against any Limen
+//     route directly. The fresh session still gets minted (there is no hook early enough to stop
+//     that part), but it is useless the moment it tries to do anything except sign out.
+//  2. Verification (users.email_verified_at): an unverified session may only reach the routes in
+//     authMountUnverifiedAllowed. Same two-layer reasoning — RequireSession covers our handlers,
+//     this covers Limen's — and it is why an unverified user cannot, say, accept an invitation
+//     addressed to an email they never proved they own.
+//
+// Fails closed like resolveSession: a locked_users query error is treated as "locked" rather than
+// "couldn't tell, so let it through" — see migrations/00007_admin_locks.sql for the full picture.
+func (s *Service) AuthMountGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cleaned := path.Clean(strings.TrimSuffix(r.URL.Path, "/"))
-		if r.Method+" "+cleaned == authMountSignoutMethodAndPath {
+		route := r.Method + " " + cleaned
+		if route == authMountSignoutMethodAndPath {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		validated, err := s.limen.GetSession(r)
 		if err != nil || validated == nil || validated.User == nil {
-			// No valid Limen session at all — nothing for this middleware to block; whatever
+			// No valid Limen session at all — nothing for this middleware to restrict; whatever
 			// happens next (a signin attempt, an anonymous 401 from Limen itself, ...) is
-			// unaffected by locked_users.
+			// unaffected by locked_users or verification.
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -220,6 +246,13 @@ func (s *Service) LockedSessionMiddleware(next http.Handler) http.Handler {
 		if locked {
 			writeErrorEnvelope(w, http.StatusForbidden, "forbidden", "account is locked")
 			return
+		}
+
+		if validated.User.EmailVerifiedAt == nil {
+			if _, ok := authMountUnverifiedAllowed[route]; !ok {
+				writeUnverified(w)
+				return
+			}
 		}
 
 		next.ServeHTTP(w, r)
@@ -245,10 +278,38 @@ func (s *Service) FromContext(ctx context.Context) (*Session, bool) {
 	return FromContext(ctx)
 }
 
+// writeUnverified is the shared 403 for a session whose email is not yet verified. The SPA maps
+// the code to its verify-email flow (web/src/lib/session-guard.ts redirects there before a route
+// ever hits this; this is the server-side truth behind that redirect).
+func writeUnverified(w http.ResponseWriter) {
+	writeErrorEnvelope(w, http.StatusForbidden, "email_unverified", "email address not verified")
+}
+
 // RequireSession rejects an anonymous request with 401 {"error":{"code":"unauthenticated",...}}
-// before calling next; a request with a valid session passes through unchanged (next reads the
-// Session back out via FromContext same as any other handler).
+// and a session whose email is unverified with 403 {"error":{"code":"email_unverified",...}}
+// before calling next; a verified session passes through unchanged (next reads the Session back
+// out via FromContext same as any other handler). Unverified accounts cannot use the app — this
+// is the one gate every domain handler inherits (httpserver.WithOrgSession is built on it).
 func (s *Service) RequireSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sess, ok := FromContext(r.Context())
+		if !ok {
+			writeErrorEnvelope(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
+			return
+		}
+		if !sess.EmailVerified {
+			writeUnverified(w)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// RequireSessionAllowUnverified is RequireSession without the verification gate: 401 for an
+// anonymous request, otherwise next. Only for routes an unverified user legitimately needs —
+// setting their locale, deleting the account they just made — never for anything that reads or
+// writes shared content.
+func (s *Service) RequireSessionAllowUnverified(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := FromContext(r.Context()); !ok {
 			writeErrorEnvelope(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
@@ -258,13 +319,17 @@ func (s *Service) RequireSession(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireStaff rejects an anonymous request with 401 and a non-staff request with 403, both
-// {"error":{"code":"forbidden"|"unauthenticated",...}}.
+// RequireStaff rejects an anonymous request with 401, an unverified one with 403 email_unverified,
+// and a non-staff one with 403 forbidden, all as {"error":{"code":...}}.
 func (s *Service) RequireStaff(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess, ok := FromContext(r.Context())
 		if !ok {
 			writeErrorEnvelope(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
+			return
+		}
+		if !sess.EmailVerified {
+			writeUnverified(w)
 			return
 		}
 		if !sess.Staff {
