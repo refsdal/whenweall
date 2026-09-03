@@ -25,8 +25,6 @@ export const Route = createFileRoute('/settings')({
 function SettingsPage() {
   const { session } = Route.useRouteContext()
   const orgRoles = Route.useLoaderData()
-  const router = useRouter()
-  const navigate = useNavigate()
   if (!session) return null
 
   return (
@@ -59,26 +57,40 @@ function SettingsPage() {
 
       <Separator />
 
-      <DeleteAccountDialog
-        hasPassword={session.user.hasPassword}
-        onDelete={async (password) => {
-          try {
-            await deleteOwnAccount(password)
-          } catch (error) {
-            // invalid_password / password_required: the dialog stays open for another try.
-            toast.error(
-              errorCode(error) === 'invalid_password' || errorCode(error) === 'password_required'
-                ? m.settings_delete_error()
-                : m.auth_error_generic(),
-            )
-            return
-          }
-          toast.success(m.settings_delete_success())
-          await router.invalidate()
-          await navigate({ to: '/' })
-        }}
-      />
+      <DeleteAccountSection hasPassword={session.user.hasPassword} />
     </div>
+  )
+}
+
+/**
+ * Wires `DeleteAccountDialog` to `deleteOwnAccount` and the post-deletion navigation. Exported for
+ * `settings.test.tsx`: the wrong-password/error-branch here is the one bit of real logic in this
+ * route worth unit-testing in isolation, same split as `ProfileSection`/`HandleSection`.
+ */
+export function DeleteAccountSection({ hasPassword }: { hasPassword: boolean }) {
+  const router = useRouter()
+  const navigate = useNavigate()
+
+  return (
+    <DeleteAccountDialog
+      hasPassword={hasPassword}
+      onDelete={async (password) => {
+        try {
+          await deleteOwnAccount(password)
+        } catch (error) {
+          // invalid_password / password_required: the dialog stays open for another try.
+          toast.error(
+            errorCode(error) === 'invalid_password' || errorCode(error) === 'password_required'
+              ? m.settings_delete_error()
+              : m.auth_error_generic(),
+          )
+          return
+        }
+        toast.success(m.settings_delete_success())
+        await router.invalidate()
+        await navigate({ to: '/' })
+      }}
+    />
   )
 }
 

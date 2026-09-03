@@ -682,6 +682,7 @@
   "org_invite_accept_body": "Du er invitert til å bli med. Godta for å begynne å planlegge sammen.",
   "org_invite_accept_cta": "Godta invitasjon",
   "org_invite_invalid": "Denne invitasjonen er ugyldig eller har utløpt.",
+  "org_invite_switch_failed": "Du ble med i organisasjonen, men vi klarte ikke å bytte til den automatisk. Bruk kontomenyen for å bytte.",
   "notif_channel_email": "E-post",
   "notif_group_responses": "Svar",
   "notif_group_comments": "Kommentarer",

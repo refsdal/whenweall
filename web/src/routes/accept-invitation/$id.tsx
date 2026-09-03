@@ -1,5 +1,7 @@
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
+import { toast } from 'sonner'
 import { AcceptInvitationCard } from '#/components/auth/AcceptInvitationCard'
+import { m } from '#/lib/i18n'
 import { requireVerifiedSession } from '#/lib/session-guard'
 import { listOrganizations, switchOrganization } from '#/api/auth'
 
@@ -15,6 +17,12 @@ import { listOrganizations, switchOrganization } from '#/api/auth'
  * active organization (unlike Better-Auth's acceptInvitation, which the old comment here relied
  * on), so after accepting we look the joined org up by slug and switch to it ourselves — otherwise
  * the user would land on their personal org's dashboard with the new org unreachable.
+ *
+ * The lookup/switch is best-effort: the membership row is already committed by the time it runs
+ * (`acceptInvitation` already resolved), so a failure here must not strand the user on this card —
+ * a second click would re-submit an already-accepted invitation and surface the misleading
+ * "invalid or expired" message. On failure we still navigate to /dashboard and toast that the
+ * switch needs to be done by hand (the org switcher in `UserMenu` reaches it either way).
  */
 export const Route = createFileRoute('/accept-invitation/$id')({
   beforeLoad: ({ context, params }) => requireVerifiedSession(context, `/accept-invitation/${params.id}`),
@@ -23,18 +31,32 @@ export const Route = createFileRoute('/accept-invitation/$id')({
 
 function AcceptInvitationPage() {
   const { id } = Route.useParams()
+  return <AcceptInvitationRoute invitationId={id} />
+}
+
+/**
+ * Exported for `$id.test.tsx`: the post-accept org-switch logic, independent of
+ * `Route.useParams()` (same split as `verify-email.tsx`'s `VerifyWithToken`).
+ */
+export function AcceptInvitationRoute({ invitationId }: { invitationId: string }) {
   const router = useRouter()
   const navigate = useNavigate()
 
   async function handleAccepted(orgSlug: string | null) {
     if (orgSlug) {
-      const orgs = await listOrganizations()
-      const joined = orgs.find((org) => org.slug === orgSlug)
-      if (joined && !joined.active) await switchOrganization(joined.id)
+      try {
+        const orgs = await listOrganizations()
+        const joined = orgs.find((org) => org.slug === orgSlug)
+        if (joined && !joined.active) await switchOrganization(joined.id)
+      } catch {
+        toast.error(m.org_invite_switch_failed())
+      }
     }
     await router.invalidate()
     await navigate({ to: '/dashboard' })
   }
 
-  return <AcceptInvitationCard invitationId={id} onAccepted={(orgSlug) => void handleAccepted(orgSlug)} />
+  return (
+    <AcceptInvitationCard invitationId={invitationId} onAccepted={(orgSlug) => void handleAccepted(orgSlug)} />
+  )
 }

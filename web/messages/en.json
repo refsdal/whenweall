@@ -682,6 +682,7 @@
   "org_invite_accept_body": "You've been invited to join. Accept to start scheduling together.",
   "org_invite_accept_cta": "Accept invitation",
   "org_invite_invalid": "This invitation is invalid or has expired.",
+  "org_invite_switch_failed": "You joined the organization, but couldn't switch to it automatically. Use the account menu to switch.",
   "notif_channel_email": "Email",
   "notif_group_responses": "Responses",
   "notif_group_comments": "Comments",
