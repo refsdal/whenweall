@@ -1,5 +1,6 @@
 import * as z from 'zod'
 import { api } from '#/api/client'
+import { getLocale } from '#/lib/i18n'
 import type {
   Availability,
   BookingForManage,
@@ -248,6 +249,7 @@ export function bookSlot(
       email: input.email,
       note: input.note,
       timezone: input.timezone,
+      locale: getLocale(),
     },
     { captchaToken: opts?.captchaToken },
   )

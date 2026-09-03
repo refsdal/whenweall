@@ -1,5 +1,6 @@
 import * as z from 'zod'
 import { api } from '#/api/client'
+import { getLocale } from '#/lib/i18n'
 import type { NotificationGrid } from '#/lib/notifications'
 import type { PollSummary, PollView } from '#/api/types'
 
@@ -214,7 +215,7 @@ export function addParticipant(
   return api<AddParticipantResult>(
     'POST',
     `/api/v1/polls/${pollId}/participants`,
-    { name: input.name, email: input.email, answers: input.answers, locale: input.locale },
+    { name: input.name, email: input.email, answers: input.answers, locale: input.locale ?? getLocale() },
     { captchaToken: opts?.captchaToken },
   )
 }
@@ -228,7 +229,7 @@ export async function updateParticipant(
   await api(
     'PATCH',
     `/api/v1/polls/${pollId}/participants/${participantId}`,
-    input,
+    { ...input, locale: getLocale() },
     { guestToken: opts?.guestToken },
   )
 }
@@ -284,6 +285,7 @@ export function claimSlot(
       participantId: input.participantId,
       name: input.name,
       email: input.email,
+      locale: getLocale(),
     },
     opts,
   )

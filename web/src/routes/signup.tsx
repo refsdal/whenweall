@@ -77,10 +77,7 @@ function SignupPage() {
 
     setSubmitting(true)
     try {
-      // `name` has nowhere to go server-side yet (see `#/api/auth.ts`'s own doc comment: Limen's
-      // signup handler only reads email/password) — collected here anyway so a later task can wire
-      // it up without a UI change, but it is NOT sent.
-      await signUpWithCredential(email, password)
+      await signUpWithCredential(email, password, name.trim())
       setSubmittedEmail(email)
     } catch (error) {
       toast.error(authErrorMessage(error))

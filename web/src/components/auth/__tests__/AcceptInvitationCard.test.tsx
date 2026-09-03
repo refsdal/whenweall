@@ -21,7 +21,7 @@ describe('AcceptInvitationCard', () => {
   })
 
   it('calls acceptInvitation and onAccepted when the accept button is clicked', async () => {
-    vi.mocked(acceptInvitation).mockResolvedValue(undefined)
+    vi.mocked(acceptInvitation).mockResolvedValue({ orgSlug: 'team' })
     const onAccepted = vi.fn()
     const user = userEvent.setup()
     render(<AcceptInvitationCard invitationId="inv_1" onAccepted={onAccepted} />)
