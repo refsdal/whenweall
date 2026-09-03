@@ -143,3 +143,68 @@ func TestUnverifiedSessionIsStillASession(t *testing.T) {
 	}
 	requireStatus2xx(t, ts.get(t, "/probe/session-unverified-ok"), "RequireSessionAllowUnverified")
 }
+
+// TestAuthMountUnverifiedAllowedCredentialRoutesActuallyWork is the regression test for the four
+// session-less entries in authMountUnverifiedAllowed — signin, signup, request-reset and reset.
+// Every other test that hits these routes does so either with NO cookie at all (a fresh
+// testService/client), which never reaches the map lookup because AuthMountGuard's earlier "no
+// valid Limen session" branch already let the request through, or with an ALREADY-VERIFIED
+// user's cookie, which never reaches the `EmailVerifiedAt == nil` branch either. Neither exercises
+// the map itself. This test drives all four routes while ts.client is carrying an UNVERIFIED
+// user's own session cookie — the exact scenario the guard's own doc comment describes ("a
+// browser that still carries an unverified session cookie must be able to sign in as someone else
+// or reset a password") — so removing any one of the four entries from authMountUnverifiedAllowed
+// turns this test red (verified by hand: deleting each entry in turn reproduces a 403
+// email_unverified here where a 2xx is asserted).
+func TestAuthMountUnverifiedAllowedCredentialRoutesActuallyWork(t *testing.T) {
+	ts := newTestService(t)
+	email := "still-unverified-creds@example.com"
+
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email": email, "password": signupPassword,
+	}), "signup")
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{
+		"credential": email, "password": signupPassword,
+	}), "signin")
+	// ts.client's jar now carries email's own UNVERIFIED session cookie for every request below.
+
+	// POST /passwords/request-reset needs no authentication of its own, but AuthMountGuard still
+	// resolves the caller's own (unverified) cookie first — that must not turn into a 403.
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/passwords/request-reset", map[string]any{
+		"email": email,
+	}), "request-reset while carrying an unverified session cookie")
+
+	msg, ok := ts.mail.find("reset_password")
+	if !ok {
+		t.Fatal("no reset_password mail captured")
+	}
+	url, _ := msg.Data["URL"].(string)
+	const marker = "token="
+	idx := strings.Index(url, marker)
+	if idx < 0 {
+		t.Fatalf("reset_password URL = %q, missing %q", url, marker)
+	}
+	token := url[idx+len(marker):]
+	if token == "" {
+		t.Fatal("reset_password URL carries an empty token")
+	}
+
+	newPassword := "Ev3nStrongerPassw0rd"
+	// POST /passwords/reset: same reasoning as request-reset above — must actually run, not 403.
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/passwords/reset", map[string]any{
+		"token":        token,
+		"new_password": newPassword,
+	}), "reset while carrying an unverified session cookie")
+
+	// POST /signin/credential: re-entering credentials on a stale tab that still carries the same
+	// (still unverified) user's old session cookie must not be blocked either.
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{
+		"credential": email, "password": newPassword,
+	}), "signin again while carrying an unverified session cookie")
+
+	// POST /signup/credential: signing up as someone else entirely from the same browser/cookie
+	// jar — which still carries the first, unverified user's session cookie — must not be blocked.
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email": "second-signup-same-cookie@example.com", "password": signupPassword,
+	}), "signup while carrying an unverified session cookie")
+}

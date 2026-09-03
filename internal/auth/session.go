@@ -182,14 +182,19 @@ func (s *Service) isUserLocked(ctx context.Context, userID any) (bool, error) {
 const authMountSignoutMethodAndPath = "POST /api/v1/auth/signout"
 
 // authMountUnverifiedAllowed lists the Limen routes an UNVERIFIED (but valid) session may still
-// reach: reading itself, signing out, and completing/resending verification — plus the
-// credential routes that never depend on the caller's session at all (a browser that still
-// carries an unverified session cookie must be able to sign in as someone else or reset a
-// password). Everything else under /api/v1/auth/ — organizations, invitations, oauth linking,
-// password change — is refused with 403 email_unverified until POST /verify-email has run.
+// reach: reading itself, completing/resending verification, and the credential routes that never
+// depend on the caller's session at all (a browser that still carries an unverified session
+// cookie must be able to sign in as someone else or reset a password). Everything else under
+// /api/v1/auth/ — organizations, invitations, oauth linking, password change — is refused with
+// 403 email_unverified until POST /verify-email has run.
+//
+// Signing out is NOT listed here even though an unverified session obviously needs it too: it is
+// handled entirely by authMountSignoutMethodAndPath's exact-match check above, which returns
+// before s.limen.GetSession is even called (so it also covers a LOCKED session, which never
+// reaches this map at all). A "POST /api/v1/auth/signout" entry here would be unreachable dead
+// code — one exemption, one mechanism.
 var authMountUnverifiedAllowed = map[string]struct{}{
 	"GET /api/v1/auth/me":                       {},
-	"POST /api/v1/auth/signout":                 {},
 	"POST /api/v1/auth/verify-email":            {},
 	"POST /api/v1/auth/email-verifications":     {},
 	"POST /api/v1/auth/signin/credential":       {},
