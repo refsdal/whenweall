@@ -226,8 +226,29 @@ func TestMyOrganizations_ListAndSwitch(t *testing.T) {
 		t.Fatalf("expected team-http and a personal org, got %+v", orgs)
 	}
 
-	// Switch back to personal, then to team-http — a real transition each way.
+	// Switch back to personal, then to team-http — a real transition each way. The intermediate
+	// GET below is load-bearing: without it, a handleSwitchOrganization that never called
+	// s.authSvc.SwitchOrganization at all (a no-op 204) would leave team-http active throughout,
+	// and the final assertions (checking only the net state after BOTH switches) would still
+	// pass — see the mid-switch check for the state a no-op would fail to produce.
 	h.mustStatus(h.do(http.MethodPost, "/api/v1/me/active-organization", map[string]any{"orgId": personalID}), http.StatusNoContent, "switch to personal")
+
+	mid := h.do(http.MethodGet, "/api/v1/me/organizations", nil)
+	defer func() { _ = mid.Body.Close() }()
+	if mid.StatusCode != http.StatusOK {
+		t.Fatalf("GET /me/organizations after switch to personal: %d", mid.StatusCode)
+	}
+	var midOrgs []map[string]any
+	if err := json.NewDecoder(mid.Body).Decode(&midOrgs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, o := range midOrgs {
+		active, _ := o["active"].(bool)
+		if (o["id"] == personalID) != active {
+			t.Errorf("after switch to personal: %v (id=%v) active=%v", o["slug"], o["id"], active)
+		}
+	}
+
 	h.mustStatus(h.do(http.MethodPost, "/api/v1/me/active-organization", map[string]any{"orgId": teamID}), http.StatusNoContent, "switch to team")
 
 	resp2 := h.do(http.MethodGet, "/api/v1/me/organizations", nil)
