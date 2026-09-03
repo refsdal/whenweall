@@ -97,3 +97,13 @@ being required. Both are threaded through the OAuth state and used the same way 
 success redirects to redirect_uri with the session cookie attached, failure redirects to
 error_redirect_uri (or redirect_uri) with ?error=... appended — /callback always has at least the
 BaseURL default to redirect to, so it never falls back to a bare JSON response.
+
+Application account routes (internal/httpserver/account.go — ours, our envelope, not Limen's)
+--------------------------------------------------------------------------------------------
+PATCH  /api/v1/me                          session (verified or not)   {name?, locale?} -> 204
+DELETE /api/v1/me                          session (verified or not)   {password?} -> 204; 400 password_required, 403 invalid_password
+GET    /api/v1/me/organizations            session (verified)          -> [{id, name, slug, active}]
+POST   /api/v1/me/active-organization      session (verified)          {orgId} -> 204; 403 forbidden
+
+These exist because Limen's GET /organizations/ serializes organizations WITHOUT an id
+(SerializeModel drops non-string ids), so the SPA cannot drive POST /organizations/switch itself.
