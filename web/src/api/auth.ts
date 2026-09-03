@@ -143,9 +143,10 @@ export async function verifyEmail(token: string): Promise<void> {
 }
 
 /** Resends the signed-in caller's own verification email — protected (routes.txt), unlike the old
- * better-auth `sendVerificationEmail`, which worked for an anonymous caller too. A caller who just
- * failed to sign in because their email isn't verified may have no session to authorize this with;
- * that gap is a known limitation of this port (see the task report), not something invented here. */
+ * better-auth `sendVerificationEmail`, which worked for an anonymous caller too. The login form
+ * and the /verify-email pending card both call this with the fresh (unverified) session Limen
+ * minted at sign-in — internal/auth's AuthMountGuard allows exactly this route for an unverified
+ * session. */
 export async function requestEmailVerification(): Promise<void> {
   await api('POST', '/api/v1/auth/email-verifications')
 }

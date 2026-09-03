@@ -131,7 +131,8 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
 - **Dashboard** with status, participant counts and deadlines, plus duplicate and delete.
 - **Edit after publishing**, including a confirmation when removing an option that already
   has votes on it.
-- **Sign in** with e-mail + password (verified), Google, or an external OIDC provider.
+- **Sign in** with e-mail + password (the address must be verified before the account can be
+  used), Google, or an external OIDC provider (which must assert verified e-mails).
 - **Sign-up sheets** — a third poll kind whose options are slots: set a **capacity** per
   slot (or leave it unlimited) and a **max sign-ups per person** for the whole sheet, then
   export a **roster CSV** of who claimed what, with e-mails, from the admin bar.
@@ -186,7 +187,8 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
   buffers, notice, horizon and a list of busy intervals into the exact slots a visitor
   can pick — deterministic and DST-safe, shared between the endpoint that renders the
   public page and the one that validates a booking.
-- **Turnstile** (optional) on guest voting, commenting and booking, plus a per-IP rate
+- **Turnstile** (optional) on sign-in, sign-up, password reset, guest voting, commenting and
+  booking, plus a per-IP rate
   limiter backed by Postgres on every public, unauthenticated endpoint.
 - **Google sign-in and an external OIDC provider are both optional**, each all-or-nothing:
   half-configured credentials are treated as off, with a warning at boot rather than a
@@ -293,8 +295,8 @@ near the actual typo, is worse than refusing to light up at all.
 | `SMTP_PASSWORD`         | no       | —                                  | See above.                                                                                         |
 | `SMTP_SECURE`           | no       | `false`                             | Implicit TLS. Leave `false` for STARTTLS on port 587 (the common case); `true` normally pairs with port 465. |
 | `EMAIL_FROM`            | no       | `whenweall <no-reply@localhost>`  | `From:` on every outgoing e-mail.                                                                  |
-| `TURNSTILE_SITE_KEY`    | no       | —                                  | Optional captcha on guest voting/commenting/booking. Needs `TURNSTILE_SECRET_KEY` too.             |
-| `TURNSTILE_SECRET_KEY`  | no       | —                                  | See above. Without this pair, public endpoints have no captcha — fine for a private instance, worth knowing for one on the open internet. |
+| `TURNSTILE_SITE_KEY`    | no       | —                                  | Optional captcha on sign-in/sign-up/password reset and guest voting/commenting/booking. Needs `TURNSTILE_SECRET_KEY` too. |
+| `TURNSTILE_SECRET_KEY`  | no       | —                                  | See above. Without this pair, no endpoint asks for a captcha (the UI hides the widget) — fine for a private instance, worth knowing for one on the open internet. |
 | `GOOGLE_CLIENT_ID`      | no       | —                                  | Optional "Continue with Google" and Google Calendar sync. Needs `GOOGLE_CLIENT_SECRET` too.        |
 | `GOOGLE_CLIENT_SECRET`  | no       | —                                  | See above.                                                                                          |
 | `OIDC_ISSUER`           | no       | —                                  | Optional external SSO. Needs `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` too (all three, not a pair). The issuer must assert `email_verified: true` in its userinfo/ID token: a sign-in whose email is not verified by the IdP is refused, because an OIDC email is what links the sign-in to an existing account. |
@@ -510,7 +512,9 @@ Strings live in [`web/messages/en.json`](./web/messages/en.json) and
 [Paraglide](https://inlang.com/m/gerre34r/library-inlang-paraglideJs) into tree-shakeable
 functions (`m.poll_share_title()`). The active locale resolves from the
 `whenweall_locale` cookie, then `Accept-Language`, then English. A unit test fails the
-build if the two catalogues drift apart in keys or placeholders.
+build if the two catalogues drift apart in keys or placeholders. A signed-in user's choice
+is also stored server-side (`user_preferences.locale`) and used for every e-mail sent to
+them; guest forms send the visitor's locale along with the vote/claim/booking.
 
 To add a locale — say German:
 
