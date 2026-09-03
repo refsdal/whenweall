@@ -453,13 +453,8 @@ func UnlockUser(ctx context.Context, sqlDB *sql.DB, actor *auth.Session, userID,
 }
 
 // DeleteUser ports user-delete.workers.test.ts's semantics against Limen's organization/member
-// schema: every organization where userID is the sole `owner`-role member is handed to another
-// member (promoting the oldest remaining one, by membership created_at) or, if userID was the
-// org's last member of any role, deleted outright, taking its polls/booking pages with it via their
-// own ON DELETE CASCADE from organizations. An org with another owner survives untouched, its
-// content untouched, and userID's own `created_by`/`member_user_id` references in it simply go
-// null via their own ON DELETE SET NULL — this function never touches those rows itself, exactly
-// as personal-org.ts's own doc comment describes for the TS original.
+// schema. The cascade lives in internal/auth.CascadeDeleteUser; see its doc comment for the exact
+// semantics.
 func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *auth.Session, userID, reason string) error {
 	if actor == nil {
 		return errors.New("admin: DeleteUser requires a non-nil actor session")
@@ -468,14 +463,13 @@ func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor
 		return ErrSelfTarget
 	}
 
-	uid, err := strconv.ParseInt(userID, 10, 64)
-	if err != nil {
+	if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
 		return fmt.Errorf("admin: invalid user id %q: %w", userID, err)
 	}
 
 	// Best-effort, before the tx below: reaches whatever Limen-side session bookkeeping lives
 	// beyond the raw `sessions` table (see RevokeUserSessions' own doc comment). Not required for
-	// correctness — the tx's own DELETE FROM sessions a few lines down is what actually satisfies
+	// correctness — CascadeDeleteUser's own DELETE FROM sessions is what actually satisfies
 	// sessions.user_id's ON DELETE RESTRICT — so a failure here is not fatal to the delete.
 	if authSvc != nil {
 		_ = authSvc.RevokeUserSessions(ctx, userID)
@@ -487,31 +481,14 @@ func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := cascadeOrphanedOwnerOrganizations(ctx, tx, uid); err != nil {
-		return fmt.Errorf("admin: cascading organizations owned by user %s: %w", userID, err)
-	}
-
-	// accounts/sessions/two_factors all reference users(id) ON DELETE RESTRICT (migrations/00002),
-	// unlike organization_members (CASCADE, which the DELETE FROM users below triggers on its
-	// own) — so they must be cleared explicitly first, or that statement fails a foreign key
-	// check. This is also what actually revokes any session left over from the best-effort
-	// RevokeUserSessions call above.
-	for _, stmt := range []string{
-		`DELETE FROM sessions WHERE user_id = $1`,
-		`DELETE FROM accounts WHERE user_id = $1`,
-		`DELETE FROM two_factors WHERE user_id = $1`,
-	} {
-		if _, err := tx.ExecContext(ctx, stmt, uid); err != nil {
-			return fmt.Errorf("admin: clearing dependent rows for user %s: %w", userID, err)
+	// The cascade itself (orphaned-owner orgs, dependent rows, the users row) is shared with the
+	// self-service path — internal/auth.CascadeDeleteUser — so staff deletion and "delete my
+	// account" can never disagree about what deleting a user means.
+	if err := auth.CascadeDeleteUser(ctx, tx, userID); err != nil {
+		if errors.Is(err, auth.ErrNoSuchUser) {
+			return fmt.Errorf("admin: no user with id %q", userID)
 		}
-	}
-
-	res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, uid)
-	if err != nil {
-		return fmt.Errorf("admin: deleting user %s: %w", userID, err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("admin: no user with id %q", userID)
+		return err
 	}
 
 	if err := Record(ctx, tx, actor, ActionDeleteUser, "user", userID, reason, nil); err != nil {
@@ -519,75 +496,4 @@ func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor
 	}
 
 	return tx.Commit()
-}
-
-// cascadeOrphanedOwnerOrganizations is deleteOrphanedOwnerOrganizations (personal-org.ts) ported
-// against Limen's schema: an organization's owners are its organization_members rows that have an
-// 'owner'-named row in organization_member_roles, rather than a single `member.role` column.
-func cascadeOrphanedOwnerOrganizations(ctx context.Context, tx *sql.Tx, userID int64) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT m.organization_id
-		FROM organization_members m
-		JOIN organization_member_roles mr ON mr.member_id = m.id AND mr.role = 'owner'
-		WHERE m.user_id = $1
-	`, userID)
-	if err != nil {
-		return err
-	}
-	var ownedOrgIDs []int64
-	for rows.Next() {
-		var orgID int64
-		if err := rows.Scan(&orgID); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		ownedOrgIDs = append(ownedOrgIDs, orgID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	_ = rows.Close()
-
-	for _, orgID := range ownedOrgIDs {
-		var otherOwnerExists bool
-		if err := tx.QueryRowContext(ctx, `
-			SELECT EXISTS(
-				SELECT 1 FROM organization_members m2
-				JOIN organization_member_roles mr2 ON mr2.member_id = m2.id AND mr2.role = 'owner'
-				WHERE m2.organization_id = $1 AND m2.user_id <> $2
-			)
-		`, orgID, userID).Scan(&otherOwnerExists); err != nil {
-			return err
-		}
-		if otherOwnerExists {
-			continue
-		}
-
-		var oldestOtherMemberID sql.NullInt64
-		err := tx.QueryRowContext(ctx, `
-			SELECT id FROM organization_members
-			WHERE organization_id = $1 AND user_id <> $2
-			ORDER BY created_at ASC LIMIT 1
-		`, orgID, userID).Scan(&oldestOtherMemberID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-
-		if oldestOtherMemberID.Valid {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO organization_member_roles (organization_id, member_id, role)
-				VALUES ($1, $2, 'owner')
-				ON CONFLICT (member_id, role) DO NOTHING
-			`, orgID, oldestOtherMemberID.Int64); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM organizations WHERE id = $1`, orgID); err != nil {
-			return err
-		}
-	}
-	return nil
 }

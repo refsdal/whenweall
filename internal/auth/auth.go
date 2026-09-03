@@ -61,6 +61,7 @@ type Enqueuer func(ctx context.Context, tx db.DBTX, msg mailer.Message) error
 type Service struct {
 	limen       *limen.Limen
 	orgs        organization.API
+	passwords   credentialpassword.API // ComparePassword for the delete-account re-check
 	db          *sql.DB
 	cfg         *config.Config
 	enqueueMail Enqueuer
@@ -119,6 +120,7 @@ func newService(cfg *config.Config, sqlDB *sql.DB, enqueue Enqueuer) (*Service, 
 	}
 	s.limen = a
 	s.orgs = organization.Use(a)
+	s.passwords = credentialpassword.Use(a)
 	return s, nil
 }
 

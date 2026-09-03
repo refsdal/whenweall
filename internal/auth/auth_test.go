@@ -113,6 +113,16 @@ func newTestServiceWithConfig(t *testing.T, cfg *config.Config) *testService {
 	mux.HandleFunc("/probe/session-unverified-ok", svc.RequireSessionAllowUnverified(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+	mux.HandleFunc("/probe/switch", svc.RequireSession(func(w http.ResponseWriter, r *http.Request) {
+		switch err := svc.SwitchOrganization(w, r, r.URL.Query().Get("org")); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, ErrForbidden):
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
 
 	server := httptest.NewServer(svc.Middleware(mux))
 	t.Cleanup(server.Close)
