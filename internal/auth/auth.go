@@ -72,15 +72,28 @@ type Service struct {
 	// than via a Limen HTTP hook.
 	personalOrgEnsured sync.Map
 
-	// pendingSignupProfiles bridges a signup request's submitted name/locale (captured by a
-	// Before hook, keyed by normalized email) across to enqueueTokenMail's verify_email dispatch,
-	// which happens synchronously inside credential-password's own
-	// SignUpWithCredentialAndPassword — strictly before the HTTP handler calls SessionResponse,
-	// and therefore strictly before this package's own After hook (afterSignup, signup_hook.go)
-	// ever runs to persist that data. Without this, the very first mail a new user gets would
-	// always be built from the pre-signup state (no row in user_preferences yet, first/last name
-	// still blank) regardless of what they typed on the signup form. The After hook removes the
-	// entry once the request completes, success or failure — see afterSignup's doc comment.
+	// pendingSignupProfiles is a mail-dispatch hint ONLY: it bridges a signup request's submitted
+	// name/locale (captured by a Before hook, keyed by normalized email) across to
+	// enqueueTokenMail's verify_email dispatch, which happens synchronously inside
+	// credential-password's own SignUpWithCredentialAndPassword — strictly before the HTTP
+	// handler calls SessionResponse, and therefore strictly before this package's own After hook
+	// (afterSignup, signup_hook.go) ever runs. Without this, the very first mail a new user gets
+	// would always be built from the pre-signup state (no row in user_preferences yet, first/last
+	// name still blank) regardless of what they typed on the signup form.
+	//
+	// afterSignup does NOT read this map — it recomputes name/locale straight from its own
+	// request (see afterSignup's doc comment for why that's the correct fix for a real,
+	// code-review-caught race: keying this map by email with last-write-wins meant two concurrent
+	// signup attempts for the same address could persist one account with the OTHER attempt's
+	// name/locale). What remains, because Limen's WithSendEmailVerificationMail callback receives
+	// only an email and a token — no request, no hook context, nothing else to correlate by — is
+	// a narrower, accepted limitation: if two signup attempts for the very same (not-yet-existing)
+	// address race each other, the one that wins and gets a verify_email may occasionally have its
+	// mail worded from the losing attempt's submitted name/locale rather than its own. This never
+	// touches what gets persisted (afterSignup is immune to it, per above) and is bounded to
+	// mail wording alone; a fully race-free fix for this one narrow case would require Limen to
+	// pass more than (email, token) into that callback, which it does not. The entry is always
+	// removed once the request completes, success or failure — see afterSignup's doc comment.
 	pendingSignupProfiles sync.Map
 }
 
@@ -505,8 +518,9 @@ func parseLimenID(id string) any {
 // falls back to the email's local part and "en" rather than dropping the mail.
 //
 // For the verify_email dispatch specifically, the profile row this would otherwise read doesn't
-// exist yet — see pendingSignupProfiles' doc comment for why — so a pending entry from the
-// signup's own Before hook is preferred over the (not-yet-written) database row when present.
+// exist yet — see pendingSignupProfiles' doc comment for why, and for the narrow, accepted limit
+// of this fallback under a same-address signup race — so a pending entry from the signup's own
+// Before hook is preferred over the (not-yet-written) database row when present.
 func (s *Service) enqueueTokenMail(email, templateName, path, token string) {
 	name, locale := nameFromEmail(email), "en"
 	if pending, ok := s.pendingSignupProfiles.Load(limen.NormalizeEmail(email)); ok {

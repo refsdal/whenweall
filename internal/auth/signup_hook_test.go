@@ -1,12 +1,16 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/refsdal/whenweall/internal/config"
 )
 
 // postSignup is postJSON with extra request decoration (cookies / headers) — the signup hook reads
@@ -202,4 +206,131 @@ func TestRequestLocaleParsing(t *testing.T) {
 func lookupUserIDString(t *testing.T, ts *testService, email string) string {
 	t.Helper()
 	return fmt.Sprint(lookupUserID(t, ts, email))
+}
+
+// TestConcurrentSameEmailSignupsPersistOnlyWinnersProfile guards the exact race a code review
+// found in the first version of this mechanism: pendingSignupProfiles was keyed only by e-mail
+// with last-write-wins semantics, so two concurrent signup attempts for the same address could
+// interleave as - A's Before hook stores A's name/locale, B's Before hook overwrites it with B's,
+// A's handler wins the race and creates the account, A's After hook reads (B's now-overwritten)
+// entry and persists it onto A's account. The eventual fix must make the persisted profile depend
+// only on whichever attempt actually created the account, never on a same-address attempt that
+// raced with it and lost. Run as many independent trials (each its own e-mail address) as it
+// takes to make a surviving race very likely to show up in one run without -race (unavailable in
+// this environment): assertions are on the persisted rows, never on timing.
+//
+// EnableTestRoutes: true disables Limen's own credential-password rate limiter (5 requests/10s
+// per IP by default — see httpConfigOptions' own doc comment), which 40 rapid requests from one
+// test would otherwise blow through long before the race itself gets a chance to matter.
+func TestConcurrentSameEmailSignupsPersistOnlyWinnersProfile(t *testing.T) {
+	ts := newTestServiceWithConfig(t, &config.Config{
+		AppURL:           "http://app.example",
+		LimenSecret:      make([]byte, 32),
+		EnableTestRoutes: true,
+	})
+
+	const trials = 20
+	for i := 0; i < trials; i++ {
+		email := fmt.Sprintf("race-%d@example.com", i)
+		submissions := [2]struct{ name, locale string }{
+			{fmt.Sprintf("Attempt A %d", i), "en"},
+			{fmt.Sprintf("Attempt B %d", i), "nb"},
+		}
+		type result struct {
+			name, locale string
+			status       int
+			err          error
+		}
+		var results [2]result
+
+		var wg sync.WaitGroup
+		for j, sub := range submissions {
+			wg.Add(1)
+			go func(j int, sub struct{ name, locale string }) {
+				defer wg.Done()
+				body, _ := json.Marshal(map[string]any{
+					"email": email, "password": signupPassword, "name": sub.name, "locale": sub.locale,
+				})
+				resp, err := ts.client.Post(ts.url("/api/v1/auth/signup/credential"), "application/json", bytes.NewReader(body))
+				results[j] = result{name: sub.name, locale: sub.locale, err: err}
+				if err == nil {
+					results[j].status = resp.StatusCode
+					_ = resp.Body.Close()
+				}
+			}(j, sub)
+		}
+		wg.Wait()
+
+		var winner *result
+		successCount := 0
+		for j := range results {
+			r := &results[j]
+			if r.err != nil {
+				t.Fatalf("trial %d: signup request %d: %v", i, j, r.err)
+			}
+			if r.status/100 == 2 {
+				successCount++
+				winner = r
+			}
+		}
+		if successCount != 1 {
+			t.Fatalf("trial %d: want exactly one successful concurrent signup for %s, got %d (statuses %d, %d)",
+				i, email, successCount, results[0].status, results[1].status)
+		}
+
+		userID := lookupUserIDString(t, ts, email)
+		p, err := ts.svc.GetProfile(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("trial %d: GetProfile: %v", i, err)
+		}
+		if p.Name != winner.name || p.Locale != winner.locale {
+			t.Errorf("trial %d: persisted profile = %q/%q, want the winning attempt's own %q/%q (never the other attempt's data)",
+				i, p.Name, p.Locale, winner.name, winner.locale)
+		}
+	}
+}
+
+// TestPendingSignupCacheClearedAfterRejectedSignup covers the mechanism's own lifecycle: whatever
+// beforeSignup stashes for a given address must not outlive the request, whether that request
+// went on to create an account or was rejected outright (duplicate e-mail; a password too weak to
+// pass credential-password's own validation, which never even reaches user creation). A leak here
+// would mean a later, unrelated signup attempt for the same address could pick up stale data.
+func TestPendingSignupCacheClearedAfterRejectedSignup(t *testing.T) {
+	ts := newTestService(t)
+
+	assertNoPendingEntry := func(t *testing.T, email string) {
+		t.Helper()
+		if _, ok := ts.svc.pendingSignupProfiles.Load(email); ok {
+			t.Errorf("pendingSignupProfiles still holds an entry for %q", email)
+		}
+	}
+
+	// A successful signup: the winning request's own entry must be gone once it completes.
+	okEmail := "cache-ok@example.com"
+	requireStatus2xx(t, postSignup(t, ts, map[string]any{
+		"email": okEmail, "password": signupPassword, "name": "Cache Ok",
+	}, nil), "signup")
+	assertNoPendingEntry(t, okEmail)
+
+	// Rejected: duplicate e-mail (the account from above already exists).
+	dupResp := postSignup(t, ts, map[string]any{
+		"email": okEmail, "password": signupPassword, "name": "Duplicate Attempt",
+	}, nil)
+	_ = dupResp.Body.Close()
+	if dupResp.StatusCode/100 == 2 {
+		t.Fatalf("duplicate-email signup unexpectedly succeeded")
+	}
+	assertNoPendingEntry(t, okEmail)
+
+	// Rejected: password fails credential-password's own strength validation, so no user is ever
+	// created — the Before hook still ran (it only needs the body, not a successful signup).
+	weakEmail := "cache-weak@example.com"
+	weakResp := postSignup(t, ts, map[string]any{
+		"email": weakEmail, "password": "short", "name": "Weak Password",
+	}, nil)
+	_ = weakResp.Body.Close()
+	if weakResp.StatusCode/100 == 2 {
+		t.Fatalf("weak-password signup unexpectedly succeeded")
+	}
+	assertNoPendingEntry(t, weakEmail)
 }

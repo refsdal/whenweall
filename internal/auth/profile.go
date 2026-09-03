@@ -65,6 +65,16 @@ func normalizeLocale(locale string) string {
 	return "en"
 }
 
+// normalizeProfileName trims and collapses whitespace in name, and reports whether the result is
+// a usable profile name — non-blank and at most maxProfileNameRunes runes. This is the single
+// source of truth for "is this name usable", shared by SetProfile's own validation and
+// signup_hook.go's pre-validation (signupProfileFromRequest) so the two can never drift apart —
+// see that function's doc comment for why it needs the exact same rule SetProfile enforces.
+func normalizeProfileName(name string) (trimmed string, ok bool) {
+	trimmed = strings.Join(strings.Fields(name), " ")
+	return trimmed, trimmed != "" && utf8.RuneCountInString(trimmed) <= maxProfileNameRunes
+}
+
 // splitName stores "Ada Lovelace" as first_name "Ada" / last_name "Lovelace" (everything after
 // the first space is the last name, so DisplayName reassembles it losslessly).
 func splitName(name string) (first, last string) {
@@ -131,11 +141,11 @@ func (s *Service) SetProfile(ctx context.Context, userID string, name *string, l
 
 	var first, last string
 	if name != nil {
-		trimmed := strings.Join(strings.Fields(*name), " ")
-		if trimmed == "" {
-			return &ProfileValidationError{Field: "name", Message: "name is required"}
-		}
-		if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
+		trimmed, ok := normalizeProfileName(*name)
+		if !ok {
+			if trimmed == "" {
+				return &ProfileValidationError{Field: "name", Message: "name is required"}
+			}
 			return &ProfileValidationError{Field: "name", Message: fmt.Sprintf("name must be at most %d characters", maxProfileNameRunes)}
 		}
 		first, last = splitName(trimmed)

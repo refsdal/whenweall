@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/thecodearcher/limen"
 
@@ -16,10 +15,8 @@ import (
 // it on every locale switch, so a guest who picked Norwegian before signing up carries it here.
 const localeCookieName = "whenweall_locale"
 
-// pendingSignupProfile is one entry of Service.pendingSignupProfiles: the name/locale beforeSignup
-// extracted from a signup request, already validated the way SetProfile would (name is nil rather
-// than something SetProfile would reject), so enqueueTokenMail and afterSignup always agree on
-// what the new user's profile is going to be.
+// pendingSignupProfile is one entry of Service.pendingSignupProfiles — see that field's doc
+// comment (auth.go) for what this does and does not guarantee.
 type pendingSignupProfile struct {
 	name   *string
 	locale string
@@ -39,10 +36,10 @@ type pendingSignupProfile struct {
 // same pinned source: credential-password's plugin-level SignUpWithCredentialAndPassword calls
 // core.SendEmailVerificationMail — synchronously, inside itself — before the HTTP handler ever
 // calls SessionResponse, i.e. strictly before any After hook can run. An After-hook-only design
-// would always build the very first mail from the pre-signup state. The Before hook captures and
-// pre-validates the submitted name/locale into pendingSignupProfiles (see its doc comment) so
-// enqueueTokenMail can read it in time; the After hook does the actual persistence and always
-// removes the entry, win or lose.
+// would always build the very first mail from the pre-signup state. The Before hook exists purely
+// to give enqueueTokenMail (which Limen calls with only an email and a token — it has no hc, no
+// request) something to read in time; afterSignup does NOT depend on it — see afterSignup's doc
+// comment for why.
 func (s *Service) signupHooks() *limen.Hooks {
 	matchSignup := func(hc *limen.HookContext) bool { return hc.RouteID() == "signup" }
 	return &limen.Hooks{
@@ -53,67 +50,74 @@ func (s *Service) signupHooks() *limen.Hooks {
 
 // beforeSignup reads the signup request's `name`/`locale` (and the locale-cookie/Accept-Language
 // fallbacks) before the account is created, and stashes them in pendingSignupProfiles keyed by the
-// (normalized) email in the request body — the only key available before the user has an id. When
-// the body carries no email at all (malformed request; the handler itself will reject it) there is
-// nothing to key on, so it stores nothing. Always returns true (Before hooks' false return would
-// abort the request, which this must never do).
+// (normalized) email in the request body, purely as a hint for enqueueTokenMail's verify_email
+// dispatch — see Service.pendingSignupProfiles' doc comment (auth.go) for the narrow, deliberately
+// accepted race this leaves in place for that one consumer, and for why afterSignup does not read
+// this map at all. When the body carries no email at all (malformed request; the handler itself
+// will reject it) there is nothing to key on, so it stores nothing. Always returns true (Before
+// hooks' false return would abort the request, which this must never do).
 func (s *Service) beforeSignup(hc *limen.HookContext) bool {
 	email, _ := hc.GetJSONBodyValue("email").(string)
 	if email == "" {
 		return true
 	}
-
-	var name *string
-	if raw, _ := hc.GetJSONBodyValue("name").(string); raw != "" {
-		name = validatedSignupName(raw)
-	}
-	locale := requestLocale(hc.Request(), hc.GetJSONBodyValue("locale"))
-
+	name, locale := signupProfileFromRequest(hc)
 	s.pendingSignupProfiles.Store(limen.NormalizeEmail(email), pendingSignupProfile{name: name, locale: locale})
 	return true
 }
 
-// afterSignup persists the profile beforeSignup captured — `name` (the form's optional Name
-// field) and the locale — for the user the request just created, then always removes the pending
-// entry (success, validation failure, or duplicate email all end the request the same way: no
-// reason to keep the request's data around). It never fails the request: the account exists (or
-// doesn't) by the time this runs, and a profile hiccup is not a reason to tell the user their
-// signup failed. Always returns true (After hooks' return value is ignored anyway).
+// afterSignup persists the submitted name/locale onto the account this request just created, then
+// always clears this request's pendingSignupProfiles entry (success, validation failure, or
+// duplicate email all end the request the same way: no reason to keep a mail-dispatch hint around
+// once the request is done with it).
+//
+// Deliberately recomputes name/locale straight from hc — via signupProfileFromRequest, the same
+// helper beforeSignup uses — rather than reading pendingSignupProfiles. hc is never shared across
+// requests: router.go's wrapHandler builds exactly one *HookContext per request
+// (prepareHookContext) and threads that same pointer through both runBeforeHooks and
+// runAfterHooks for it, so hc.GetJSONBodyValue here always reflects THIS request's own body,
+// regardless of what any concurrent signup attempt for the same address is doing to the shared
+// map. This is what actually closes the race a code review found in the first version of this
+// mechanism (last-write-wins on an email-keyed map, read back by afterSignup): two concurrent
+// signups for the same address can no longer cross-contaminate each other's persisted profile,
+// because afterSignup never consults anything the other request could have touched.
+//
+// It never fails the request: the account exists (or doesn't) by the time this runs, and a
+// profile hiccup is not a reason to tell the user their signup failed. Always returns true (After
+// hooks' return value is ignored anyway).
 func (s *Service) afterSignup(hc *limen.HookContext) bool {
 	email, _ := hc.GetJSONBodyValue("email").(string)
-	key := limen.NormalizeEmail(email)
-	defer s.pendingSignupProfiles.Delete(key)
+	defer s.pendingSignupProfiles.Delete(limen.NormalizeEmail(email))
 
 	result := hc.GetAuthResult()
 	if result == nil || result.User == nil {
 		return true // signup failed (validation, duplicate email, ...) — nothing was created
 	}
 	userID := fmt.Sprint(result.User.ID)
-
-	pending, _ := s.pendingSignupProfiles.Load(key)
-	p, _ := pending.(pendingSignupProfile)
+	name, locale := signupProfileFromRequest(hc)
 
 	// context.Background(): same reasoning as sendMail — the request context may be on its way
-	// out, and this is bookkeeping for a row that already exists. name/locale were already
-	// validated by beforeSignup, so this should never fail on ProfileValidationError; any error
-	// here is just logged rather than surfaced.
-	if err := s.SetProfile(context.Background(), userID, p.name, &p.locale); err != nil {
+	// out, and this is bookkeeping for a row that already exists. name/locale are already
+	// validated by signupProfileFromRequest, so this should never fail on ProfileValidationError;
+	// any error here is just logged rather than surfaced.
+	if err := s.SetProfile(context.Background(), userID, name, &locale); err != nil {
 		s.logger.Error("auth: storing signup profile failed", "user_id", userID, "error", err)
 	}
 	return true
 }
 
-// validatedSignupName trims and collapses whitespace in name the same way SetProfile does, and
-// returns nil if the result is blank or over maxProfileNameRunes — mirrors SetProfile's own check
-// so the value cached for the verification-email dispatch always matches what afterSignup ends up
-// persisting (an invalid name is silently dropped, not sent to a user and then contradicted by
-// their stored profile).
-func validatedSignupName(name string) *string {
-	trimmed := strings.Join(strings.Fields(name), " ")
-	if trimmed == "" || utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
-		return nil
+// signupProfileFromRequest extracts and pre-validates a signup request's `name`/`locale` from hc:
+// name is nil unless it survives normalizeProfileName (profile.go — the exact rule SetProfile
+// itself enforces, kept in one place so the two can never drift), and locale is always one of
+// mailer.SupportedLocales (see requestLocale). Called from both signup hooks against the SAME hc
+// for a given request, so they always agree on what that one request's profile is.
+func signupProfileFromRequest(hc *limen.HookContext) (name *string, locale string) {
+	if raw, _ := hc.GetJSONBodyValue("name").(string); raw != "" {
+		if trimmed, ok := normalizeProfileName(raw); ok {
+			name = &trimmed
+		}
 	}
-	return &trimmed
+	return name, requestLocale(hc.Request(), hc.GetJSONBodyValue("locale"))
 }
 
 // requestLocale picks the signup's locale: an explicit supported `locale` body value first, then
