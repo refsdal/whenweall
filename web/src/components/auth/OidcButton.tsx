@@ -1,5 +1,7 @@
 import { KeyRound } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '#/components/ui/button'
+import { authErrorMessage } from '#/lib/auth-errors'
 import { m } from '#/lib/i18n'
 import { safeNext } from '#/lib/search'
 import { oauthAuthorizeUrl } from '#/api/auth'
@@ -12,8 +14,12 @@ import { oauthAuthorizeUrl } from '#/api/auth'
  */
 export function OidcButton({ provider, name, next }: { provider: string; name: string; next: string }) {
   async function handleClick() {
-    const url = await oauthAuthorizeUrl(provider, new URL(safeNext(next), window.location.origin).toString())
-    window.location.href = url
+    try {
+      const url = await oauthAuthorizeUrl(provider, new URL(safeNext(next), window.location.origin).toString())
+      window.location.href = url
+    } catch (error) {
+      toast.error(authErrorMessage(error))
+    }
   }
 
   return (

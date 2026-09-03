@@ -20,8 +20,8 @@ describe('AcceptInvitationCard', () => {
     expect(acceptInvitation).not.toHaveBeenCalled()
   })
 
-  it('calls acceptInvitation and onAccepted when the accept button is clicked', async () => {
-    vi.mocked(acceptInvitation).mockResolvedValue({ orgSlug: 'team' })
+  it('calls acceptInvitation and hands the joined org slug to onAccepted', async () => {
+    vi.mocked(acceptInvitation).mockResolvedValue({ orgSlug: 'team-ada' })
     const onAccepted = vi.fn()
     const user = userEvent.setup()
     render(<AcceptInvitationCard invitationId="inv_1" onAccepted={onAccepted} />)
@@ -29,7 +29,7 @@ describe('AcceptInvitationCard', () => {
     await user.click(screen.getByRole('button', { name: /accept invitation/i }))
 
     expect(acceptInvitation).toHaveBeenCalledExactlyOnceWith('inv_1')
-    expect(onAccepted).toHaveBeenCalledOnce()
+    expect(onAccepted).toHaveBeenCalledExactlyOnceWith('team-ada')
   })
 
   it('shows the invalid/expired message and never calls onAccepted when acceptance fails', async () => {

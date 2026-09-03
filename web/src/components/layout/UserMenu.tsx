@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { CalendarClock, LayoutDashboard, LogOut, Settings } from 'lucide-react'
+import { Building2, CalendarClock, LayoutDashboard, LogOut, Settings } from 'lucide-react'
+import { toast } from 'sonner'
 import { m } from '#/lib/i18n'
-import { signOut } from '#/api/auth'
+import { listOrganizations, signOut, switchOrganization, type OrgSummary } from '#/api/auth'
 import type { Session } from '#/lib/use-session'
 import { buttonVariants } from '#/components/ui/button'
 import {
@@ -9,7 +11,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '#/components/ui/dropdown-menu'
 import { cn } from '#/lib/utils'
@@ -22,6 +29,9 @@ function initial(name: string | null, email: string): string {
 export function UserMenu({ session }: { session: Session }) {
   const router = useRouter()
   const navigate = useNavigate()
+  // Loaded when the menu opens, not on every page render: the header is on every page and most
+  // users have exactly one organization (their personal one), for which no switcher is shown.
+  const [orgs, setOrgs] = useState<OrgSummary[] | null>(null)
 
   if (!session) {
     return (
@@ -39,8 +49,31 @@ export function UserMenu({ session }: { session: Session }) {
     await navigate({ to: '/' })
   }
 
+  async function loadOrgs() {
+    if (!user.emailVerified) return // GET /api/v1/me/organizations is verified-only
+    try {
+      setOrgs(await listOrganizations())
+    } catch {
+      setOrgs([])
+    }
+  }
+
+  async function handleSwitch(orgId: string) {
+    const target = orgs?.find((org) => org.id === orgId)
+    if (!target || target.active) return
+    try {
+      await switchOrganization(orgId)
+      await router.invalidate()
+      toast.success(m.nav_org_switched({ name: target.name }))
+    } catch {
+      toast.error(m.nav_org_switch_failed())
+    }
+  }
+
+  const activeOrg = orgs?.find((org) => org.active)
+
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={(open) => open && void loadOrgs()}>
       <DropdownMenuTrigger
         aria-label={m.nav_account_menu()}
         className={cn(
@@ -74,6 +107,24 @@ export function UserMenu({ session }: { session: Session }) {
             {m.nav_settings()}
           </Link>
         </DropdownMenuItem>
+        {orgs && orgs.length > 1 && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Building2 aria-hidden="true" />
+              <span className="truncate">{activeOrg?.name ?? m.nav_organizations()}</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuLabel>{m.nav_organizations()}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={activeOrg?.id} onValueChange={(id) => void handleSwitch(id)}>
+                {orgs.map((org) => (
+                  <DropdownMenuRadioItem key={org.id} value={org.id}>
+                    <span className="truncate">{org.name}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void handleSignOut()}>
           <LogOut aria-hidden="true" />
