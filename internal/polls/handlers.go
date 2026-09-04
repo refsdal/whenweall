@@ -94,12 +94,20 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 }
 
 // viewerFromRequest resolves a Viewer for a public(token)|auth endpoint: the caller's own userID
-// if signed in (never required), plus any verified guest participant id (httpserver.
-// GuestParticipantID — the domain-agnostic token extraction/verification; Viewer itself stays
-// here, since it's this package's own domain type).
+// if signed in AND verified (never required), plus any verified guest participant id
+// (httpserver.GuestParticipantID — the domain-agnostic token extraction/verification; Viewer
+// itself stays here, since it's this package's own domain type).
+//
+// An unverified session is treated exactly like no session at all: this plan's binding decision
+// is "unverified accounts cannot use the app", and signing in while unverified is allowed (so the
+// account can complete verification), so a public route like this one is reachable with an
+// unverified session attached. Without this check, that session's own UserID would be attributed
+// to a vote/claim/comment as if it belonged to a real, usable account — see
+// httpserver.RequireCaptchaIfAnon's identical EmailVerified check for the captcha half of the
+// same finding.
 func viewerFromRequest(a Auth, r *http.Request) Viewer {
 	v := Viewer{GuestParticipantID: httpserver.GuestParticipantID(a, r)}
-	if sess, ok := a.FromContext(r.Context()); ok {
+	if sess, ok := a.FromContext(r.Context()); ok && sess.EmailVerified {
 		v.UserID = sess.UserID
 	}
 	return v

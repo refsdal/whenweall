@@ -369,7 +369,11 @@ func TestHandlerParticipantAndCommentDigestWiring(t *testing.T) {
 	orgID, ownerID := seedOrgAndUser(t, d)
 	addOrgMember(t, d, orgID, ownerID, "owner")
 	created := createTestPoll(t, ctx, s, orgID, ownerID)
-	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID})
+	// EmailVerified: true — this session stands in for the poll's own creator managing it
+	// (UpdateParticipant/DeleteComment/RemoveParticipant below all resolve "is this caller a
+	// manager" from viewer.UserID via viewerFromRequest, which now only carries UserID through for
+	// a verified session; see the reviewer's finding 4).
+	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID, EmailVerified: true})
 
 	addBody := map[string]any{"name": "Ada", "answers": map[string]string{created.Options[0].ID: "yes"}}
 	rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/participants", addBody, nil)
@@ -742,8 +746,12 @@ func TestHandlerManagerForceUnclaim(t *testing.T) {
 
 	_, memberID := seedOrgAndUser(t, d)
 	addOrgMember(t, d, orgID, memberID, "member")
-	a.login(&auth.Session{UserID: memberID, ActiveOrgID: orgID})
-	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID})
+	// EmailVerified: true on both — the "forbidden" case must fail because a plain member isn't a
+	// manager, not merely because an unverified session is now treated as anonymous (see finding
+	// 4), and the "succeeds" case needs the creator's UserID to actually reach canManagePoll via
+	// viewerFromRequest.
+	a.login(&auth.Session{UserID: memberID, ActiveOrgID: orgID, EmailVerified: true})
+	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID, EmailVerified: true})
 
 	target := "/api/v1/polls/" + created.ID + "/claims/" + slot + "?participantId=" + result.ParticipantID
 
@@ -789,7 +797,9 @@ func TestHandlerUnclaimSelfParticipantIDFootgun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	a.login(&auth.Session{UserID: claimantID, ActiveOrgID: orgID})
+	// EmailVerified: true — the self-unclaim resolution below (s.selfParticipantID) needs
+	// viewer.UserID to find the claimant's own participant row via viewerFromRequest.
+	a.login(&auth.Session{UserID: claimantID, ActiveOrgID: orgID, EmailVerified: true})
 
 	rec := doRequest(t, h, "DELETE",
 		"/api/v1/polls/"+created.ID+"/claims/"+slot+"?participantId="+result.ParticipantID,
@@ -881,9 +891,11 @@ func TestHandlerFinalizeExcludesActorFromSubscriberNotification(t *testing.T) {
 
 // TestHandlerCaptchaGatesAnonymousParticipant covers the "public+captcha" column for AddParticipant
 // (representative of AddComment/Claim, which share requireCaptchaIfAnon verbatim): an anonymous
-// caller is rejected when Turnstile is on and no token verifies, accepted with one that does, and
-// a signed-in caller skips the check entirely (the siteverify stub errors unconditionally in that
-// last subtest — if it were ever called, that subtest would fail).
+// caller is rejected when Turnstile is on and no token verifies, accepted with one that does, a
+// verified signed-in caller skips the check entirely (the siteverify stub errors unconditionally
+// in that subtest — if it were ever called, that subtest would fail), and — the reviewer's finding
+// 4 — an UNVERIFIED signed-in caller does NOT get that same free pass: they're treated exactly
+// like an anonymous caller and still need a valid token.
 func TestHandlerCaptchaGatesAnonymousParticipant(t *testing.T) {
 	d := testdb.New(t)
 	cfg := testConfigWithTurnstile(t)
@@ -912,17 +924,34 @@ func TestHandlerCaptchaGatesAnonymousParticipant(t *testing.T) {
 		}
 	})
 
-	t.Run("signed-in caller skips captcha entirely", func(t *testing.T) {
+	t.Run("verified signed-in caller skips captcha entirely", func(t *testing.T) {
 		withSiteverifyStubT(t, httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		})))
 		_, memberID := seedOrgAndUser(t, d)
 		addOrgMember(t, d, orgID, memberID, "member")
-		a.login(&auth.Session{UserID: memberID, ActiveOrgID: orgID})
+		a.login(&auth.Session{UserID: memberID, ActiveOrgID: orgID, EmailVerified: true})
 
 		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/participants", body, sessHeader(memberID))
 		if rec.Code != http.StatusCreated {
-			t.Fatalf("status = %d, want 201 (captcha must not be checked for a signed-in caller); body=%s", rec.Code, rec.Body)
+			t.Fatalf("status = %d, want 201 (captcha must not be checked for a verified signed-in caller); body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("unverified signed-in caller is NOT exempt from captcha", func(t *testing.T) {
+		// No siteverify stub override here: the default from this test's setup rejects any token
+		// (turnstileStub isn't installed for this subtest), so this only passes if the request is
+		// rejected for lacking a valid token — proving the unverified session bought no exemption.
+		_, unverifiedID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, unverifiedID, "member")
+		a.login(&auth.Session{UserID: unverifiedID, ActiveOrgID: orgID, EmailVerified: false})
+
+		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/participants", body, sessHeader(unverifiedID))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 (an unverified session must not skip captcha); body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "captcha_failed" {
+			t.Errorf("code = %q, want captcha_failed", errCode(t, rec))
 		}
 	})
 }
@@ -953,7 +982,10 @@ func TestHandlerAddCommentAuthorName(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed user name: %v", err)
 	}
-	a.login(&auth.Session{UserID: commenterID, ActiveOrgID: orgID})
+	// EmailVerified: true — authorName resolution below only trusts the session's own UserID
+	// (over the client-supplied value) for a verified session; see viewerFromRequest's own doc
+	// comment (finding 4) and this test's own unverified-caller subtest further down.
+	a.login(&auth.Session{UserID: commenterID, ActiveOrgID: orgID, EmailVerified: true})
 
 	t.Run("a signed-in caller's spoofed client authorName is ignored in favor of their session name", func(t *testing.T) {
 		body := map[string]any{"authorName": "Totally Someone Else", "body": "hi"}
@@ -976,6 +1008,25 @@ func TestHandlerAddCommentAuthorName(t *testing.T) {
 		comment := decodeBody[map[string]any](t, rec)
 		if comment["authorName"] != "Casual Guest" {
 			t.Errorf("authorName = %v, want %q (guest-supplied name kept)", comment["authorName"], "Casual Guest")
+		}
+	})
+
+	// Finding 4: an unverified session must be treated exactly like no session at all — its
+	// client-supplied authorName is kept as-is, never overridden from its (unusable) account,
+	// exactly like the guest case just above.
+	t.Run("an unverified signed-in caller's client-supplied authorName is kept as-is, same as a guest", func(t *testing.T) {
+		_, unverifiedID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, unverifiedID, "member")
+		a.login(&auth.Session{UserID: unverifiedID, ActiveOrgID: orgID, EmailVerified: false})
+
+		body := map[string]any{"authorName": "Not Yet Verified", "body": "hi"}
+		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/comments", body, sessHeader(unverifiedID))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		comment := decodeBody[map[string]any](t, rec)
+		if comment["authorName"] != "Not Yet Verified" {
+			t.Errorf("authorName = %v, want %q (an unverified session must not have its identity attributed)", comment["authorName"], "Not Yet Verified")
 		}
 	})
 }

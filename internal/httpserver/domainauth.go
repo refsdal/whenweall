@@ -86,8 +86,14 @@ func GuestParticipantID(a Auth, r *http.Request) string {
 // config.functions.ts's capability gating elsewhere). The token travels in the X-Captcha-Token
 // header — this REST surface's own convention, rather than the TS source's server-function body
 // field.
+//
+// sess.EmailVerified is checked alongside UserID: signing in is allowed while unverified (so the
+// account can resend/complete verification), but this plan's binding decision is "unverified
+// accounts cannot use the app" — an unverified session must not get the signed-in caller's free
+// pass on a public mutating route just because it carries a UserID. Treated as anonymous, exactly
+// like no session at all.
 func RequireCaptchaIfAnon(cfg *config.Config, a Auth, r *http.Request) error {
-	if sess, ok := a.FromContext(r.Context()); ok && sess.UserID != "" {
+	if sess, ok := a.FromContext(r.Context()); ok && sess.UserID != "" && sess.EmailVerified {
 		return nil
 	}
 	if !cfg.Capabilities.Turnstile {
