@@ -602,6 +602,37 @@ func TestListMine(t *testing.T) {
 			t.Errorf("ClaimCount = %d, want 3", summary.ClaimCount)
 		}
 	})
+
+	t.Run("aggregates per poll: counts never bleed across polls or multiply across joins", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		a := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil, nil}, 2)
+		b := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 1)
+		empty := createTestPoll(t, ctx, s, orgID, ownerID)
+
+		// Poll A: two participants, three yes-votes. Poll B: one participant, one yes-vote and one
+		// no-vote (a no-vote is not a claim). Poll "empty": nothing.
+		seedParticipant(t, d, a.ID, "Alice", map[string]string{a.Options[0].ID: "yes", a.Options[1].ID: "yes"}, "")
+		seedParticipant(t, d, a.ID, "Bob", map[string]string{a.Options[0].ID: "yes"}, "")
+		seedParticipant(t, d, b.ID, "Cleo", map[string]string{b.Options[0].ID: "yes"}, "")
+		seedParticipant(t, d, b.ID, "Dan", map[string]string{b.Options[0].ID: "no"}, "")
+
+		list, err := s.ListMine(ctx, orgID)
+		if err != nil {
+			t.Fatalf("ListMine: %v", err)
+		}
+		want := map[string][2]int{a.ID: {2, 3}, b.ID: {2, 1}, empty.ID: {0, 0}}
+		for id, counts := range want {
+			got := findSummary(list, id)
+			if got == nil {
+				t.Fatalf("summary for %s missing from %+v", id, list)
+			}
+			if got.ParticipantCount != counts[0] || got.ClaimCount != counts[1] {
+				t.Errorf("%s: (participants, claims) = (%d, %d), want (%d, %d)", got.Title, got.ParticipantCount, got.ClaimCount, counts[0], counts[1])
+			}
+		}
+	})
 }
 
 func findSummary(list []polls.PollSummary, id string) *polls.PollSummary {

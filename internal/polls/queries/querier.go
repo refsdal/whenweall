@@ -59,7 +59,10 @@ type Querier interface {
 	ListCommentsByPoll(ctx context.Context, pollID string) ([]Comment, error)
 	ListOptionsByPoll(ctx context.Context, pollID string) ([]PollOption, error)
 	ListParticipantsByPoll(ctx context.Context, pollID string) ([]Participant, error)
-	ListPollsByOrg(ctx context.Context, organizationID int64) ([]Poll, error)
+	// The dashboard list in ONE round trip (listMyPolls's relational query in service.ts:247-268):
+	// per-poll participant count and yes-vote ("claim") count as correlated aggregates, instead of
+	// ListPollsByOrg + ListParticipantsByPoll + ListVotesByPoll per poll (2N+1).
+	ListPollSummariesByOrg(ctx context.Context, organizationID int64) ([]ListPollSummariesByOrgRow, error)
 	ListSubscriptionsByScope(ctx context.Context, arg ListSubscriptionsByScopeParams) ([]NotificationSubscription, error)
 	ListVotesByParticipant(ctx context.Context, participantID string) ([]Vote, error)
 	ListVotesByPoll(ctx context.Context, pollID string) ([]Vote, error)

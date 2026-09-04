@@ -23,9 +23,6 @@ INSERT INTO poll_options (
   $1, $2, $3, $4, $5, $6, $7, $8
 );
 
--- name: ListPollsByOrg :many
-SELECT * FROM polls WHERE organization_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC;
-
 -- name: SetPollStatus :exec
 UPDATE polls SET status = $2, updated_at = $3 WHERE id = $1;
 
@@ -203,3 +200,16 @@ WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3;
 -- so deletePoll called deleteScopeSubscriptions (subscriptions.ts) explicitly; Delete (service.go)
 -- does the same inside its own transaction.
 DELETE FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2;
+
+-- name: ListPollSummariesByOrg :many
+-- The dashboard list in ONE round trip (listMyPolls's relational query in service.ts:247-268):
+-- per-poll participant count and yes-vote ("claim") count as correlated aggregates, instead of
+-- ListPollsByOrg + ListParticipantsByPoll + ListVotesByPoll per poll (2N+1).
+SELECT
+  p.id, p.title, p.type, p.status, p.deadline_at, p.created_at, p.updated_at,
+  (SELECT count(*) FROM participants pa WHERE pa.poll_id = p.id) AS participant_count,
+  (SELECT count(*) FROM votes v JOIN participants pa ON pa.id = v.participant_id
+     WHERE pa.poll_id = p.id AND v.answer = 'yes') AS claim_count
+FROM polls p
+WHERE p.organization_id = $1 AND p.deleted_at IS NULL
+ORDER BY p.created_at DESC;

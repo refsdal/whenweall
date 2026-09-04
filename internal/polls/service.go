@@ -848,42 +848,29 @@ func (s *Service) Duplicate(ctx context.Context, pollID, orgID, userID string) (
 	return view, nil
 }
 
-// ListMine ports listMyPolls.
+// ListMine ports listMyPolls — one aggregate query (ListPollSummariesByOrg), never a per-poll
+// loop: the dashboard loader calls this on every visit, so its cost must stay O(1) round trips.
 func (s *Service) ListMine(ctx context.Context, orgID string) ([]PollSummary, error) {
 	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
 	if err != nil {
 		return nil, ErrForbidden
 	}
 
-	rows, err := s.q.ListPollsByOrg(ctx, orgIDInt)
+	rows, err := s.q.ListPollSummariesByOrg(ctx, orgIDInt)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]PollSummary, 0, len(rows))
 	for _, p := range rows {
-		participants, err := s.q.ListParticipantsByPoll(ctx, p.ID)
-		if err != nil {
-			return nil, err
-		}
-		votes, err := s.q.ListVotesByPoll(ctx, p.ID)
-		if err != nil {
-			return nil, err
-		}
-		claimCount := 0
-		for _, v := range votes {
-			if v.Answer == "yes" {
-				claimCount++
-			}
-		}
 		out = append(out, PollSummary{
 			ID:               p.ID,
 			Title:            p.Title,
 			Type:             p.Type,
 			Status:           p.Status,
 			DeadlineAt:       nullTimeToISO(p.DeadlineAt),
-			ParticipantCount: len(participants),
-			ClaimCount:       claimCount,
+			ParticipantCount: int(p.ParticipantCount),
+			ClaimCount:       int(p.ClaimCount),
 			CreatedAt:        formatISO(p.CreatedAt),
 			UpdatedAt:        formatISO(p.UpdatedAt),
 		})

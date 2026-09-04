@@ -627,38 +627,51 @@ func (q *Queries) ListParticipantsByPoll(ctx context.Context, pollID string) ([]
 	return items, nil
 }
 
-const listPollsByOrg = `-- name: ListPollsByOrg :many
-SELECT id, organization_id, created_by, type, title, description, location, timezone, status, deadline_at, finalized_option_id, require_participant_email, allow_comments, allow_if_need_be, signup_max_claims, created_at, updated_at, deleted_at FROM polls WHERE organization_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC
+const listPollSummariesByOrg = `-- name: ListPollSummariesByOrg :many
+SELECT
+  p.id, p.title, p.type, p.status, p.deadline_at, p.created_at, p.updated_at,
+  (SELECT count(*) FROM participants pa WHERE pa.poll_id = p.id) AS participant_count,
+  (SELECT count(*) FROM votes v JOIN participants pa ON pa.id = v.participant_id
+     WHERE pa.poll_id = p.id AND v.answer = 'yes') AS claim_count
+FROM polls p
+WHERE p.organization_id = $1 AND p.deleted_at IS NULL
+ORDER BY p.created_at DESC
 `
 
-func (q *Queries) ListPollsByOrg(ctx context.Context, organizationID int64) ([]Poll, error) {
-	rows, err := q.db.QueryContext(ctx, listPollsByOrg, organizationID)
+type ListPollSummariesByOrgRow struct {
+	ID               string
+	Title            string
+	Type             string
+	Status           string
+	DeadlineAt       sql.NullTime
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	ParticipantCount int64
+	ClaimCount       int64
+}
+
+// The dashboard list in ONE round trip (listMyPolls's relational query in service.ts:247-268):
+// per-poll participant count and yes-vote ("claim") count as correlated aggregates, instead of
+// ListPollsByOrg + ListParticipantsByPoll + ListVotesByPoll per poll (2N+1).
+func (q *Queries) ListPollSummariesByOrg(ctx context.Context, organizationID int64) ([]ListPollSummariesByOrgRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPollSummariesByOrg, organizationID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Poll
+	var items []ListPollSummariesByOrgRow
 	for rows.Next() {
-		var i Poll
+		var i ListPollSummariesByOrgRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.OrganizationID,
-			&i.CreatedBy,
-			&i.Type,
 			&i.Title,
-			&i.Description,
-			&i.Location,
-			&i.Timezone,
+			&i.Type,
 			&i.Status,
 			&i.DeadlineAt,
-			&i.FinalizedOptionID,
-			&i.RequireParticipantEmail,
-			&i.AllowComments,
-			&i.AllowIfNeedBe,
-			&i.SignupMaxClaims,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.DeletedAt,
+			&i.ParticipantCount,
+			&i.ClaimCount,
 		); err != nil {
 			return nil, err
 		}
