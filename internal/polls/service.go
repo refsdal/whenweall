@@ -673,7 +673,7 @@ func (s *Service) FinalizeWithCount(ctx context.Context, pollID, orgID, optionID
 	// polls.functions.ts's finalizePoll route) — every org member subscribed to poll.finalized's
 	// email channel, minus the actor (resolveRecipients' own actorUserID parameter) and minus
 	// anyone the direct-mail loop above already enqueued for.
-	recipients, err := s.resolveRecipients(ctx, q, poll.OrganizationID, pollID, EventPollFinalized, actorUserID)
+	recipients, err := s.resolveRecipients(ctx, q, poll.OrganizationID, pollID, EventPollFinalized, actorUserID, nil)
 	if err != nil {
 		return 0, err
 	}

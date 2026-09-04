@@ -352,7 +352,7 @@ func (s *Service) handleDeadlineJob(ctx context.Context, pollID string) error {
 		return err
 	}
 
-	recipients, err := s.resolveRecipients(ctx, s.q, poll.OrganizationID, pollID, EventPollClosed, "")
+	recipients, err := s.resolveRecipients(ctx, s.q, poll.OrganizationID, pollID, EventPollClosed, "", nil)
 	if err != nil {
 		return err
 	}
@@ -381,7 +381,7 @@ func (s *Service) handleReminderJob(ctx context.Context, pollID string) error {
 		return err
 	}
 
-	recipients, err := s.resolveRecipients(ctx, s.q, poll.OrganizationID, pollID, EventDeadlineApproaching, "")
+	recipients, err := s.resolveRecipients(ctx, s.q, poll.OrganizationID, pollID, EventDeadlineApproaching, "", nil)
 	if err != nil {
 		return err
 	}
@@ -404,6 +404,14 @@ func (s *Service) handleReminderJob(ctx context.Context, pollID string) error {
 // observes a state this transaction hasn't committed yet, though these are read-only lookups that
 // would be correct either way); tx is where the mail:poll rows this function writes actually land,
 // which is the half that must not commit independently of the ownership-taking UPDATE.
+//
+// localeMemo is one map shared across every resolveRecipients call this function makes: a batch
+// spanning several distinct events (e.g. response.created AND comment.created both queued in the
+// same debounce window) previously paid for one LocaleSource round trip per (event, recipient)
+// pair — a recipient subscribed to both events got looked up twice — all of it inside
+// processDigestJob's advisory-locked transaction, lengthening exactly the lock window a previous
+// review already flagged. Memoizing here collapses that to one lookup per distinct recipient for
+// the whole job.
 func (s *Service) fanOutDigestItems(ctx context.Context, q *queries.Queries, tx db.DBTX, payload digestPayload) error {
 	poll, err := q.GetPoll(ctx, payload.PollID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -416,12 +424,13 @@ func (s *Service) fanOutDigestItems(ctx context.Context, q *queries.Queries, tx 
 		return nil
 	}
 
+	localeMemo := make(map[string]string)
 	perEvent := make(map[NotificationEvent][]Recipient)
 	for _, item := range payload.Items {
 		if _, ok := perEvent[item.Event]; ok {
 			continue
 		}
-		recips, err := s.resolveRecipients(ctx, q, poll.OrganizationID, payload.PollID, item.Event, "")
+		recips, err := s.resolveRecipients(ctx, q, poll.OrganizationID, payload.PollID, item.Event, "", localeMemo)
 		if err != nil {
 			return err
 		}

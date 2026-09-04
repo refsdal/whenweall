@@ -1173,6 +1173,22 @@ func (f fakeLocales) LocaleFor(_ context.Context, userID string) string {
 	return "en"
 }
 
+// countingLocales is a polls.LocaleSource that records how many times LocaleFor was called for
+// each userID — the seam TestFanOutDigestItemsMemoizesLocaleLookups uses to pin the fix for the
+// N+1 locale lookup a whole-plan review flagged (resolveRecipients/fanOutDigestItems/
+// userLocaleMemo, locale.go/notifications.go/timers.go).
+type countingLocales struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (c *countingLocales) LocaleFor(_ context.Context, userID string) string {
+	c.mu.Lock()
+	c.calls[userID]++
+	c.mu.Unlock()
+	return "en"
+}
+
 // drainJobs runs w until a RunOnce claims nothing — every due job, and every job those jobs
 // scheduled in turn (poll.digest -> mail:poll), has been processed.
 func drainJobs(t *testing.T, ctx context.Context, w *jobs.Worker) {
@@ -1569,6 +1585,56 @@ func TestDigestItemEnqueuedMidRunIsNotResent(t *testing.T) {
 			t.Errorf("Bob's fresh window was disturbed: items = %v", names)
 		}
 	})
+}
+
+// TestFanOutDigestItemsMemoizesLocaleLookups pins the fix for the N+1 locale lookup a whole-plan
+// review flagged: resolveRecipients used to call the LocaleSource once per (event, recipient) pair
+// inside fanOutDigestItems's loop over a digest batch's distinct events — every one of those calls
+// made inside processDigestJob's own advisory-locked transaction, lengthening exactly the lock
+// window a previous review already flagged. A recipient subscribed to two distinct
+// digest-batched events queued in the same debounce window (Ada's response and Bob's comment,
+// below — both the poll's creator and its one other subscriber are subscribed to both by system
+// default) must now cost exactly ONE LocaleSource round trip per recipient for the whole job, not
+// one per event.
+//
+// Asserted by claiming the "poll.digest" job by hand and running only that ONE job
+// (w.ProcessClaimed, not a full drainJobs): the eventual per-recipient "mail:poll" sends make
+// their own, separate (unmemoized, and rightly so — a different transaction entirely)
+// LocaleSource call later, which this test must not count.
+func TestFanOutDigestItemsMemoizesLocaleLookups(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "member")
+	mateID := seedUser(t, d)
+	addOrgMember(t, d, orgID, mateID, "member")
+	created := createTestPoll(t, ctx, s, orgID, ownerID) // Create subscribes the creator
+	if err := s.SetFollowing(ctx, created.ID, orgID, mateID, true); err != nil {
+		t.Fatalf("SetFollowing: %v", err)
+	}
+
+	locales := &countingLocales{calls: map[string]int{}}
+	s.SetLocaleSource(locales)
+
+	if err := s.EnqueueDigestItem(ctx, created.ID, polls.DigestItem{Event: polls.EventResponseCreated, Name: "Ada"}); err != nil {
+		t.Fatalf("EnqueueDigestItem: %v", err)
+	}
+	if err := s.EnqueueDigestItem(ctx, created.ID, polls.DigestItem{Event: polls.EventCommentCreated, Name: "Bob"}); err != nil {
+		t.Fatalf("EnqueueDigestItem: %v", err)
+	}
+	forceDue(t, d, "poll.digest")
+	held := claimOnePollDigest(t, ctx, d)
+
+	w := jobs.NewWorker(d, "test-replica", slog.Default())
+	s.RegisterJobs(w, &recordingMailer{})
+	w.ProcessClaimed(ctx, held)
+
+	for _, uid := range []string{ownerID, mateID} {
+		if got := locales.calls[uid]; got != 1 {
+			t.Errorf("LocaleFor calls for %s = %d, want exactly 1 (memoized across both digest-batched events in this job)", uid, got)
+		}
+	}
 }
 
 // TestDigestFanOutFailurePreservesItemsForRetry closes the review finding on the round-1 fix

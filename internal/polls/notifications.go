@@ -130,8 +130,17 @@ type Recipient struct {
 // someone who left the org can no longer open the poll and must not keep hearing about it),
 // minus actorUserID, with the event's channel resolved per resolveChannels, filtered to those
 // with the email channel on.
+//
+// localeMemo is passed straight to userLocaleMemo for each resolved recipient's Locale field: nil
+// for every call site that only ever calls this once per job (handleDeadlineJob,
+// handleReminderJob, Finalize's own notification), a shared map for fanOutDigestItems's per-event
+// loop, so a recipient subscribed to more than one of a digest's distinct events pays for one
+// LocaleSource lookup for the whole job, not one per event — see fanOutDigestItems's own doc
+// comment for why that round trip specifically matters here (it runs inside the advisory-locked
+// transaction processDigestJob holds).
 func (s *Service) resolveRecipients(
 	ctx context.Context, q *queries.Queries, orgID int64, pollID string, event NotificationEvent, actorUserID string,
+	localeMemo map[string]string,
 ) ([]Recipient, error) {
 	subs, err := q.ListSubscriptionsByScope(ctx, queries.ListSubscriptionsByScopeParams{
 		ScopeType: "poll", ScopeID: pollID,
@@ -184,7 +193,7 @@ func (s *Service) resolveRecipients(
 			continue
 		}
 
-		out = append(out, Recipient{UserID: uid, Email: u.Email, Name: displayName(u), Locale: s.userLocale(ctx, uid)})
+		out = append(out, Recipient{UserID: uid, Email: u.Email, Name: displayName(u), Locale: s.userLocaleMemo(ctx, uid, localeMemo)})
 	}
 	return out, nil
 }

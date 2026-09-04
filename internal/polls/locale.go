@@ -31,3 +31,23 @@ func (s *Service) userLocale(ctx context.Context, userID string) string {
 	}
 	return "en"
 }
+
+// userLocaleMemo is userLocale with an optional per-call cache: when memo is non-nil, a userID
+// already looked up on an earlier call (within the same memo) is returned from it instead of
+// making another LocaleSource round trip. resolveRecipients uses this — see its own doc comment —
+// so fanOutDigestItems can pass ONE memo shared across every distinct event it resolves recipients
+// for inside a single "poll.digest" job, collapsing what would otherwise be one LocaleSource call
+// per (event, recipient) pair sharing the same advisory-locked transaction into one per distinct
+// recipient for the whole job. A nil memo (every other resolveRecipients call site — each fires at
+// most once per job, so there is nothing to memoize) falls straight through to userLocale.
+func (s *Service) userLocaleMemo(ctx context.Context, userID string, memo map[string]string) string {
+	if memo == nil {
+		return s.userLocale(ctx, userID)
+	}
+	if l, ok := memo[userID]; ok {
+		return l
+	}
+	l := s.userLocale(ctx, userID)
+	memo[userID] = l
+	return l
+}
