@@ -147,7 +147,22 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 			// buildClientSession applied (main:src/server/auth/session.functions.ts) — which
 			// ensurePersonalOrgOnce just guaranteed exists, and persist that choice on the session
 			// so the next request doesn't re-derive it.
-			if org, ok := s.oldestMembership(r.Context(), validated.User); ok {
+			org, ok := s.oldestMembership(r.Context(), validated.User)
+			if !ok {
+				// Zero memberships: ensurePersonalOrgOnce's guarantee only holds up to the moment
+				// it cached this user as done — it is never re-checked after that for the rest of
+				// this process's life. But Limen's DeleteOrganization (unlike LeaveOrganization/
+				// RemoveMember) has no last-owner guard, so a personal-org owner can delete their
+				// own only organization — which clears sessions.active_organization_id and leaves
+				// zero organization_members rows behind, with the cache still marking this user
+				// done. Without re-deriving here, that user would be stuck with no active
+				// organization forever. Clear the cache entry and re-run the same ensure path
+				// (self-healing, not a redesign of it) before giving up.
+				s.personalOrgEnsured.Delete(fmt.Sprint(validated.User.ID))
+				s.ensurePersonalOrgOnce(r.Context(), validated.User)
+				org, ok = s.oldestMembership(r.Context(), validated.User)
+			}
+			if ok {
 				result, err := s.orgs.SetActiveOrganization(r.Context(), validated.Session, org)
 				if err != nil {
 					s.logger.Error("auth: set default active organization failed",

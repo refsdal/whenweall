@@ -419,3 +419,111 @@ func TestSessionFallsBackToOldestRemainingMembershipWhenActiveOrgMembershipIsDan
 		t.Errorf("sessions.active_organization_id = %v, want %d persisted by the fallback", stored, oldestOrgID)
 	}
 }
+
+// TestActiveOrgIDStaysOnItsCurrentOrgWhenMembershipIsStillValid is the "ordinary session"
+// counterpart to the dangling-membership test above: it proves the non-dangling arm
+// (activeOrgID != nil && !membershipDangling(...)) is what keeps a session's active organization
+// put, rather than every request re-deriving the oldest membership. Without that arm (e.g. if the
+// switch collapsed back to only checking activeOrgID != nil, or the membership check were
+// inverted), this test would fail because the fallback would silently move the user from their
+// current, still-valid org to a DIFFERENT, older one purely because it re-ran every time.
+func TestActiveOrgIDStaysOnItsCurrentOrgWhenMembershipIsStillValid(t *testing.T) {
+	ts := newTestService(t)
+	email := "stable-session@example.com"
+
+	ts.signUpVerifiedAndSignIn(t, email)
+	triggerSessionResolution(t, ts) // creates the personal org and makes it active
+	userID := lookupUserID(t, ts, email)
+	user := &limen.User{ID: userID, Email: email}
+
+	currentOrgID, err := strconv.ParseInt(probeActiveOrgID(t, ts), 10, 64)
+	if err != nil {
+		t.Fatalf("active org id from probe: %v", err)
+	}
+
+	// An org created AFTER the personal org, but whose membership is pinned EARLIER than it: if
+	// the fallback ran again on the next request (as it would for a dangling or absent active
+	// org), it would prefer this one. It must not, because the current active org's own
+	// membership is still valid.
+	olderByTimestampOrgID := createOrgForUser(t, ts, user, "Older By Timestamp", fmt.Sprintf("older-by-timestamp-%d", userID))
+	setMembershipCreatedAt(t, ts, currentOrgID, userID, "2020-06-01")
+	setMembershipCreatedAt(t, ts, olderByTimestampOrgID, userID, "2020-01-01")
+
+	if got, want := probeActiveOrgID(t, ts), fmt.Sprint(currentOrgID); got != want {
+		t.Errorf("Session.ActiveOrgID = %q after a second, unrelated request, want unchanged %q (not the older membership %d)", got, want, olderByTimestampOrgID)
+	}
+
+	var stored sql.NullInt64
+	if err := ts.svc.db.QueryRowContext(context.Background(),
+		`SELECT active_organization_id FROM sessions WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, userID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("reading session active_organization_id: %v", err)
+	}
+	if !stored.Valid || stored.Int64 != currentOrgID {
+		t.Errorf("sessions.active_organization_id = %v, want unchanged %d", stored, currentOrgID)
+	}
+}
+
+// TestSessionSelfHealsAfterUserDeletesTheirOnlyOrganization covers the gap the fix round 1 review
+// found: Limen's DeleteOrganization (organizations.go in the plugin) has no last-owner guard —
+// unlike LeaveOrganization/RemoveMember, which call validateOwnerRoleCanBeRemoved — so a personal
+// org's owner (every user, by construction) can delete their own only organization through the
+// real route this test drives, DELETE /api/v1/auth/organizations/:id. That clears
+// sessions.active_organization_id and removes the organization_members row, leaving the user with
+// ZERO memberships — but ensurePersonalOrgOnce already cached them as "done" on an earlier
+// request, and that cache is never re-checked otherwise, so without resolveSession's self-heal
+// (session.go: clear the cache entry and re-run ensurePersonalOrgOnce when oldestMembership finds
+// nothing) this user would be stuck with no active organization for the rest of the process's
+// life. Asserts the very next request recreates a personal org and makes it active, and that
+// exactly one organization exists afterwards (no duplicate).
+func TestSessionSelfHealsAfterUserDeletesTheirOnlyOrganization(t *testing.T) {
+	ts := newTestService(t)
+	ctx := context.Background()
+	email := "deletes-only-org@example.com"
+
+	ts.signUpVerifiedAndSignIn(t, email)
+	triggerSessionResolution(t, ts) // creates the personal org, makes it active, warms personalOrgEnsured
+	userID := lookupUserID(t, ts, email)
+	user := &limen.User{ID: userID, Email: email}
+
+	if got := countOrganizations(t, ts, user); got != 1 {
+		t.Fatalf("organizations before delete = %d, want 1", got)
+	}
+	originalOrgID := probeActiveOrgID(t, ts)
+	if originalOrgID == "" {
+		t.Fatal("active org id is empty before delete")
+	}
+
+	// The real route, driven as an authenticated HTTP request — not a direct DB delete — so this
+	// proves the production path (owner deletes their own org) actually reaches the zero-
+	// membership state the fix handles.
+	requireStatus2xx(t, ts.delete(t, "/api/v1/auth/organizations/"+originalOrgID), "delete own organization")
+
+	if got := countOrganizations(t, ts, user); got != 0 {
+		t.Fatalf("organizations right after delete = %d, want 0", got)
+	}
+
+	// The next authenticated request must self-heal: recreate exactly one organization and make
+	// it active, rather than leaving ActiveOrgID empty forever (personalOrgEnsured still marks
+	// this user "done" from the earlier triggerSessionResolution call above).
+	healedOrgID := probeActiveOrgID(t, ts)
+	if healedOrgID == "" {
+		t.Fatal("Session.ActiveOrgID is still empty after the self-heal request, want a recreated personal org")
+	}
+	if healedOrgID == originalOrgID {
+		t.Fatalf("healed org id %q equals the deleted org's id; want a freshly created organization", healedOrgID)
+	}
+	if got := countOrganizations(t, ts, user); got != 1 {
+		t.Fatalf("organizations after self-heal = %d, want exactly 1 (no duplicates)", got)
+	}
+
+	var stored sql.NullInt64
+	if err := ts.svc.db.QueryRowContext(ctx,
+		`SELECT active_organization_id FROM sessions WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, userID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("reading session active_organization_id: %v", err)
+	}
+	if !stored.Valid || fmt.Sprint(stored.Int64) != healedOrgID {
+		t.Errorf("sessions.active_organization_id = %v, want the healed org id %s persisted", stored, healedOrgID)
+	}
+}

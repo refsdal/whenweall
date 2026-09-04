@@ -161,6 +161,24 @@ func (ts *testService) get(t *testing.T, path string) *http.Response {
 	return resp
 }
 
+func (ts *testService) delete(t *testing.T, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, ts.url(path), nil)
+	if err != nil {
+		t.Fatalf("new DELETE request for %s: %v", path, err)
+	}
+	// Limen's CSRF middleware rejects any non-GET/HEAD/OPTIONS request whose Content-Type isn't
+	// application/json (and that carries neither Authorization nor X-Requested-With) with a bare
+	// 403 "Forbidden" — postJSON gets this for free from http.Client.Post; a body-less DELETE
+	// needs it set explicitly.
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", path, err)
+	}
+	return resp
+}
+
 func requireStatus2xx(t *testing.T, resp *http.Response, what string) {
 	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
