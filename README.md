@@ -11,7 +11,7 @@ vote, pick the winner. Ships as one static Go binary and one Postgres database.
 
 [![CI](https://github.com/refsdal/whenweall/actions/workflows/ci.yml/badge.svg)](https://github.com/refsdal/whenweall/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Go](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Docker Image](https://img.shields.io/badge/ghcr.io-refsdal%2Fwhenweall-2496ED?logo=docker&logoColor=white)](https://github.com/refsdal/whenweall/pkgs/container/whenweall)
 
 </div>
@@ -402,7 +402,7 @@ reading the audit log and incident response, in
 
 ## Development
 
-You need [Docker](https://www.docker.com/), [Go](https://go.dev/) 1.25+, and
+You need [Docker](https://www.docker.com/), [Go](https://go.dev/) 1.26+, and
 [bun](https://bun.sh/) (see [`web/.bun-version`](./web/.bun-version)) — no `npm`/`pnpm`.
 
 ```bash

@@ -1,6 +1,6 @@
 module github.com/refsdal/whenweall
 
-go 1.25.7
+go 1.26
 
 require (
 	github.com/coder/websocket v1.8.15
