@@ -13,18 +13,20 @@
 //     and the worker's own attempt/backoff/dead-letter machinery (internal/jobs) stands in for
 //     mailer/queue.ts's bespoke retry queue. A request never blocks on SMTP either way.
 //
-//   - Payload is ids-only (kind + bookingId), same rationale as mailer/queue.ts's MailJob: never
-//     an address, and the handler re-reads the booking fresh at send time so a booking cancelled
-//     between scheduling and sending is a no-op rather than a stale send (see
-//     handleMailBookingJob's per-kind skip checks below).
+//   - Payload is ids-only (kind + bookingId + recipient), same rationale as mailer/queue.ts's
+//     MailJob: never an address, and the handler re-reads the booking fresh at send time so a
+//     booking cancelled between scheduling and sending is a no-op rather than a stale send (see
+//     composeBookingMail's per-kind skip checks below).
 //
-//     One deliberate addition beyond the brief's literal "{kind, bookingId}" shorthand:
-//     "rescheduled" also carries previousStartAt (a plain timestamp, never personal data). TS's
-//     own sendBookingEmails needs this to render "moved from {previousWhen} to {when}", and — per
-//     its own doc comment — it "isn't otherwise recoverable once the booking row has been updated
-//     to its new time." Omitting it (as a maximally-literal reading of the brief would) would make
-//     the Go port's rescheduled mail show the same time twice, on every send, not just the TS
-//     retry path's already-accepted degrade case.
+//     ONE JOB PER RECIPIENT (visitor / organiser), like internal/polls/timers.go's one mail:poll
+//     row per recipient: a job that sent both halves in sequence re-sent the visitor's already-
+//     delivered mail on every retry of a failing organiser send (up to mailBookingMaxAttempts
+//     times). Each row now composes exactly one mailer.Message (composeBookingMail) and the worker
+//     retries only that one.
+//
+//     "rescheduled" also carries previousStartAt (a plain timestamp, never personal data): TS's
+//     own sendBookingEmails needs it to render "moved from {previousWhen} to {when}", and it isn't
+//     recoverable once the booking row has been updated.
 //
 //   - The organiser recipient is simplified to page.MemberUserID's account alone, falling back to
 //     the org's own name (never its own mail) when unset. TS instead resolves the *booking page's*
@@ -82,24 +84,46 @@ const (
 	reminderLead = 24 * time.Hour
 )
 
+// Mail recipients — one "mail:booking" row per value (see this file's package doc comment).
+const (
+	mailRecipientVisitor   = "visitor"
+	mailRecipientOrganiser = "organiser"
+)
+
 // mailBookingPayload is the "mail:booking" job's payload — see this file's package doc comment for
-// why previousStartAt is included alongside the brief's literal "{kind, bookingId}" shorthand.
+// why Recipient and previousStartAt sit alongside the ids.
 type mailBookingPayload struct {
 	Kind            string     `json:"kind"`
 	BookingID       string     `json:"bookingId"`
+	Recipient       string     `json:"recipient"`
 	PreviousStartAt *time.Time `json:"previousStartAt,omitempty"`
 }
 
-// enqueueMailBooking schedules one "mail:booking" job. Not room-scoped (RoomKey nil): every queued
-// mail is independent, matching internal/polls/timers.go's enqueueMailPoll — two reschedules in
-// quick succession must leave two rows, never an upsert collapsing them into one stale send.
-func enqueueMailBooking(ctx context.Context, tx db.DBTX, kind, bookingID string, previousStartAt *time.Time) error {
+// enqueueMailBookingTo schedules ONE "mail:booking" job for one recipient. Not room-scoped
+// (RoomKey nil): every queued mail is independent, matching internal/polls/timers.go's
+// enqueueMailPoll — two reschedules in quick succession must leave two rows per recipient, never
+// an upsert collapsing them into one stale send.
+func enqueueMailBookingTo(ctx context.Context, tx db.DBTX, kind, bookingID, recipient string, previousStartAt *time.Time) error {
 	return jobs.Schedule(ctx, tx, jobs.ScheduleInput{
-		Kind:        jobKindMailBooking,
-		RunAt:       time.Now(),
-		Payload:     mailBookingPayload{Kind: kind, BookingID: bookingID, PreviousStartAt: previousStartAt},
+		Kind:  jobKindMailBooking,
+		RunAt: time.Now(),
+		Payload: mailBookingPayload{
+			Kind: kind, BookingID: bookingID, Recipient: recipient, PreviousStartAt: previousStartAt,
+		},
 		MaxAttempts: mailBookingMaxAttempts,
 	})
+}
+
+// enqueueMailBooking schedules kind's mail for BOTH parties — one row for the visitor, one for the
+// organiser — the shape every lifecycle kind (confirmed/cancelled/rescheduled/reminder) wants.
+// Organiser-only kinds (sync_failed) call enqueueMailBookingTo directly.
+func enqueueMailBooking(ctx context.Context, tx db.DBTX, kind, bookingID string, previousStartAt *time.Time) error {
+	for _, recipient := range []string{mailRecipientVisitor, mailRecipientOrganiser} {
+		if err := enqueueMailBookingTo(ctx, tx, kind, bookingID, recipient, previousStartAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reminderRoomKey is "booking.reminder"'s room_key for bookingID — the id-swap upsert target that
@@ -188,69 +212,88 @@ func (s *Service) handleBookingReminderJob(ctx context.Context, bookingID string
 	return enqueueMailBooking(ctx, s.db, "reminder", bookingID, nil)
 }
 
-// handleMailBookingJob is "mail:booking"'s body: re-read the booking/page/org fresh (any one
-// missing — including a soft-deleted page — is a silent no-op, the world has moved on since this
-// was scheduled), then dispatch to the kind-specific sender below.
+// handleMailBookingJob is "mail:booking"'s body: compose the ONE message this row stands for
+// (composeBookingMail — nil means the world has moved on and there is nothing to send), then
+// deliver it. A Send failure is returned so the worker retries this row alone.
 func (s *Service) handleMailBookingJob(ctx context.Context, m *mailer.Mailer, job jobs.Job) error {
 	var payload mailBookingPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return fmt.Errorf("bookings: decode mail:booking payload: %w", err)
 	}
+	msg, err := s.composeBookingMail(ctx, m.AppURL(), payload)
+	if err != nil {
+		return err
+	}
+	if msg == nil {
+		return nil
+	}
+	return m.Send(ctx, *msg)
+}
+
+// composeBookingMail re-reads the booking/page/org fresh (any one missing — including a
+// soft-deleted page — is a silent no-op, the world has moved on since this was scheduled), applies
+// the per-kind skip rules (queue.ts's own rationale: a booking cancelled between scheduling and
+// sending must not get its confirmation anyway), and builds the single mailer.Message for
+// payload.Recipient. (nil, nil) means nothing to send. An unknown recipient or kind is an error —
+// never a guess that could send twice.
+func (s *Service) composeBookingMail(ctx context.Context, appURL string, payload mailBookingPayload) (*mailer.Message, error) {
+	if payload.Recipient != mailRecipientVisitor && payload.Recipient != mailRecipientOrganiser {
+		return nil, fmt.Errorf("bookings: unknown mail:booking recipient %q", payload.Recipient)
+	}
 
 	booking, err := s.q.GetBooking(ctx, payload.BookingID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, nil //nolint:nilnil // nothing to send: the booking is gone
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	page, err := s.q.GetBookingPage(ctx, booking.PageID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, nil //nolint:nilnil // nothing to send: the page is gone or soft-deleted
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	org, err := s.q.GetOrganization(ctx, page.OrganizationID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, nil //nolint:nilnil // nothing to send: the org is gone
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	switch payload.Kind {
 	case "confirmed":
-		// Skip-if-cancelled-since (queue.ts's own rationale): a booking cancelled between Book's
-		// commit and this job running must not have its confirmation sent anyway.
 		if booking.Status == "cancelled" {
-			return nil
+			return nil, nil //nolint:nilnil // cancelled since scheduling
 		}
-		return s.sendBookingConfirmedMail(ctx, m, booking, page, org)
+		return s.composeBookingConfirmed(ctx, appURL, payload.Recipient, booking, page, org)
 	case "cancelled":
-		return s.sendBookingCancelledMail(ctx, m, booking, page, org)
+		return s.composeBookingCancelled(ctx, appURL, payload.Recipient, booking, page, org)
 	case "rescheduled":
 		if booking.Status == "cancelled" {
-			return nil
+			return nil, nil //nolint:nilnil // cancelled since scheduling
 		}
-		return s.sendBookingRescheduledMail(ctx, m, booking, page, org, payload.PreviousStartAt)
+		return s.composeBookingRescheduled(ctx, appURL, payload.Recipient, booking, page, org, payload.PreviousStartAt)
 	case "reminder":
 		// Re-checked here too (handleBookingReminderJob already checked once when it enqueued
 		// this): the booking could have been cancelled, or the page's reminders toggled off, in
 		// the time between that enqueue and this job actually running.
 		if booking.Status != "confirmed" || !page.Reminders {
-			return nil
+			return nil, nil //nolint:nilnil // no longer wanted
 		}
-		return s.sendBookingReminderMail(ctx, m, booking, page, org)
+		return s.composeBookingReminder(ctx, appURL, payload.Recipient, booking, page, org)
 	case "sync_failed":
-		// Ports sendGoogleSyncFailedNotice's own contract (emails.ts): an organiser-only notice,
-		// unconditional on booking.Status — the booking itself is unaffected by a sync failure
-		// (Task 5, google.go), only the organiser's calendar may be out of sync.
-		return s.sendGoogleSyncFailedMail(ctx, m, page)
+		// Ports sendGoogleSyncFailedNotice's contract (emails.ts): organiser-only, unconditional on
+		// booking.Status — the booking itself is unaffected by a sync failure (google.go), only
+		// the organiser's calendar may be out of sync.
+		if payload.Recipient != mailRecipientOrganiser {
+			return nil, nil //nolint:nilnil // there is no visitor half of this notice
+		}
+		return s.composeGoogleSyncFailed(ctx, page)
 	default:
-		return fmt.Errorf("bookings: unknown mail:booking kind %q", payload.Kind)
+		return nil, fmt.Errorf("bookings: unknown mail:booking kind %q", payload.Kind)
 	}
 }
 
@@ -337,24 +380,11 @@ func bookingWhenText(start time.Time, end *time.Time, timezone string) string {
 }
 
 // bookingManageURL/bookingDashboardURL/bookingPublicPageURL mirror emails.ts's manageUrl/
-// dashboardUrl/publicPageUrl. I4: bookingManageURL is now a Service method (it needs s.manageToken
-// to append a real `?t=` credential) — unlike the prior random-token-plus-stored-hash scheme,
-// where the plaintext token existed only once, at Book's own return, and this file's ids-only mail
-// job payload (see this file's package doc comment) had no way to recover it later, a booking's
-// manage token is now deterministically re-derivable from its id alone at ANY later point,
-// including from inside this queued, re-read-fresh job handler. So every mail carrying this URL
-// (confirmed/rescheduled/reminder, plus the .ics invite's own URL property, built from the same
-// call below) now links straight to a working manage page, with no client-side "restore the token
-// from what I already have" step required — closing the gap the prior scheme's own doc comment
-// here used to describe as an accepted limitation.
-//
-// One conscious call folded into this: the visitor's own .ics calendar invite file (built by
-// BuildBookingICS, ics.go, called from sendBookingConfirmedMail/sendBookingRescheduledMail below)
-// gets this exact same manageURL as its URL property — meaning the token now also lives inside an
-// attachment that outlives the mail itself (synced into whatever calendar app the visitor uses,
-// potentially shared alongside other invites on that calendar). That's the same visitor's own
-// credential for their own booking either way — no more sensitive there than in the mail body
-// right above it — but worth naming explicitly rather than leaving implicit.
+// dashboardUrl/publicPageUrl. bookingManageURL is a Service method because it appends a real
+// `?t=` credential: a booking's manage token is deterministically re-derivable from its id alone
+// (bookings.go's manageToken), so this queued, ids-only job can rebuild a working manage link —
+// and the .ics invite's URL property gets the same link (the visitor's own credential for their
+// own booking, no more sensitive in the attachment than in the body right above it).
 func (s *Service) bookingManageURL(appURL, bookingID string) string {
 	return appURL + "/booking/" + bookingID + "?t=" + s.manageToken(bookingID)
 }
@@ -367,42 +397,46 @@ func bookingPublicPageURL(appURL, orgSlug, pageSlug string) string {
 	return appURL + "/book/" + orgSlug + "/" + pageSlug
 }
 
-// sendBookingConfirmedMail ports sendBookingEmails' kind==='confirmed' branch: the visitor's
-// confirmation (with its .ics invite) always sends; the organiser notice sends only when the page
-// has an assigned member whose account still resolves.
-func (s *Service) sendBookingConfirmedMail(ctx context.Context, m *mailer.Mailer, booking queries.Booking, page queries.BookingPage, org queries.Organization) error {
+// bookingICSAttachment is the .ics invite both confirmed/rescheduled mails carry (visitor and
+// organiser get the same file).
+func (s *Service) bookingICSAttachment(appURL string, booking queries.Booking, page queries.BookingPage) []mailer.Attachment {
+	ics := BuildBookingICS(booking.ID, page.Title, pageDescriptionText(page), pageLocationText(page),
+		booking.StartAt, booking.EndAt, s.bookingManageURL(appURL, booking.ID))
+	return []mailer.Attachment{{Filename: "calendar.ics", ContentType: "text/calendar", Content: ics}}
+}
+
+// composeBookingConfirmed ports sendBookingEmails' kind==='confirmed' branch for ONE recipient:
+// the visitor's confirmation (with its .ics invite), or the organiser notice — nil when the page
+// has no assigned member whose account still resolves.
+func (s *Service) composeBookingConfirmed(ctx context.Context, appURL, recipient string, booking queries.Booking, page queries.BookingPage, org queries.Organization) (*mailer.Message, error) {
 	organiserName, owner, err := s.resolveOrganiser(ctx, page, org)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	location := pageLocationText(page)
-	manageURL := s.bookingManageURL(m.AppURL(), booking.ID)
-	ics := BuildBookingICS(booking.ID, page.Title, pageDescriptionText(page), location, booking.StartAt, booking.EndAt, manageURL)
-	attachments := []mailer.Attachment{{Filename: "calendar.ics", ContentType: "text/calendar", Content: ics}}
+	manageURL := s.bookingManageURL(appURL, booking.ID)
+	attachments := s.bookingICSAttachment(appURL, booking, page)
 
-	if err := m.Send(ctx, mailer.Message{
-		To:       booking.VisitorEmail,
-		Template: "booking_confirmed",
-		Data: map[string]any{
-			"VisitorName":   booking.VisitorName,
-			"PageTitle":     page.Title,
-			"OrganiserName": organiserName,
-			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
-			"Location":      location,
-			"ManageURL":     manageURL,
-			"Locale":        orDefaultLocale(booking.VisitorLocale),
-		},
-		Attachments: attachments,
-	}); err != nil {
-		return err
+	if recipient == mailRecipientVisitor {
+		return &mailer.Message{
+			To:       booking.VisitorEmail,
+			Template: "booking_confirmed",
+			Data: map[string]any{
+				"VisitorName":   booking.VisitorName,
+				"PageTitle":     page.Title,
+				"OrganiserName": organiserName,
+				"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
+				"Location":      location,
+				"ManageURL":     manageURL,
+				"Locale":        orDefaultLocale(booking.VisitorLocale),
+			},
+			Attachments: attachments,
+		}, nil
 	}
-
 	if owner == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no organiser to notify
 	}
-
-	return m.Send(ctx, mailer.Message{
+	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_organiser_notice",
 		Data: map[string]any{
@@ -412,56 +446,53 @@ func (s *Service) sendBookingConfirmedMail(ctx context.Context, m *mailer.Mailer
 			"VisitorNote":  nullString(booking.VisitorNote),
 			"When":         bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone),
 			"Location":     location,
-			"ViewURL":      bookingDashboardURL(m.AppURL(), page.ID),
+			"ViewURL":      bookingDashboardURL(appURL, page.ID),
 			"Locale":       "en",
 		},
 		Attachments: attachments,
-	})
+	}, nil
 }
 
-// sendBookingCancelledMail ports sendBookingEmails' kind==='cancelled' branch: both sides get the
-// "cancelled" template, each with wording relative to who they are (bookingCancelledBody,
+// composeBookingCancelled ports sendBookingEmails' kind==='cancelled' branch for ONE recipient:
+// both sides get the "cancelled" template, worded relative to who they are (bookingCancelledBody,
 // internal/mailer/helpers.go) — "you cancelled" for whichever side caused it, "the organiser/
 // visitor cancelled" for the other.
-func (s *Service) sendBookingCancelledMail(ctx context.Context, m *mailer.Mailer, booking queries.Booking, page queries.BookingPage, org queries.Organization) error {
+func (s *Service) composeBookingCancelled(ctx context.Context, appURL, recipient string, booking queries.Booking, page queries.BookingPage, org queries.Organization) (*mailer.Message, error) {
 	_, owner, err := s.resolveOrganiser(ctx, page, org)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	cancelledBy := "organiser"
 	if booking.CancelledBy.Valid {
 		cancelledBy = booking.CancelledBy.String
 	}
 
-	visitorCancelledBy := "organiser"
-	if cancelledBy == "visitor" {
-		visitorCancelledBy = "you"
+	if recipient == mailRecipientVisitor {
+		visitorCancelledBy := "organiser"
+		if cancelledBy == "visitor" {
+			visitorCancelledBy = "you"
+		}
+		return &mailer.Message{
+			To:       booking.VisitorEmail,
+			Template: "booking_cancelled",
+			Data: map[string]any{
+				"RecipientName": booking.VisitorName,
+				"PageTitle":     page.Title,
+				"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
+				"CancelledBy":   visitorCancelledBy,
+				"ViewURL":       bookingPublicPageURL(appURL, org.Slug, page.Slug),
+				"Locale":        orDefaultLocale(booking.VisitorLocale),
+			},
+		}, nil
 	}
-	if err := m.Send(ctx, mailer.Message{
-		To:       booking.VisitorEmail,
-		Template: "booking_cancelled",
-		Data: map[string]any{
-			"RecipientName": booking.VisitorName,
-			"PageTitle":     page.Title,
-			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
-			"CancelledBy":   visitorCancelledBy,
-			"ViewURL":       bookingPublicPageURL(m.AppURL(), org.Slug, page.Slug),
-			"Locale":        orDefaultLocale(booking.VisitorLocale),
-		},
-	}); err != nil {
-		return err
-	}
-
 	if owner == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no organiser to notify
 	}
-
 	organiserCancelledBy := "visitor"
 	if cancelledBy == "organiser" {
 		organiserCancelledBy = "you"
 	}
-	return m.Send(ctx, mailer.Message{
+	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_cancelled",
 		Data: map[string]any{
@@ -470,62 +501,55 @@ func (s *Service) sendBookingCancelledMail(ctx context.Context, m *mailer.Mailer
 			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone),
 			"CancelledBy":   organiserCancelledBy,
 			"VisitorName":   booking.VisitorName,
-			"ViewURL":       bookingDashboardURL(m.AppURL(), page.ID),
+			"ViewURL":       bookingDashboardURL(appURL, page.ID),
 			"Locale":        "en",
 		},
-	})
+	}, nil
 }
 
-// sendBookingRescheduledMail ports sendBookingEmails' kind==='rescheduled' branch. previousStartAt
-// is this send's own payload field (see this file's package doc comment for why it's carried
-// alongside the ids); nil falls back to reusing the current When for PreviousWhen too, matching
-// emails.ts's own `opts.previousStartAt ? ... : visitorWhen` fallback.
-func (s *Service) sendBookingRescheduledMail(ctx context.Context, m *mailer.Mailer, booking queries.Booking, page queries.BookingPage, org queries.Organization, previousStartAt *time.Time) error {
+// composeBookingRescheduled ports sendBookingEmails' kind==='rescheduled' branch for ONE recipient.
+// previousStartAt is this row's own payload field; nil falls back to reusing the current When for
+// PreviousWhen too, matching emails.ts's own `opts.previousStartAt ? ... : visitorWhen` fallback.
+func (s *Service) composeBookingRescheduled(ctx context.Context, appURL, recipient string, booking queries.Booking, page queries.BookingPage, org queries.Organization, previousStartAt *time.Time) (*mailer.Message, error) {
 	organiserName, owner, err := s.resolveOrganiser(ctx, page, org)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	location := pageLocationText(page)
-	manageURL := s.bookingManageURL(m.AppURL(), booking.ID)
-	ics := BuildBookingICS(booking.ID, page.Title, pageDescriptionText(page), location, booking.StartAt, booking.EndAt, manageURL)
-	attachments := []mailer.Attachment{{Filename: "calendar.ics", ContentType: "text/calendar", Content: ics}}
+	manageURL := s.bookingManageURL(appURL, booking.ID)
+	attachments := s.bookingICSAttachment(appURL, booking, page)
 
-	visitorWhen := bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone)
-	previousVisitorWhen := visitorWhen
-	if previousStartAt != nil {
-		previousVisitorWhen = bookingWhenText(*previousStartAt, nil, booking.VisitorTimezone)
+	if recipient == mailRecipientVisitor {
+		visitorWhen := bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone)
+		previousVisitorWhen := visitorWhen
+		if previousStartAt != nil {
+			previousVisitorWhen = bookingWhenText(*previousStartAt, nil, booking.VisitorTimezone)
+		}
+		return &mailer.Message{
+			To:       booking.VisitorEmail,
+			Template: "booking_rescheduled",
+			Data: map[string]any{
+				"VisitorName":   booking.VisitorName,
+				"PageTitle":     page.Title,
+				"OrganiserName": organiserName,
+				"PreviousWhen":  previousVisitorWhen,
+				"When":          visitorWhen,
+				"Location":      location,
+				"ManageURL":     manageURL,
+				"Locale":        orDefaultLocale(booking.VisitorLocale),
+			},
+			Attachments: attachments,
+		}, nil
 	}
-
-	if err := m.Send(ctx, mailer.Message{
-		To:       booking.VisitorEmail,
-		Template: "booking_rescheduled",
-		Data: map[string]any{
-			"VisitorName":   booking.VisitorName,
-			"PageTitle":     page.Title,
-			"OrganiserName": organiserName,
-			"PreviousWhen":  previousVisitorWhen,
-			"When":          visitorWhen,
-			"Location":      location,
-			"ManageURL":     manageURL,
-			"Locale":        orDefaultLocale(booking.VisitorLocale),
-		},
-		Attachments: attachments,
-	}); err != nil {
-		return err
-	}
-
 	if owner == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no organiser to notify
 	}
-
 	organiserWhen := bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone)
 	previousOrganiserWhen := organiserWhen
 	if previousStartAt != nil {
 		previousOrganiserWhen = bookingWhenText(*previousStartAt, nil, page.Timezone)
 	}
-
-	return m.Send(ctx, mailer.Message{
+	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_rescheduled_organiser",
 		Data: map[string]any{
@@ -534,46 +558,41 @@ func (s *Service) sendBookingRescheduledMail(ctx context.Context, m *mailer.Mail
 			"PreviousWhen": previousOrganiserWhen,
 			"When":         organiserWhen,
 			"Location":     location,
-			"ViewURL":      bookingDashboardURL(m.AppURL(), page.ID),
+			"ViewURL":      bookingDashboardURL(appURL, page.ID),
 			"Locale":       "en",
 		},
 		Attachments: attachments,
-	})
+	}, nil
 }
 
-// sendBookingReminderMail ports sendBookingEmails' kind==='reminder' branch (no notification-event
-// gating — the reminder has none, per emails.ts's own ORGANISER_EVENT comment — so both sides use
-// the same memberUserId-or-nothing organiser rule every other kind now uses too). No .ics
-// attachment, matching the TS source (a reminder isn't a new calendar entry).
-func (s *Service) sendBookingReminderMail(ctx context.Context, m *mailer.Mailer, booking queries.Booking, page queries.BookingPage, org queries.Organization) error {
+// composeBookingReminder ports sendBookingEmails' kind==='reminder' branch for ONE recipient (no
+// notification-event gating — the reminder has none, per emails.ts's own ORGANISER_EVENT comment).
+// No .ics attachment, matching the TS source (a reminder isn't a new calendar entry).
+func (s *Service) composeBookingReminder(ctx context.Context, appURL, recipient string, booking queries.Booking, page queries.BookingPage, org queries.Organization) (*mailer.Message, error) {
 	_, owner, err := s.resolveOrganiser(ctx, page, org)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	location := pageLocationText(page)
-	manageURL := s.bookingManageURL(m.AppURL(), booking.ID)
 
-	if err := m.Send(ctx, mailer.Message{
-		To:       booking.VisitorEmail,
-		Template: "booking_reminder",
-		Data: map[string]any{
-			"RecipientName": booking.VisitorName,
-			"PageTitle":     page.Title,
-			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
-			"Location":      location,
-			"ViewURL":       manageURL,
-			"Locale":        orDefaultLocale(booking.VisitorLocale),
-		},
-	}); err != nil {
-		return err
+	if recipient == mailRecipientVisitor {
+		return &mailer.Message{
+			To:       booking.VisitorEmail,
+			Template: "booking_reminder",
+			Data: map[string]any{
+				"RecipientName": booking.VisitorName,
+				"PageTitle":     page.Title,
+				"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
+				"Location":      location,
+				"ViewURL":       s.bookingManageURL(appURL, booking.ID),
+				"Locale":        orDefaultLocale(booking.VisitorLocale),
+			},
+		}, nil
 	}
-
 	if owner == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no organiser to remind
 	}
-
-	return m.Send(ctx, mailer.Message{
+	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_reminder",
 		Data: map[string]any{
@@ -581,39 +600,32 @@ func (s *Service) sendBookingReminderMail(ctx context.Context, m *mailer.Mailer,
 			"PageTitle":     page.Title,
 			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone),
 			"Location":      location,
-			"ViewURL":       bookingDashboardURL(m.AppURL(), page.ID),
+			"ViewURL":       bookingDashboardURL(appURL, page.ID),
 			"Locale":        "en",
 		},
-	})
+	}, nil
 }
 
-// sendGoogleSyncFailedMail sends the organiser a best-effort notice that a Google Calendar sync
-// failed (create/reschedule/cancel — see google.go's googleSyncInsert/Delete/Reschedule, the only
-// callers that enqueue the "sync_failed" kind this handles). Ports sendGoogleSyncFailedNotice
-// (emails.ts): a no-op when the page has no assigned member (nothing to notify), matching the TS
-// source's own `if (!owner) return`. A send failure here is returned like any other kind's, so it
-// gets the same SMTP-hiccup retry every other "mail:booking" send already has — TS's own
-// send-and-swallow (its function has no caller left to report a failure to) isn't available here
-// since this port routes every kind through the same job queue.
-func (s *Service) sendGoogleSyncFailedMail(ctx context.Context, m *mailer.Mailer, page queries.BookingPage) error {
+// composeGoogleSyncFailed ports sendGoogleSyncFailedNotice (emails.ts): a best-effort organiser
+// notice that a Google Calendar sync failed (google.go's googleSyncInsert/Delete/Reschedule are the
+// only enqueuers of the "sync_failed" kind). nil when the page has no assigned member (nothing to
+// notify), matching the TS source's own `if (!owner) return`.
+func (s *Service) composeGoogleSyncFailed(ctx context.Context, page queries.BookingPage) (*mailer.Message, error) {
 	if !page.MemberUserID.Valid {
-		return nil
+		return nil, nil //nolint:nilnil // nothing to notify
 	}
 	owner, err := s.q.GetUser(ctx, page.MemberUserID.Int64)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, nil //nolint:nilnil // nothing to notify
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	return m.Send(ctx, mailer.Message{
+	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_sync_failed",
-		Data: map[string]any{
-			"PageTitle": page.Title,
-		},
-	})
+		Data:     map[string]any{"PageTitle": page.Title},
+	}, nil
 }
 
 // nullString reads a sql.NullString as a plain string, "" when unset.

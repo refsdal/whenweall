@@ -266,8 +266,8 @@ func TestBookInsertsGoogleEventAndStoresEventID(t *testing.T) {
 		t.Errorf("booking.google_event_id = %q, want %q", got, "evt-abc123")
 	}
 	// No hard failure -> no "sync_failed" mail job.
-	if n := countJobs(t, p.db, "mail:booking"); n != 1 {
-		t.Fatalf(`countJobs("mail:booking") = %d, want 1 (just "confirmed")`, n)
+	if n := countJobs(t, p.db, "mail:booking"); n != 2 {
+		t.Fatalf(`countJobs("mail:booking") = %d, want 2 (just "confirmed", one row per recipient)`, n)
 	}
 }
 

@@ -81,6 +81,7 @@ func countJobs(t *testing.T, d *sql.DB, kind string) int {
 type mailBookingPayload struct {
 	Kind            string     `json:"kind"`
 	BookingID       string     `json:"bookingId"`
+	Recipient       string     `json:"recipient"`
 	PreviousStartAt *time.Time `json:"previousStartAt,omitempty"`
 }
 
@@ -143,8 +144,8 @@ func TestBookEnqueuesConfirmedMailJob(t *testing.T) {
 	}
 
 	rows := listJobs(t, p.db, "mail:booking")
-	if len(rows) != 1 {
-		t.Fatalf("mail:booking jobs = %d, want 1", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("mail:booking jobs = %d, want 2 (one per recipient)", len(rows))
 	}
 	for _, row := range rows {
 		if strings.Contains(string(row.Payload), "@") {
@@ -155,12 +156,18 @@ func TestBookEnqueuesConfirmedMailJob(t *testing.T) {
 		}
 	}
 
-	payload := decodeMailBookingJobs(t, rows)[0]
-	if payload.Kind != "confirmed" {
-		t.Errorf("Kind = %q, want confirmed", payload.Kind)
+	recipients := map[string]bool{}
+	for _, payload := range decodeMailBookingJobs(t, rows) {
+		if payload.Kind != "confirmed" {
+			t.Errorf("Kind = %q, want confirmed", payload.Kind)
+		}
+		if payload.BookingID != result.BookingID {
+			t.Errorf("BookingID = %q, want %q", payload.BookingID, result.BookingID)
+		}
+		recipients[payload.Recipient] = true
 	}
-	if payload.BookingID != result.BookingID {
-		t.Errorf("BookingID = %q, want %q", payload.BookingID, result.BookingID)
+	if !recipients["visitor"] || !recipients["organiser"] || len(recipients) != 2 {
+		t.Errorf("recipients = %v, want exactly {visitor, organiser}", recipients)
 	}
 }
 
@@ -333,15 +340,15 @@ func TestMailBookingJobSkipsStaleConfirmedAfterCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Book: %v", err)
 	}
-	if n := countJobs(t, p.db, "mail:booking"); n != 1 {
-		t.Fatalf("mail:booking jobs after Book = %d, want 1", n)
+	if n := countJobs(t, p.db, "mail:booking"); n != 2 {
+		t.Fatalf("mail:booking jobs after Book = %d, want 2 (visitor + organiser)", n)
 	}
 
 	if err := p.svc.Cancel(ctx, result.BookingID, result.ManageToken, false); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if n := countJobs(t, p.db, "mail:booking"); n != 2 {
-		t.Fatalf("mail:booking jobs after Cancel = %d, want 2 (stale confirmed + fresh cancelled)", n)
+	if n := countJobs(t, p.db, "mail:booking"); n != 4 {
+		t.Fatalf("mail:booking jobs after Cancel = %d, want 4 (2 stale confirmed + 2 fresh cancelled)", n)
 	}
 
 	m := testBookingMailer("https://whenweall.example")
@@ -353,12 +360,13 @@ func TestMailBookingJobSkipsStaleConfirmedAfterCancellation(t *testing.T) {
 	}
 
 	rows := listJobs(t, p.db, "mail:booking")
-	if len(rows) != 1 {
-		t.Fatalf("mail:booking jobs remaining = %d, want 1 (only cancelled, retrying against unreachable SMTP)", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("mail:booking jobs remaining = %d, want 2 (only the cancelled pair, retrying against unreachable SMTP)", len(rows))
 	}
-	payload := decodeMailBookingJobs(t, rows)[0]
-	if payload.Kind != "cancelled" {
-		t.Errorf("remaining job Kind = %q, want cancelled (confirmed should have completed as a no-op)", payload.Kind)
+	for _, payload := range decodeMailBookingJobs(t, rows) {
+		if payload.Kind != "cancelled" {
+			t.Errorf("remaining job Kind = %q, want cancelled (confirmed should have completed as a no-op)", payload.Kind)
+		}
 	}
 }
 
@@ -586,5 +594,115 @@ func TestMailBookingDeliversRealMail(t *testing.T) {
 	organiserDetail := fetchMailpitMessageTo(t, apiBaseURL, owner)
 	if len(organiserDetail.Attachments) != 1 {
 		t.Errorf("len(Attachments) for organiser = %d, want 1 (the same .ics invite)", len(organiserDetail.Attachments))
+	}
+}
+
+// TestMailBookingComposesOneRecipientPerJob: each "mail:booking" row addresses exactly one party,
+// so a failing organiser send (retried by the worker) can never re-deliver the visitor's mail.
+func TestMailBookingComposesOneRecipientPerJob(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, nil)
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "bob@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	owner := ownerEmail(t, p.db, p.pageID)
+	const appURL = "https://whenweall.example"
+
+	visitor, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+		Kind: "confirmed", BookingID: result.BookingID, Recipient: "visitor",
+	})
+	if err != nil || visitor == nil {
+		t.Fatalf("compose visitor: msg=%v err=%v", visitor, err)
+	}
+	if visitor.To != "bob@example.com" || visitor.Template != "booking_confirmed" {
+		t.Errorf("visitor message = To %q Template %q, want bob@example.com booking_confirmed", visitor.To, visitor.Template)
+	}
+
+	organiser, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+		Kind: "confirmed", BookingID: result.BookingID, Recipient: "organiser",
+	})
+	if err != nil || organiser == nil {
+		t.Fatalf("compose organiser: msg=%v err=%v", organiser, err)
+	}
+	if organiser.To != owner || organiser.Template != "booking_organiser_notice" {
+		t.Errorf("organiser message = To %q Template %q, want %q booking_organiser_notice", organiser.To, organiser.Template, owner)
+	}
+
+	t.Run("an unknown recipient is an error, never a double send", func(t *testing.T) {
+		msg, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+			Kind: "confirmed", BookingID: result.BookingID, Recipient: "",
+		})
+		if err == nil || msg != nil {
+			t.Fatalf("compose with empty recipient = (%v, %v), want (nil, error)", msg, err)
+		}
+	})
+
+	t.Run("the organiser job is a no-op when the page has no assigned member", func(t *testing.T) {
+		if _, err := p.db.ExecContext(ctx, `UPDATE booking_pages SET member_user_id = NULL WHERE id = $1`, p.pageID); err != nil {
+			t.Fatalf("clear member_user_id: %v", err)
+		}
+		msg, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+			Kind: "confirmed", BookingID: result.BookingID, Recipient: "organiser",
+		})
+		if err != nil || msg != nil {
+			t.Fatalf("compose organiser without member = (%v, %v), want (nil, nil)", msg, err)
+		}
+		visitor, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+			Kind: "confirmed", BookingID: result.BookingID, Recipient: "visitor",
+		})
+		if err != nil || visitor == nil {
+			t.Fatalf("compose visitor without member = (%v, %v), want a message", visitor, err)
+		}
+	})
+}
+
+// TestMailBookingOrganiserFailureDoesNotResendVisitor is the finding's own scenario against a
+// live Mailpit: the organiser's address is broken so ONLY that send fails (mailer rejects it
+// before dialling); the visitor's confirmation goes out once and stays sent across the retry.
+func TestMailBookingOrganiserFailureDoesNotResendVisitor(t *testing.T) {
+	smtpHost, smtpPort, apiBaseURL := startMailpitForBookings(t)
+	m := mailer.New(&config.Config{
+		SMTPHost: smtpHost, SMTPPort: smtpPort,
+		EmailFrom: "whenweall <no-reply@whenweall.example>", AppURL: "https://whenweall.example",
+	})
+
+	ctx := context.Background()
+	p := setupBookablePage(t, nil)
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE users SET email = 'not-an-address' WHERE id = (SELECT member_user_id FROM booking_pages WHERE id = $1)`, p.pageID,
+	); err != nil {
+		t.Fatalf("break organiser address: %v", err)
+	}
+	if _, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(futureUTCSlot(3, 9, 0), "ada@example.com")); err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+
+	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
+	p.svc.RegisterJobs(w, m)
+	runAllJobs(t, ctx, p.db, w)
+
+	if total := mailpitTotal(t, apiBaseURL); total != 1 {
+		t.Fatalf("mailpit total after first pass = %d, want 1 (the visitor only)", total)
+	}
+	rows := listJobs(t, p.db, "mail:booking")
+	if len(rows) != 1 {
+		t.Fatalf("mail:booking jobs remaining = %d, want 1 (the failed organiser send, backing off)", len(rows))
+	}
+	if pl := decodeMailBookingJobs(t, rows)[0]; pl.Recipient != "organiser" {
+		t.Fatalf("remaining job Recipient = %q, want organiser", pl.Recipient)
+	}
+
+	// Pull the retry forward and run again: the organiser send fails again, the visitor is NOT
+	// re-sent — before this fix the retry re-ran the visitor Send too.
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE scheduled_jobs SET run_at = now() - interval '1 second', locked_by = NULL, locked_at = NULL WHERE kind = 'mail:booking'`,
+	); err != nil {
+		t.Fatalf("force retry: %v", err)
+	}
+	runAllJobs(t, ctx, p.db, w)
+	if total := mailpitTotal(t, apiBaseURL); total != 1 {
+		t.Fatalf("mailpit total after retry = %d, want still 1", total)
 	}
 }

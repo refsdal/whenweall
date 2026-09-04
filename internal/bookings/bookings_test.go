@@ -906,13 +906,13 @@ func TestBookVsRescheduleRaceConsistentOccupancy(t *testing.T) {
 	}
 }
 
-// TestCancelRaceEnqueuesExactlyOneMailJob is M2's own race proof: several concurrent Cancel calls
-// for the SAME booking must all succeed (Cancel is idempotent — none of them ever error), the
-// booking ends up cancelled exactly once, and — the actual bug this fixes — exactly ONE
-// "cancelled" mail:booking job is enqueued, never one per racer. See Cancel's own doc comment
-// (bookings.go) for why this needs a row lock, not just Cancel's own pre-existing idempotency
-// check.
-func TestCancelRaceEnqueuesExactlyOneMailJob(t *testing.T) {
+// TestCancelRaceEnqueuesOneMailJobPerRecipient is M2's own race proof: several concurrent Cancel
+// calls for the SAME booking must all succeed (Cancel is idempotent — none of them ever error),
+// the booking ends up cancelled exactly once, and — the actual bug this fixes — exactly ONE
+// "cancelled" mail:booking job PER RECIPIENT (visitor + organiser = 2) is enqueued, never one pair
+// per racer. See Cancel's own doc comment (bookings.go) for why this needs a row lock, not just
+// Cancel's own pre-existing idempotency check.
+func TestCancelRaceEnqueuesOneMailJobPerRecipient(t *testing.T) {
 	ctx := context.Background()
 	p := setupBookablePage(t, nil)
 	start := futureUTCSlot(3, 9, 0)
@@ -957,7 +957,7 @@ func TestCancelRaceEnqueuesExactlyOneMailJob(t *testing.T) {
 			cancelled++
 		}
 	}
-	if cancelled != 1 {
-		t.Fatalf(`"cancelled" mail:booking jobs = %d, want exactly 1 (among %+v) — a race would enqueue one per racer`, cancelled, payloads)
+	if cancelled != 2 {
+		t.Fatalf(`"cancelled" mail:booking jobs = %d, want exactly 2 (one per recipient, among %+v) — a race would enqueue a pair per racer`, cancelled, payloads)
 	}
 }

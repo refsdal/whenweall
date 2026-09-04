@@ -534,7 +534,7 @@ func (s *Service) googleSyncInsert(ctx context.Context, booking *queries.Booking
 		if errors.Is(err, ErrGoogleNotConnected) {
 			return nil
 		}
-		return enqueueMailBooking(ctx, s.db, "sync_failed", booking.ID, nil)
+		return enqueueMailBookingTo(ctx, s.db, "sync_failed", booking.ID, mailRecipientOrganiser, nil)
 	}
 	return s.SetGoogleEventID(ctx, booking.ID, &eventID)
 }
@@ -572,7 +572,7 @@ func (s *Service) googleSyncDelete(ctx context.Context, booking *queries.Booking
 	if errors.Is(err, ErrGoogleNotConnected) {
 		return true, nil
 	}
-	return false, enqueueMailBooking(ctx, s.db, "sync_failed", booking.ID, nil)
+	return false, enqueueMailBookingTo(ctx, s.db, "sync_failed", booking.ID, mailRecipientOrganiser, nil)
 }
 
 // googleSyncReschedule ports syncGoogleEventsForReschedule (google-sync.ts): delete the old event
