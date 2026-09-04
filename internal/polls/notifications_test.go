@@ -851,7 +851,7 @@ func startMailpitForPolls(t *testing.T) (smtpHost string, smtpPort int, apiBaseU
 		ContainerRequest: req, Started: true,
 	})
 	if err != nil {
-		t.Skipf("mailpit testcontainer unavailable: %v", err)
+		testdb.Unavailable(t, "mailpit testcontainer", err)
 	}
 	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
 

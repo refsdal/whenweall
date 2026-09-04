@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,13 +77,38 @@ func urlFor(name string) string {
 	return strings.Replace(baseURL, "/postgres?", "/"+name+"?", 1)
 }
 
+// skipperFailer is the slice of testing.TB unavailable needs — narrow so a test can hand it a
+// recorder instead of a real *testing.T.
+type skipperFailer interface {
+	Skipf(format string, args ...any)
+	Fatalf(format string, args ...any)
+}
+
+// Unavailable reports that a piece of test infrastructure (a container that would not start)
+// is missing. Locally that is a Skip — a laptop without Docker should still run the pure-Go
+// tests — but under CI (the CI env var GitHub Actions and every common runner set) it is a hard
+// failure: nine of the twelve tested packages get their database from this package, so a
+// silently skipped container would let `go test ./...` go green having run almost nothing.
+func Unavailable(t testing.TB, what string, err error) {
+	t.Helper()
+	unavailable(t, os.Getenv("CI") != "", what, err)
+}
+
+func unavailable(t skipperFailer, ci bool, what string, err error) {
+	if ci {
+		t.Fatalf("%s unavailable under CI — refusing to skip: %v", what, err)
+		return
+	}
+	t.Skipf("%s unavailable: %v", what, err)
+}
+
 // URL returns the connection string of the clone backing db, and the *sql.DB itself — rooms
 // tests need the URL for LISTEN, which the database/sql pool abstraction can't express.
 func URL(t *testing.T) (string, *sql.DB) {
 	t.Helper()
 	once.Do(setup)
 	if initErr != nil {
-		t.Skipf("postgres testcontainer unavailable: %v", initErr)
+		Unavailable(t, "postgres testcontainer", initErr)
 	}
 	ctx := context.Background()
 	name := fmt.Sprintf("wt_%d_%d", time.Now().UnixNano(), seq.Add(1))
@@ -103,7 +129,8 @@ func URL(t *testing.T) (string, *sql.DB) {
 }
 
 // New returns an isolated *sql.DB on a freshly cloned, fully migrated database.
-// Skips the test (t.Skip) if Docker is unavailable. Closes and drops on t.Cleanup.
+// Skips the test if Docker is unavailable — or fails it, under CI (see Unavailable). Closes and
+// drops on t.Cleanup.
 func New(t *testing.T) *sql.DB {
 	t.Helper()
 	_, d := URL(t)

@@ -38,6 +38,7 @@ import (
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/mailer"
+	"github.com/refsdal/whenweall/internal/testdb"
 )
 
 // jobRow is the subset of scheduled_jobs this file's assertions need.
@@ -376,7 +377,7 @@ func startMailpitForBookings(t *testing.T) (smtpHost string, smtpPort int, apiBa
 		ContainerRequest: req, Started: true,
 	})
 	if err != nil {
-		t.Skipf("mailpit testcontainer unavailable: %v", err)
+		testdb.Unavailable(t, "mailpit testcontainer", err)
 	}
 	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
 

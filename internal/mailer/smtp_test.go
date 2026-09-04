@@ -14,6 +14,7 @@ import (
 
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/mailer"
+	"github.com/refsdal/whenweall/internal/testdb"
 )
 
 // mailpitMessageSummary is the subset of Mailpit's GET /api/v1/messages response this test needs.
@@ -64,7 +65,7 @@ func startMailpit(t *testing.T) (smtpHost string, smtpPort int, apiBaseURL strin
 		Started:          true,
 	})
 	if err != nil {
-		t.Skipf("mailpit testcontainer unavailable: %v", err)
+		testdb.Unavailable(t, "mailpit testcontainer", err)
 	}
 	t.Cleanup(func() {
 		_ = ctr.Terminate(context.Background())
