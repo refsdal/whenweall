@@ -793,3 +793,43 @@ func TestBookingMailLocale(t *testing.T) {
 		}
 	})
 }
+
+// TestReminderJobSkipsSoftDeletedPage ports booking-room.workers.test.ts's "skips a booking on a
+// soft-deleted page but still clears its key": a due reminder for a booking whose page has since
+// been deleted enqueues no reminder mail, and the reminder row itself is consumed (not retried).
+func TestReminderJobSkipsSoftDeletedPage(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, nil)
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "alice@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	if _, ok := reminderJob(t, p.db, result.BookingID); !ok {
+		t.Fatal("booking.reminder job not armed after Book")
+	}
+
+	if err := p.svc.DeletePage(ctx, p.pageID, p.orgID); err != nil {
+		t.Fatalf("DeletePage: %v", err)
+	}
+	// Make the reminder due now (it was armed at start-24h, days away).
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE scheduled_jobs SET run_at = now() - interval '1 second' WHERE kind = 'booking.reminder' AND room_key = $1`,
+		"booking:"+result.BookingID,
+	); err != nil {
+		t.Fatalf("force reminder due: %v", err)
+	}
+
+	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
+	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
+	runAllJobs(t, ctx, p.db, w)
+
+	if _, ok := reminderJob(t, p.db, result.BookingID); ok {
+		t.Error("booking.reminder job still present after running against a deleted page, want consumed")
+	}
+	for _, pl := range decodeMailBookingJobs(t, listJobs(t, p.db, "mail:booking")) {
+		if pl.Kind == "reminder" {
+			t.Fatalf("a reminder mail:booking job was enqueued for a booking on a deleted page: %+v", pl)
+		}
+	}
+}

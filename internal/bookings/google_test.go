@@ -651,3 +651,44 @@ func ownerUserID(t *testing.T, d *sql.DB, pageID string) string {
 	}
 	return strconv.FormatInt(id, 10)
 }
+
+// TestGoogleSyncDeleteEventTreatsGoneAsSuccess ports calendar.workers.test.ts's deleteEvent cases:
+// a 404 or 410 (the event is already gone, however that happened) is success, anything else is a
+// hard failure. Exercised directly on the dormant GoogleSync (Google Calendar sync is disabled in
+// v5's API/UI; the client is kept for its return).
+func TestGoogleSyncDeleteEventTreatsGoneAsSuccess(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		wantErr bool
+	}{
+		{"404 is success", http.StatusNotFound, false},
+		{"410 is success", http.StatusGone, false},
+		{"500 is a hard failure", http.StatusInternalServerError, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			d := testdb.New(t)
+			userID := seedUser(t, d)
+			insertGoogleAccount(t, d, userID, "access-tok", "refresh-tok")
+
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete || r.URL.Path != "/calendars/primary/events/evt_123" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			withGoogleAPIStub(t, ts)
+
+			g := bookings.NewGoogleSync(testGoogleConfig(), d)
+			err := g.DeleteEvent(ctx, userID, "evt_123")
+			if tc.wantErr && err == nil {
+				t.Fatalf("DeleteEvent(%d) = nil, want an error", tc.status)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("DeleteEvent(%d) = %v, want nil (already gone counts as deleted)", tc.status, err)
+			}
+		})
+	}
+}
