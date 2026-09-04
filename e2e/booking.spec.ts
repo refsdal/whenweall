@@ -12,10 +12,7 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
   request,
   userWithBookingPage,
 }) => {
-  test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
-  const pageId = userWithBookingPage.pageId!
-  const handle = userWithBookingPage.handle!
-  const slug = userWithBookingPage.slug!
+  const { pageId, handle, slug } = userWithBookingPage
   const bookPath = `/book/${handle}/${slug}`
 
   // Context A: the visitor who is about to book.

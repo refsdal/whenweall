@@ -26,8 +26,7 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   browser,
   userWithSignup,
 }) => {
-  test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
-  const pollId = userWithSignup.pollId!
+  const { pollId } = userWithSignup
   const pollPath = `/p/${pollId}`
   // The roster download lives under the API surface, not the SPA route — web/src/api/polls.ts's
   // `pollRosterCSVUrl` builds this same path, not `/p/{id}/roster.csv`.

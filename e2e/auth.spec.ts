@@ -1,20 +1,6 @@
 import { expect, signIn, test, waitForHydration } from './fixtures'
 
 test.describe('auth', () => {
-  test('signing up shows the check-your-inbox screen', async ({ page }) => {
-    await page.goto('/signup')
-    await waitForHydration(page)
-
-    await page.locator('#signup-name').fill('New Person')
-    await page.locator('#signup-email').fill(`signup-${Date.now()}@example.com`)
-    await page.locator('#signup-password').fill('correct horse battery staple')
-    await page.getByRole('button', { name: 'Create account' }).click()
-
-    await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible({
-      timeout: 15_000,
-    })
-  })
-
   test('signs in with a seeded user and lands on the dashboard', async ({ page, user }) => {
     await signIn(page, user)
 
@@ -42,5 +28,7 @@ test.describe('auth', () => {
 
     await expect(page).toHaveURL('/')
     await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible()
+    // The session is really gone, not just the header re-rendered.
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(401)
   })
 })

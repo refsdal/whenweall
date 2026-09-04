@@ -5,8 +5,7 @@ test('a guest vote appears live in another tab, and the presence pill shows two 
   browser,
   userWithPoll,
 }) => {
-  test.skip(!userWithPoll.pollId, 'seed route did not return a pollId')
-  const pollId = userWithPoll.pollId!
+  const { pollId } = userWithPoll
 
   // Context A: the poll owner, watching the page.
   await signIn(page, userWithPoll)

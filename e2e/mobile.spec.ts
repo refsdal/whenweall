@@ -15,8 +15,7 @@ test.describe('poll on a phone', () => {
     page,
     userWithPoll,
   }) => {
-    test.skip(!userWithPoll.pollId, 'seed route did not return a pollId')
-    const pollId = userWithPoll.pollId!
+    const { pollId } = userWithPoll
 
     await page.goto(`/p/${pollId}`)
     await waitForHydration(page)

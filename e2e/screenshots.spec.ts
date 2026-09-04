@@ -56,8 +56,7 @@ test('landing page, light and dark', { tag: '@screenshots' }, async ({ page }) =
 })
 
 test('poll page with votes', { tag: '@screenshots' }, async ({ page, browser, userWithPoll }) => {
-  test.skip(!userWithPoll.pollId, 'seed route did not return a pollId')
-  const pollId = userWithPoll.pollId!
+  const { pollId } = userWithPoll
 
   // Two guests vote differently so the grid has something to show and one option wins.
   for (const [name, answers] of [
@@ -116,9 +115,7 @@ test('dashboard', { tag: '@screenshots' }, async ({ page, userWithPoll }) => {
 })
 
 test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage }) => {
-  test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
-  const handle = userWithBookingPage.handle!
-  const slug = userWithBookingPage.slug!
+  const { handle, slug } = userWithBookingPage
 
   await page.goto(`/book/${handle}/${slug}`)
   await waitForHydration(page)
@@ -132,8 +129,7 @@ test('booking page', { tag: '@screenshots' }, async ({ page, userWithBookingPage
 })
 
 test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithSignup }) => {
-  test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
-  const pollId = userWithSignup.pollId!
+  const { pollId } = userWithSignup
 
   // A guest claims a slot so the board has a claimant to show.
   const context = await browser.newContext()
