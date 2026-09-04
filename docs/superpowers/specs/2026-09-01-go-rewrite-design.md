@@ -6,11 +6,12 @@
 ## Summary
 
 whenweall re-platforms off Cloudflare Workers onto a single static **Go binary** that serves an
-embedded React SPA, packaged as a hardened `FROM scratch` container with **Postgres as the only
-other service**. Stripe and the entire billing/entitlements layer are removed — every user and
-organization gets one implicit, unlimited plan. Mail moves to **SMTP** (required). Realtime rooms
-are rebuilt as an in-process websocket hub with Postgres LISTEN/NOTIFY fan-out. The product is
-positioned as free, open-source, and maximally self-hostable.
+embedded React SPA, packaged as a hardened `FROM scratch` container (amended: distroless static —
+see §7) with **Postgres as the only other service**. Stripe and the entire billing/entitlements
+layer are removed — every user and organization gets one implicit, unlimited plan. Mail moves to
+**SMTP** (required). Realtime rooms are rebuilt as an in-process websocket hub with Postgres
+LISTEN/NOTIFY fan-out. The product is positioned as free, open-source, and maximally
+self-hostable.
 
 This supersedes the in-flight Bun + Docker migration (branch `feat/docker-bun`). That work is
 abandoned as a runtime, but its design decisions carry over as constraints here: Postgres-only
@@ -169,6 +170,16 @@ In-process hub per room key (`poll:{id}`, `booking:{pageId}`, `stats:global`) us
 - Source of truth: goose SQL files; sqlc reads the same schema, so types can't drift.
 
 ## 7. Container & hardening
+
+> **Amended 2026-09-04 (post-merge of the rewrite).** The three-stage Dockerfile below was
+> replaced: `docker buildx build --platform linux/amd64,linux/arm64` runs every stage once per
+> platform, so the arm64 leg compiled the SPA *and* the binary under QEMU emulation — and the SPA
+> is byte-identical on every architecture, so that emulated Vite build was pure waste. Both are now
+> built natively by `scripts/build-artifacts.sh` and the Dockerfile only COPYs the matching
+> binary. The base moved from `FROM scratch` to `gcr.io/distroless/static-debian12:nonroot`
+> (pinned by digest) for one concrete reason: with no build stage left, there is nothing to
+> scavenge `ca-certificates.crt` from, and SMTP over TLS needs it. Everything else in this section
+> still holds — one static binary, no shell, `USER 65532:65532`, the same compose hardening.
 
 Three-stage Dockerfile:
 

@@ -382,8 +382,14 @@ docker compose pull app
 docker compose up -d app
 ```
 
-Running from a source checkout instead of the published image? `docker compose up -d --build app`
-rebuilds and restarts in one step; migrations still run themselves on boot.
+Running from a source checkout instead of the published image? The Dockerfile compiles nothing —
+build the binary first, then rebuild and restart in one step; migrations still run themselves on
+boot:
+
+```bash
+bash scripts/build-artifacts.sh linux/amd64   # needs Go and bun on the host
+docker compose up -d --build app
+```
 
 Prefer to control exactly when migrations run (e.g. running several replicas and wanting
 exactly one to migrate)? Set `MIGRATE_ON_BOOT=false` and run them yourself first:
@@ -482,6 +488,7 @@ The same suite also runs against the **built Docker image** with the compose har
 `e2e-image` job does:
 
 ```bash
+bash scripts/build-artifacts.sh linux/amd64   # the image build itself compiles nothing
 docker build -t whenweall:e2e .
 e2e/compose-e2e.sh up -d --wait      # compose.yaml + compose.e2e.yaml, app on :3100
 e2e/assert-hardening.sh              # proves the flags are live on the running container
@@ -557,7 +564,8 @@ web/                      the SPA — React 19, TanStack Router, Vite, Tailwind
 e2e/                      Playwright specs and fixtures — the oracle this whole rewrite was proven against
 docs/                     admin runbook, Limen schema-regen steps, screenshot script docs
 compose.yaml              self-host deployment: one app container, one Postgres
-Dockerfile                three-stage build: bun builds web/, go build embeds it into the binary, scratch runs it
+scripts/build-artifacts.sh  builds the SPA once and cross-compiles one static binary per architecture
+Dockerfile                COPYs the prebuilt binary into distroless — nothing compiles inside it
 ```
 
 ## Internationalisation

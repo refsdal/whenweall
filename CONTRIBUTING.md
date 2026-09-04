@@ -58,9 +58,12 @@ bunx playwright install --with-deps chromium
 bunx playwright test
 ```
 
-CI also runs the suite against the built Docker image (`e2e-image` job). To reproduce that
-locally: `docker build -t whenweall:e2e . && e2e/compose-e2e.sh up -d --wait &&
-e2e/assert-hardening.sh && E2E_SERVER=image bunx playwright test; e2e/compose-e2e.sh down -v`.
+CI also runs the suite against the built Docker image (`e2e-image` job). The image compiles
+nothing — [`scripts/build-artifacts.sh`](./scripts/build-artifacts.sh) builds the SPA once and
+cross-compiles a static binary per architecture, and the Dockerfile just COPYs the matching one.
+To reproduce the job locally: `bash scripts/build-artifacts.sh linux/amd64 && docker build -t
+whenweall:e2e . && e2e/compose-e2e.sh up -d --wait && e2e/assert-hardening.sh && E2E_SERVER=image
+bunx playwright test; e2e/compose-e2e.sh down -v`.
 
 New e2e specs: one journey per file, role-based locators (`getByRole`/`getByLabel`), auto-waiting
 `expect(...)` over fixed sleeps, `expect.poll` for anything that arrives through the jobs worker
