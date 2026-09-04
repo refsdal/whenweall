@@ -794,11 +794,6 @@ func (s *Service) handleClaim(a Auth, cfg *config.Config) http.HandlerFunc {
 		pollID := r.PathValue("id")
 		ctx := r.Context()
 
-		if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
-			httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
-			return
-		}
-
 		var req claimRequest
 		if !httpserver.DecodeJSON(w, r, &req) {
 			return
@@ -807,6 +802,18 @@ func (s *Service) handleClaim(a Auth, cfg *config.Config) http.HandlerFunc {
 		if err != nil {
 			writeServiceError(w, err)
 			return
+		}
+		// Turnstile only for a brand-new anonymous claimant — ported from claimSlot's branch
+		// structure (participants.functions.ts): the participantId branch calls
+		// requireParticipantAuth and never requireTurnstile. A returning guest identifies via
+		// participantId + X-Guest-Token; Claim itself rejects an unauthorized participantId
+		// (ErrForbidden/ErrNotFound) before any write, so skipping the captcha here can never be
+		// used to act on someone else's participant.
+		if req.ParticipantID == "" {
+			if err := httpserver.RequireCaptchaIfAnon(cfg, a, r); err != nil {
+				httpserver.Err(w, http.StatusForbidden, "captcha_failed", "captcha verification failed", nil)
+				return
+			}
 		}
 		optionID := req.OptionID
 		if optionID == "" {

@@ -1242,3 +1242,70 @@ func TestHandlerRejectsUnknownAnswer(t *testing.T) {
 		t.Errorf("envelope = %s, want code invalid with fields.answers", rec.Body)
 	}
 }
+
+// TestHandlerClaimReturningGuestSkipsCaptcha ports claimSlot's branch structure
+// (main:src/server/polls/participants.functions.ts:232-243): Turnstile is demanded only of a
+// brand-new anonymous claimant (no participantId); a returning guest re-identified by
+// participantId + X-Guest-Token is authorized by that token instead. The siteverify stub returns
+// 500 for every call after the first claim, so any captcha check on the later requests fails them.
+func TestHandlerClaimReturningGuestSkipsCaptcha(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfigWithTurnstile(t)
+	h, a, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil, nil}, 2)
+	slotA, slotB := created.Options[0].ID, created.Options[1].ID
+
+	withSiteverifyStubT(t, turnstileStub(true))
+	rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/claims",
+		map[string]any{"optionId": slotA, "name": "Ada"}, map[string]string{"X-Captcha-Token": "tok"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first claim: status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	first := decodeBody[map[string]any](t, rec)
+	participantID, _ := first["participantId"].(string)
+	guestToken := a.MintGuestToken(participantID)
+
+	// From here on, siteverify must never be consulted.
+	withSiteverifyStubT(t, httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})))
+
+	t.Run("second claim with participantId + guest token needs no captcha", func(t *testing.T) {
+		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/claims",
+			map[string]any{"optionId": slotB, "participantId": participantID},
+			map[string]string{"X-Guest-Token": guestToken})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		ids, _ := decodeBody[map[string]any](t, rec)["claimedOptionIds"].([]any)
+		if len(ids) != 2 {
+			t.Errorf("claimedOptionIds = %v, want both slots", ids)
+		}
+	})
+
+	t.Run("participantId without an authorizing token is 403 forbidden, not captcha_failed", func(t *testing.T) {
+		rec := doRequest(t, h, "DELETE", "/api/v1/polls/"+created.ID+"/claims/"+slotB, nil,
+			map[string]string{"X-Guest-Token": guestToken})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unclaim to free slotB: status = %d; body=%s", rec.Code, rec.Body)
+		}
+		rec = doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/claims",
+			map[string]any{"optionId": slotB, "participantId": participantID}, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "forbidden" {
+			t.Errorf("code = %q, want forbidden", errCode(t, rec))
+		}
+	})
+
+	t.Run("a brand-new anonymous claimant is still captcha-gated", func(t *testing.T) {
+		rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/claims",
+			map[string]any{"optionId": slotB, "name": "Bob"}, nil)
+		if rec.Code != http.StatusForbidden || errCode(t, rec) != "captcha_failed" {
+			t.Fatalf("status/code = %d/%q, want 403/captcha_failed; body=%s", rec.Code, errCode(t, rec), rec.Body)
+		}
+	})
+}
