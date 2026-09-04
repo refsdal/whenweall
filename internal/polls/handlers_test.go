@@ -1397,3 +1397,47 @@ func TestHandlerRosterCSVUsesRequestLocale(t *testing.T) {
 		}
 	})
 }
+
+// TestHandlerPublicRateLimits ports test/server-functions.workers.test.ts:96-106 (vote/comment
+// limiters return 429) at the handler level: the "vote" bucket (30/min, shared by participants +
+// claims) and the "comment" bucket (20/min) each 429 rate_limited past their limit for one IP.
+// httptest requests all share RemoteAddr 192.0.2.1, so every request here counts against the same
+// key. Bodies are deliberately invalid: the limiter runs before the handler, so a rejected
+// request still consumes budget, and nothing needs to be written to the poll.
+func TestHandlerPublicRateLimits(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, _, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+	t.Run("comments: 21st request in a minute is 429 rate_limited", func(t *testing.T) {
+		var last *httptest.ResponseRecorder
+		for i := 0; i < 21; i++ {
+			last = doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/comments", map[string]any{"authorName": "", "body": ""}, nil)
+		}
+		if last.Code != http.StatusTooManyRequests {
+			t.Fatalf("21st request: status = %d, want 429; body=%s", last.Code, last.Body)
+		}
+		if errCode(t, last) != "rate_limited" {
+			t.Errorf("code = %q, want rate_limited", errCode(t, last))
+		}
+		if last.Header().Get("Retry-After") == "" {
+			t.Error("missing Retry-After header")
+		}
+	})
+
+	t.Run("votes: 31st request in a minute is 429 rate_limited", func(t *testing.T) {
+		var last *httptest.ResponseRecorder
+		for i := 0; i < 31; i++ {
+			last = doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/participants", map[string]any{"name": "", "answers": map[string]string{}}, nil)
+		}
+		if last.Code != http.StatusTooManyRequests {
+			t.Fatalf("31st request: status = %d, want 429; body=%s", last.Code, last.Body)
+		}
+		if errCode(t, last) != "rate_limited" {
+			t.Errorf("code = %q, want rate_limited", errCode(t, last))
+		}
+	})
+}

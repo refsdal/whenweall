@@ -351,6 +351,31 @@ func TestPollWS_SnapshotObservesChangeDuringAuthorize(t *testing.T) {
 	}
 }
 
+// TestPollWS_NonUpgradeRequestIs426 ports ws.workers.test.ts's "returns 426 for a non-websocket
+// request": Authorize passes for an existing poll, then coder/websocket's Accept rejects a plain
+// GET (no Connection: Upgrade) with 426 Upgrade Required and writes the response itself.
+func TestPollWS_NonUpgradeRequestIs426(t *testing.T) {
+	server, _, polls, _ := newTestMux(t)
+	polls.byID["p1"] = map[string]any{"id": "p1"}
+
+	resp, err := http.Get(server.URL + "/api/v1/polls/p1/ws")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Errorf("status = %d, want 426", resp.StatusCode)
+	}
+}
+
+// TestPollWS_MalformedIDIs404 ports the old route's malformed-id rejection. The Go route has no
+// separate id-shape check: any id that is not a live poll — malformed or merely unknown — is
+// rejected during the handshake as 404 not_found by PollExists, before any upgrade or Subscribe.
+func TestPollWS_MalformedIDIs404(t *testing.T) {
+	server, _, _, _ := newTestMux(t)
+	dialWSExpectStatus(t, server, "/api/v1/polls/not-a-valid-id!/ws", nil, http.StatusNotFound)
+}
+
 // TestPollWS_ConnectRateLimited is I5's regression test: the poll WS route's connect budget
 // (wsConnectLimit/wsConnectWindow, endpoints.go) rejects a caller once it exceeds 30 connects in
 // the window with 429, the standard rate_limited envelope — the same status/code shape
