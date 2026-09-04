@@ -2,10 +2,14 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
+	"io/fs"
+	"sync"
 	"testing"
 
 	"github.com/refsdal/whenweall/internal/db"
 	"github.com/refsdal/whenweall/internal/testdb"
+	"github.com/refsdal/whenweall/migrations"
 )
 
 func TestMigrationsCreateInfraTables(t *testing.T) {
@@ -97,5 +101,100 @@ func TestTwoFactorLeftoversDropped(t *testing.T) {
 	}
 	if columns != 0 {
 		t.Error("users.two_factor_enabled column still exists")
+	}
+}
+
+// migrationCount is the number of goose migration files — and, since they are numbered 00001..N
+// contiguously, the version_id the schema must sit at when fully migrated.
+func migrationCount(t *testing.T) int {
+	t.Helper()
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no migration files embedded")
+	}
+	return len(files)
+}
+
+// TestMigrationsDownToZeroAndBackUp is the first time any Down section runs: a broken Down (a
+// missing DROP, a wrong dependency order) should surface here, not during an emergency rollback.
+func TestMigrationsDownToZeroAndBackUp(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+
+	if err := db.MigrateDownTo(ctx, d, 0); err != nil {
+		t.Fatalf("goose down to 0: %v", err)
+	}
+	var leftover int
+	if err := d.QueryRowContext(ctx,
+		"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name <> 'goose_db_version'",
+	).Scan(&leftover); err != nil {
+		t.Fatal(err)
+	}
+	if leftover != 0 {
+		t.Fatalf("%d tables survived a full Down — some migration's Down section is incomplete", leftover)
+	}
+
+	if err := db.Migrate(ctx, d); err != nil {
+		t.Fatalf("goose up after down: %v", err)
+	}
+	var version int64
+	if err := d.QueryRowContext(ctx, "SELECT max(version_id) FROM goose_db_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if int(version) != migrationCount(t) {
+		t.Fatalf("version after re-migrating = %d, want %d", version, migrationCount(t))
+	}
+}
+
+// TestConcurrentMigrateAppliesEachMigrationOnce is spec §6's "auto-run at boot under a PG advisory
+// lock" proof: several replicas booting against an empty database at the same instant must each
+// return success and leave exactly one version row per migration.
+func TestConcurrentMigrateAppliesEachMigrationOnce(t *testing.T) {
+	url, d := testdb.URL(t)
+	ctx := context.Background()
+	if err := db.MigrateDownTo(ctx, d, 0); err != nil {
+		t.Fatalf("goose down to 0: %v", err)
+	}
+
+	const replicas = 4
+	pools := make([]*sql.DB, replicas)
+	for i := range pools {
+		pool, err := db.Open(ctx, url, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pool.Close() }()
+		pools[i] = pool
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, replicas)
+	var wg sync.WaitGroup
+	for _, pool := range pools {
+		wg.Add(1)
+		go func(p *sql.DB) {
+			defer wg.Done()
+			<-start
+			errs <- db.Migrate(ctx, p)
+		}(pool)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Migrate: %v", err)
+		}
+	}
+
+	var applied int
+	if err := d.QueryRowContext(ctx, "SELECT count(*) FROM goose_db_version WHERE version_id > 0").Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != migrationCount(t) {
+		t.Fatalf("goose_db_version has %d applied rows, want %d (each migration applied exactly once)", applied, migrationCount(t))
 	}
 }

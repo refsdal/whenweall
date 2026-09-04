@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -51,7 +52,26 @@ func Open(ctx context.Context, databaseURL string, poolSize int) (*sql.DB, error
 // migrationLock is an arbitrary fixed key: replicas booting together must not race goose.
 const migrationLock = 727272
 
-func Migrate(ctx context.Context, sqlDB *sql.DB) error {
+// gooseInit guards goose's process-global configuration (base FS, dialect). Migrate can be called
+// from several goroutines at once — the concurrent-boot test does exactly that — and two
+// unsynchronized writes to goose's package-level state would be a data race even though both
+// write the same values.
+var (
+	gooseInit    sync.Once
+	gooseInitErr error
+)
+
+func gooseSetup() error {
+	gooseInit.Do(func() {
+		goose.SetBaseFS(migrations.FS)
+		gooseInitErr = goose.SetDialect("postgres")
+	})
+	return gooseInitErr
+}
+
+// withMigrationLock runs fn while holding the advisory lock on a dedicated connection: replicas
+// booting together must not race goose.
+func withMigrationLock(ctx context.Context, sqlDB *sql.DB, fn func() error) error {
 	conn, err := sqlDB.Conn(ctx)
 	if err != nil {
 		return err
@@ -68,12 +88,27 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 			slog.Warn("failed to release migration advisory lock", "error", err)
 		}
 	}()
-
-	goose.SetBaseFS(migrations.FS)
-	if err := goose.SetDialect("postgres"); err != nil {
+	if err := gooseSetup(); err != nil {
 		return err
 	}
-	return goose.UpContext(ctx, sqlDB, ".")
+	return fn()
+}
+
+// Migrate applies every pending migration (goose up) under the advisory lock.
+func Migrate(ctx context.Context, sqlDB *sql.DB) error {
+	return withMigrationLock(ctx, sqlDB, func() error {
+		return goose.UpContext(ctx, sqlDB, ".")
+	})
+}
+
+// MigrateDownTo rolls the schema back to version (0 = undo everything) under the same advisory
+// lock. Tests and operator tooling only — `serve` and `migrate` never call it; it exists so the
+// Down sections actually get exercised (TestMigrationsDownToZeroAndBackUp) instead of being
+// trusted blind until an emergency rollback.
+func MigrateDownTo(ctx context.Context, sqlDB *sql.DB, version int64) error {
+	return withMigrationLock(ctx, sqlDB, func() error {
+		return goose.DownToContext(ctx, sqlDB, ".", version)
+	})
 }
 
 const idAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
