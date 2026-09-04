@@ -55,6 +55,14 @@ export function isDigestEvent(event: NotificationEvent): event is DigestEvent {
 /** Everything that is not batched — exactly the set the single-event email template covers. */
 export type ImmediateEvent = Exclude<NotificationEvent, DigestEvent>
 
+/**
+ * `push` is STORED BUT NEVER DELIVERED. Nothing subscribes a browser, and nothing sends: there is
+ * no service worker, no VAPID keypair and no send path, here or in the Go backend. The field is
+ * kept because it is the shape of the `channels` jsonb column on `notification_prefs` and
+ * `notification_subscriptions` — dropping it would be a data migration for no user-visible gain
+ * — but no UI offers it as a choice (`NotificationGrid` renders the email column alone, and its
+ * test holds that true). If push is ever built, this is the field it lands on.
+ */
 export type ChannelPrefs = { email: boolean; push: boolean }
 export type NotificationGrid = Partial<Record<NotificationEvent, ChannelPrefs>>
 
@@ -64,8 +72,8 @@ const neither: ChannelPrefs = { email: false, push: false }
 
 /**
  * The grid a user has before they ever open settings. Withdrawals are off because they are the
- * noisiest and least actionable event; push defaults to the handful of things worth interrupting
- * someone for rather than everything email covers.
+ * noisiest and least actionable event. The `push` values below describe what push WOULD do if it
+ * existed (see `ChannelPrefs`) and currently decide nothing at all.
  */
 export const SYSTEM_DEFAULTS: Record<NotificationEvent, ChannelPrefs> = {
   'response.created': both,
