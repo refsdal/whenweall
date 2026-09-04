@@ -19,7 +19,10 @@ The stats room additionally has a plain REST read, `GET /api/v1/stats`, returnin
 `UsageStats` object the stats route's snapshot frame nests under `data`, with
 `Cache-Control: no-store`. The landing route's loader uses it for first paint (and it is the only
 source of real numbers behind a proxy that does not forward WebSocket upgrades); the socket
-remains the live source once connected.
+remains the live source once connected. Like the WS route, it is public but not unmetered: it sits
+behind its own `PublicRateLimit` bucket (`rooms.stats_read`, 60/min per IP — generous headroom for
+the once-per-page-load loader call, separate from `ws_connect`'s 30/min budget above), since it
+costs the same DB read the WS route's own snapshot frame does.
 
 The booking route's path is `/api/v1/booking-pages/{pageId}/ws` (renamed from
 `/api/v1/bookings/{pageId}/ws` to match the REST surface's own `/api/v1/booking-pages/*` naming —

@@ -13,8 +13,10 @@ package rooms_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -411,5 +413,52 @@ func TestStatsREST_ReturnsCurrentCounters(t *testing.T) {
 	}
 	if got.PollsCreated != 3 || got.ResponsesYes != 2 {
 		t.Errorf("stats = %+v, want PollsCreated=3 ResponsesYes=2", got)
+	}
+}
+
+// TestStatsREST_RateLimited is the fix-round regression test for a review finding (go-rewrite-08
+// T6/T7 review): GET /api/v1/stats shipped with no rate limiter at all, unlike every other public
+// route in this package (its own WS sibling included), despite costing the identical
+// stats.Snapshot DB round trip. It now sits behind its own "rooms.stats_read" PublicRateLimit
+// bucket (statsReadLimit/statsReadWindow, endpoints.go) — 60/min per IP, distinct from
+// "rooms.ws_connect"'s 30/min — so this drives that exact budget (all requests share one httptest
+// client, hence one RemoteAddr/key) rather than constructing an isolated PublicRateLimit the way
+// TestPublicRateLimitEnforcedByDefault does, since the budget here is baked into Register's own
+// wiring rather than passed in.
+func TestStatsREST_RateLimited(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	hub := startHub(t, url, sqlDB)
+	stats := rooms.NewStatsService(sqlDB, nil)
+
+	mux := http.NewServeMux()
+	rooms.Register(mux, hub, newFakeWSAuth(), &fakePollService{byID: map[string]any{}}, &fakeBookingService{}, stats, &config.Config{})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	for i := 0; i < 60; i++ {
+		resp, err := http.Get(server.URL + "/api/v1/stats")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200 (under the 60/min budget)", i+1, resp.StatusCode)
+		}
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("61st request: status = %d, want 429", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"code":"rate_limited"`) {
+		t.Errorf("body = %q, want code rate_limited", body)
 	}
 }

@@ -37,6 +37,18 @@ const (
 	wsConnectWindow = time.Minute
 )
 
+// statsReadLimit/statsReadWindow bound the plain REST stats read (GET /api/v1/stats) added
+// alongside the WS route — a fix-round finding (go-rewrite-08 T6/T7 review) that the REST read
+// shipped with none of the throttling its WS sibling has, despite costing the identical
+// stats.Snapshot -> readCurrent DB round trip. The landing route's loader fires this once per page
+// load, so 60/min per IP leaves ample headroom for a real visitor (including a hard refresh loop)
+// while still bounding a flood the same way every other PublicRateLimit bucket in this package
+// does; double wsConnectLimit's budget since a plain GET costs less than a WS handshake+upgrade.
+const (
+	statsReadLimit  = 60
+	statsReadWindow = time.Minute
+)
+
 // PollViewer identifies the caller connecting to a poll's WS room — the same shape polls.Viewer
 // carries (UserID / GuestParticipantID), redeclared here so PollService's signature never needs
 // to import internal/polls itself (see this file's package doc comment). internal/polls/ws.go's
@@ -110,20 +122,33 @@ type BookingService interface {
 //   - GET /api/v1/stats/ws — fully public, no gate at all. roomKey "stats:global". Presence OFF —
 //     a global anonymous counter has no per-viewer identity worth counting, and StatsRoom.ts's
 //     own DO never tracked one either. Connect-rate-limited, same as polls above.
+//
+// Register also mounts one plain REST route alongside those three: GET /api/v1/stats (T7), the
+// stats room's snapshot as JSON for the landing page's first paint. Public like its WS sibling,
+// and — a fix-round finding, T6/T7 review — rate-limited like it too (statsRead, its own
+// "rooms.stats_read" bucket, distinct from ws_connect's): it costs the identical
+// stats.Snapshot -> readCurrent DB round trip the WS route's own connect-time frame does, so
+// leaving it unmetered would have been exactly the traffic shape PublicRateLimit exists to bound
+// everywhere else in this codebase.
 func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, bookings BookingService, stats *StatsService, cfg *config.Config) {
 	// h.sqlDB (not a separate parameter): Register lives in the same package as Hub, so it can
 	// reach the pool the hub itself already holds rather than asking every caller to pass it again
 	// — main.go's own rooms.NewHub(cfg.DatabaseURL, sqlDB, ...) call is the same sqlDB either way.
 	connectLimit := httpserver.PublicRateLimit(h.sqlDB, cfg, "rooms", "ws_connect", wsConnectLimit, wsConnectWindow)
+	// statsReadLimit's own bucket, distinct from connectLimit's "rooms.ws_connect" (a different
+	// namespace/name pair, so the two never share a budget) — see statsReadLimit's own doc comment.
+	statsRead := httpserver.PublicRateLimit(h.sqlDB, cfg, "rooms", "stats_read", statsReadLimit, statsReadWindow)
 
 	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
 	mux.Handle("GET /api/v1/booking-pages/{pageId}/ws", connectLimit(bookingWSHandler(h, a, bookings)))
 	mux.Handle("GET /api/v1/stats/ws", connectLimit(statsWSHandler(h, stats)))
 
 	// The stats room's REST read: the landing route's loader fetches this for first paint, then
-	// the WS route above takes over for live updates. Unmetered (it is one cheap row read, and
-	// the landing page is the most-visited URL on the site) and unauthenticated, like the WS route.
-	mux.HandleFunc("GET /api/v1/stats", statsSnapshotHandler(stats))
+	// the WS route above takes over for live updates. Unauthenticated, like the WS route, but NOT
+	// unmetered — it costs the identical stats.Snapshot -> readCurrent DB round trip the WS route's
+	// own connect-time snapshot frame does, so it gets its own PublicRateLimit bucket (statsRead)
+	// rather than being the one public mutating-or-reading route in this codebase left unbounded.
+	mux.Handle("GET /api/v1/stats", statsRead(statsSnapshotHandler(stats)))
 }
 
 // pollWSHandler builds one poll WS connection's handler per request (rather than a single

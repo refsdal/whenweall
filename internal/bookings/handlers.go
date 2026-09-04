@@ -59,8 +59,8 @@ import (
 type Auth = httpserver.Auth
 
 // Register mounts this package's whole HTTP surface on mux, following internal/polls/
-// handlers.go's Register exactly: thin handlers, a single shared public rate limiter
-// (bookLimit) for every visitor-facing endpoint on this public booking-flow surface — mirroring
+// handlers.go's Register exactly: thin handlers, a shared public rate limiter (bookLimit) for
+// every visitor-facing endpoint on this public booking-flow surface — mirroring
 // src/server/bookings/bookings.functions.ts's own SERVER_FN_MIDDLEWARE, whose every
 // visitor-facing entry point (getPublicAvailability, bookSlot, cancelBooking, rescheduleBooking)
 // shares the single 'book' rate-limit bucket — plus GetPublicPage, which the TS source has no
