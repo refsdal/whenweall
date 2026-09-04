@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/refsdal/whenweall/internal/polls"
@@ -921,6 +922,72 @@ func TestDeleteComment(t *testing.T) {
 		err = s.DeleteComment(ctx, created.ID, comment.ID, polls.Viewer{UserID: ownerID})
 		if !errors.Is(err, polls.ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// TestVoteAnswerMustBeYesIfneedbeNo ports answerSchema (main:src/server/polls/schemas.ts:17,
+// z.enum(['yes','ifneedbe','no'])): any other value is a validation failure on "answers" at the
+// service layer and — since votes.answer is read back verbatim by every viewer and by scoring —
+// rejected by the database too (migration 00011's CHECK constraint).
+func TestVoteAnswerMustBeYesIfneedbeNo(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+	opt := created.Options[0].ID
+
+	t.Run("AddParticipant rejects an unknown answer", func(t *testing.T) {
+		_, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{
+			Name: "Ada", Answers: map[string]string{opt: "maybe"},
+		}, polls.Viewer{})
+		if !errors.Is(err, polls.ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation", err)
+		}
+		if fieldsOf(t, err)["answers"] == "" {
+			t.Errorf("fields = %v, want an answers message", fieldsOf(t, err))
+		}
+	})
+
+	t.Run("UpdateParticipant rejects an unknown answer and keeps the old vote", func(t *testing.T) {
+		result, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{
+			Name: "Bob", Answers: map[string]string{opt: "yes"},
+		}, polls.Viewer{})
+		if err != nil {
+			t.Fatalf("AddParticipant: %v", err)
+		}
+		err = s.UpdateParticipant(ctx, created.ID, result.ParticipantID, polls.ParticipantInput{
+			Answers: map[string]string{opt: "YES"},
+		}, polls.Viewer{GuestParticipantID: result.ParticipantID})
+		if !errors.Is(err, polls.ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation", err)
+		}
+		view, err := s.GetView(ctx, created.ID, polls.Viewer{})
+		if err != nil {
+			t.Fatalf("GetView: %v", err)
+		}
+		if p := findParticipant(view, result.ParticipantID); p == nil || p.Votes[opt] != "yes" {
+			t.Errorf("participant = %+v, want the original yes vote untouched", p)
+		}
+	})
+
+	t.Run("each of yes, ifneedbe, no is accepted", func(t *testing.T) {
+		for _, answer := range []string{"yes", "ifneedbe", "no"} {
+			if _, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{
+				Name: "Voter " + answer, Answers: map[string]string{opt: answer},
+			}, polls.Viewer{}); err != nil {
+				t.Errorf("answer %q: %v", answer, err)
+			}
+		}
+	})
+
+	t.Run("votes.answer CHECK constraint rejects a direct write", func(t *testing.T) {
+		pid := seedParticipant(t, d, created.ID, "Direct", nil, "")
+		_, err := d.ExecContext(ctx,
+			`INSERT INTO votes (participant_id, option_id, answer) VALUES ($1, $2, 'maybe')`, pid, opt)
+		if err == nil || !strings.Contains(err.Error(), "votes_answer_check") {
+			t.Fatalf("insert err = %v, want a votes_answer_check violation", err)
 		}
 	})
 }

@@ -127,6 +127,14 @@ func validateAnswersTx(ctx context.Context, q *queries.Queries, pollID string, a
 		if !validIDs[optionID] {
 			return newValidationError("answers", fmt.Sprintf("option %q is not on this poll", optionID))
 		}
+		// answerSchema (schemas.ts): the only three values a vote may hold. Checked here, not just by
+		// the CHECK constraint (migration 00011), so a bad value is a 422 with a field message rather
+		// than a 500 from a constraint violation.
+		switch answer {
+		case "yes", "ifneedbe", "no":
+		default:
+			return newValidationError("answers", fmt.Sprintf("answer %q for option %q must be one of yes, ifneedbe, no", answer, optionID))
+		}
 		if answer == "ifneedbe" && !allowIfNeedBe {
 			return newValidationError("answers", "ifneedbe is not allowed on this poll")
 		}

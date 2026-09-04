@@ -1222,3 +1222,23 @@ func TestHandlerValidatesPublicInput(t *testing.T) {
 		}
 	})
 }
+
+// TestHandlerRejectsUnknownAnswer is TestVoteAnswerMustBeYesIfneedbeNo's HTTP-layer twin: the
+// service's *ValidationError surfaces as 422 invalid with fields.answers.
+func TestHandlerRejectsUnknownAnswer(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, _, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+
+	body := map[string]any{"name": "Ada", "answers": map[string]string{created.Options[0].ID: "maybe"}}
+	rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/participants", body, nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body)
+	}
+	if errCode(t, rec) != "invalid" || errFields(t, rec)["answers"] == "" {
+		t.Errorf("envelope = %s, want code invalid with fields.answers", rec.Body)
+	}
+}
