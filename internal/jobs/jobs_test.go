@@ -533,8 +533,11 @@ func TestCancelRemovesRoomJob(t *testing.T) {
 }
 
 // TestPayloadExpired pins the rule the admin console's 409 "payload_expired" and FailedJobView's
-// payloadExpired flag both lean on: only a mail:* job can have had its payload purged (every mail
-// kind is enqueued WITH one), so a NULL payload on one means deadletter:sweep cleared it.
+// payloadExpired flag both lean on: only "mail:send" can have had its payload purged by
+// deadletter:sweep — it's the only kind carrying anything sensitive (a recipient address, and for
+// verify_email/reset_password the raw token). "mail:poll" and "mail:booking" carry ids only, the
+// sweep never purges them (housekeeping.go's sweepDeadLetters), and PayloadExpired must not claim
+// otherwise for them.
 func TestPayloadExpired(t *testing.T) {
 	cases := []struct {
 		kind       string
@@ -542,8 +545,8 @@ func TestPayloadExpired(t *testing.T) {
 		want       bool
 	}{
 		{"mail:send", false, true},
-		{"mail:poll", false, true},
-		{"mail:booking", false, true},
+		{"mail:poll", false, false},
+		{"mail:booking", false, false},
 		{"mail:send", true, false},
 		{"poll.digest", false, false},
 		{"deadletter:sweep", false, false},

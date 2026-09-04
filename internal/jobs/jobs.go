@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -355,12 +354,23 @@ func scanJob(s rowScanner) (Job, error) {
 }
 
 // PayloadExpired reports whether a dead-lettered job's payload has been purged by the
-// deadletter:sweep housekeeping job (housekeeping.go): a "mail:*" job whose payload is NULL. Every
-// mail kind is enqueued WITH a payload — mailer.Enqueue's rendered Message for "mail:send", the
-// ids-only payloads of internal/polls' "mail:poll" and internal/bookings' "mail:booking" — so a
-// missing one can only mean the sweep cleared it, and such a job can never be retried: its
-// handler would have nothing to send. Non-mail kinds legitimately run with no payload at all
-// (the housekeeping chains, poll.deadline) and are never "expired".
+// deadletter:sweep housekeeping job (housekeeping.go): a "mail:send" job whose payload is NULL.
+// Only "mail:send" carries anything sensitive — mailer.Enqueue's rendered Message, including the
+// recipient address and, for verify_email/reset_password, the raw token. "mail:poll"
+// (internal/polls) and "mail:booking" (internal/bookings) carry ids only (never an address) and
+// are never purged by the sweep, so a NULL payload on either of those means it was never given
+// one — which can't happen, since both are always enqueued with one — not that it expired; treat
+// it the same as any other non-"mail:send" kind. A missing "mail:send" payload can only mean the
+// sweep cleared it, and such a job can never be retried: its handler would have nothing to send.
+// Non-"mail:send" kinds legitimately run with no payload at all (the housekeeping chains,
+// poll.deadline) and are never "expired".
 func PayloadExpired(kind string, hasPayload bool) bool {
-	return strings.HasPrefix(kind, "mail:") && !hasPayload
+	return kind == mailSendJobKind && !hasPayload
 }
+
+// mailSendJobKind is internal/mailer's mailSendKind ("mail:send"), redeclared here rather than
+// imported — this package (internal/jobs) is imported BY internal/mailer, so the reverse edge
+// would be a compile-time import cycle. Sweeping and PayloadExpired must both key off exactly this
+// string; a jobs_test.go case pins that "mail:send" (not "mail:poll"/"mail:booking") is the one
+// kind PayloadExpired treats as purgeable.
+const mailSendJobKind = "mail:send"

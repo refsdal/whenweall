@@ -341,11 +341,13 @@ func runDeadletterSweep(t *testing.T, d *sql.DB) {
 	}
 }
 
-// TestDeadletterSweepPurgesOldMailPayloadsOnly: a dead mail:* row older than 24h loses its payload
-// (the recipient address and any verify/reset token) but keeps kind/attempts/last_error, so the
-// console still shows WHAT failed and WHY; a dead mail row younger than 24h keeps its payload (a
-// staff member may still Retry it); a dead non-mail row keeps its payload regardless (ids only,
-// nothing sensitive, and Retry must keep working for it).
+// TestDeadletterSweepPurgesOldMailPayloadsOnly: a dead mail:send row older than 24h loses its
+// payload (the recipient address and any verify/reset token) but keeps kind/attempts/last_error,
+// so the console still shows WHAT failed and WHY; a dead mail:send row younger than 24h keeps its
+// payload (a staff member may still Retry it); a dead non-mail:send row keeps its payload
+// regardless (ids only, nothing sensitive, and Retry must keep working for it — see
+// TestDeadletterSweepNeverPurgesMailPollOrMailBookingPayloads below for the two other mail kinds
+// specifically).
 func TestDeadletterSweepPurgesOldMailPayloadsOnly(t *testing.T) {
 	d := testdb.New(t)
 	mailPayload := strPtr(`{"to":"secret-recipient@example.com","data":{"URL":"http://app.example/verify-email?token=super-secret"}}`)
@@ -363,7 +365,7 @@ func TestDeadletterSweepPurgesOldMailPayloadsOnly(t *testing.T) {
 		t.Errorf("fresh mail row after sweep = %+v, want untouched (younger than 24h — staff may still retry it)", got)
 	}
 	if got := readDeadRow(t, d, oldOther); !got.found || !got.hasPayload {
-		t.Errorf("old non-mail row after sweep = %+v, want payload kept (only mail:* payloads carry addresses/tokens)", got)
+		t.Errorf("old non-mail:send row after sweep = %+v, want payload kept (only mail:send payloads carry addresses/tokens)", got)
 	}
 
 	var runAt time.Time
@@ -374,6 +376,48 @@ func TestDeadletterSweepPurgesOldMailPayloadsOnly(t *testing.T) {
 	}
 	if !runAt.After(time.Now()) {
 		t.Errorf("run_at = %v, want in the future (rescheduled)", runAt)
+	}
+}
+
+// TestDeadletterSweepNeverPurgesMailPollOrMailBookingPayloads: the payload purge is narrower than
+// "mail:*" — only "mail:send" carries anything sensitive (a recipient address, and for
+// verify/reset mail the raw token). "mail:poll" (internal/polls) and "mail:booking"
+// (internal/bookings) carry ids only, so an old dead row of either kind must keep its payload
+// (and so stay retryable — jobs.PayloadExpired must report false for both) even long past the
+// 24h payload retention window, while an equally old "mail:send" row is still purged and becomes
+// unretryable. This is the regression test for IMPORTANT 1: a broader "mail:%" purge would
+// permanently strand a dead-lettered booking confirmation or poll digest after an SMTP outage,
+// mail a visitor cannot simply re-request.
+func TestDeadletterSweepNeverPurgesMailPollOrMailBookingPayloads(t *testing.T) {
+	d := testdb.New(t)
+	oldPoll := seedDeadRow(t, d, "mail:poll", strPtr(`{"pollId":"p1","event":"closed","userId":"u1"}`), "2 days")
+	oldBooking := seedDeadRow(t, d, "mail:booking", strPtr(`{"kind":"confirmation","bookingId":"b1","recipient":"visitor"}`), "2 days")
+	oldSend := seedDeadRow(t, d, "mail:send", strPtr(`{"to":"secret@example.com"}`), "2 days")
+
+	runDeadletterSweep(t, d)
+
+	pollRow := readDeadRow(t, d, oldPoll)
+	if !pollRow.found || !pollRow.hasPayload {
+		t.Errorf("old mail:poll row after sweep = %+v, want payload kept (ids only, never purged)", pollRow)
+	}
+	if jobs.PayloadExpired("mail:poll", pollRow.hasPayload) {
+		t.Errorf("PayloadExpired(mail:poll, hasPayload=%v) = true, want false — mail:poll is never purged", pollRow.hasPayload)
+	}
+
+	bookingRow := readDeadRow(t, d, oldBooking)
+	if !bookingRow.found || !bookingRow.hasPayload {
+		t.Errorf("old mail:booking row after sweep = %+v, want payload kept (ids only, never purged)", bookingRow)
+	}
+	if jobs.PayloadExpired("mail:booking", bookingRow.hasPayload) {
+		t.Errorf("PayloadExpired(mail:booking, hasPayload=%v) = true, want false — mail:booking is never purged", bookingRow.hasPayload)
+	}
+
+	sendRow := readDeadRow(t, d, oldSend)
+	if !sendRow.found || sendRow.hasPayload {
+		t.Errorf("old mail:send row after sweep = %+v, want payload purged", sendRow)
+	}
+	if !jobs.PayloadExpired("mail:send", sendRow.hasPayload) {
+		t.Errorf("PayloadExpired(mail:send, hasPayload=%v) = false, want true — mail:send IS purged", sendRow.hasPayload)
 	}
 }
 

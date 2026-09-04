@@ -141,14 +141,21 @@ func deleteStalePresenceRows(ctx context.Context, sqlDB *sql.DB) (map[string]str
 // sweepDeadLetters is the dead-letter queue's only reclaimer (jobs.go's Dead: "Nothing reclaims
 // these" — until this). Two statements:
 //
-//  1. NULL the payload of every dead-lettered "mail:*" row older than deadletterPayloadRetention.
-//     mailer.Enqueue stores the fully rendered Message as the payload — the recipient address
-//     and, for verify_email/reset_password (internal/auth's enqueueTokenMail), the raw token in
-//     Data.URL — and a dead row otherwise keeps it forever, readable by anyone with DB access.
-//     kind/attempts/last_error are kept so the admin console's failed-jobs screen still shows
-//     WHAT failed and WHY; only the sensitive part goes. Retry of such a row is refused with 409
-//     "payload_expired" (internal/admin/handlers.go, via PayloadExpired). Non-mail kinds carry ids
-//     only and are left alone so Retry keeps working for them.
+//  1. NULL the payload of every dead-lettered "mail:send" row older than
+//     deadletterPayloadRetention. mailer.Enqueue stores the fully rendered Message as the
+//     payload — the recipient address and, for verify_email/reset_password (internal/auth's
+//     enqueueTokenMail), the raw token in Data.URL — and a dead row otherwise keeps it forever,
+//     readable by anyone with DB access. kind/attempts/last_error are kept so the admin console's
+//     failed-jobs screen still shows WHAT failed and WHY; only the sensitive part goes. Retry of
+//     such a row is refused with 409 "payload_expired" (internal/admin/handlers.go, via
+//     PayloadExpired). Every OTHER kind — including the other two "mail:*" kinds,
+//     internal/polls' "mail:poll" and internal/bookings' "mail:booking" — carries ids only (never
+//     an address, per mailPollPayload's and mailBookingPayload's own doc comments) and is left
+//     alone so Retry keeps working for them; this is deliberately narrower than "mail:*" (see
+//     jobs.PayloadExpired's doc comment for why a broader purge here would be wrong) — an SMTP
+//     outage that dead-letters a batch of booking confirmations or poll digests must not make
+//     them permanently unretryable, since unlike a verification mail a visitor cannot simply
+//     re-request a booking confirmation.
 //  2. DELETE every dead-lettered row of any kind older than deadletterRowRetention.
 //
 // Both predicates require attempts >= max_attempts: a live row is never touched however old its
@@ -157,7 +164,7 @@ func deleteStalePresenceRows(ctx context.Context, sqlDB *sql.DB) (map[string]str
 func sweepDeadLetters(ctx context.Context, sqlDB *sql.DB) error {
 	if _, err := sqlDB.ExecContext(ctx, `
 		UPDATE scheduled_jobs SET payload = NULL
-		WHERE kind LIKE 'mail:%'
+		WHERE kind = 'mail:send'
 		  AND attempts >= max_attempts
 		  AND payload IS NOT NULL
 		  AND run_at < now() - `+deadletterPayloadRetention); err != nil {
