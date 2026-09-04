@@ -179,6 +179,38 @@ func TestDeleteMe_RequiresCurrentPasswordForCredentialAccounts(t *testing.T) {
 	h.mustStatus(h.do(http.MethodGet, "/api/v1/auth/me", nil), http.StatusUnauthorized, "GET /me after delete")
 }
 
+// TestDeleteMe_IsRateLimited is the reviewer's finding 2: DELETE /api/v1/me runs Argon2id
+// (auth.ComparePassword) with no rate limit at all, unlike every other password-verifying entry
+// point (POST /signin/credential gets both authRateLimitMiddleware's 10/min and
+// credential-password's own 5-per-10s rule). Five wrong-password attempts per minute is the
+// budget this account.delete limiter is meant to enforce (account.go's fix); the sixth must be
+// refused with 429 rate_limited before ComparePassword ever runs again, regardless of whether the
+// password supplied would have been right or wrong.
+func TestDeleteMe_IsRateLimited(t *testing.T) {
+	h := newAccountHarness(t)
+	email := "delete-me-ratelimit@example.com"
+	h.signUp(email)
+	h.verify(email)
+	h.signIn(email)
+
+	for i := 1; i <= 5; i++ {
+		resp := h.do(http.MethodDelete, "/api/v1/me", map[string]any{"password": "wrong"})
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("attempt %d: status = %d, want 403 invalid_password while under the rate-limit budget", i, resp.StatusCode)
+		}
+	}
+
+	body := h.mustStatus(h.do(http.MethodDelete, "/api/v1/me", map[string]any{"password": "wrong"}), http.StatusTooManyRequests, "DELETE /me over the rate-limit budget")
+	if h.errorCode(body) != "rate_limited" {
+		t.Errorf("error.code = %q, want rate_limited", h.errorCode(body))
+	}
+
+	// The account must still exist: even the correct password must not get through once the
+	// budget is exhausted.
+	h.me()
+}
+
 func TestMyOrganizations_ListAndSwitch(t *testing.T) {
 	h := newAccountHarness(t)
 	email := "orgs-http@example.com"

@@ -9,6 +9,7 @@ package httpserver
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/refsdal/whenweall/internal/auth"
 )
@@ -30,9 +31,21 @@ type switchOrganizationRequest struct {
 // RequireSessionAllowUnverified: an unverified user must be able to set their locale (so the
 // verification mail we resend is in their language) and to delete an account they cannot
 // otherwise use. The organization routes are verified-only like everything else.
+//
+// DELETE carries its own rate limit (5/min per client IP, the same shape authRateLimit builds for
+// the auth surface): handleDeleteMe's CheckOwnPassword runs Limen's Argon2id hasher
+// (t=3, m=64 MiB, p=4) against caller-supplied input, and — unlike every other password-verifying
+// entry point in this codebase (POST /signin/credential gets both authRateLimitMiddleware and
+// credential-password's own budget) — this route sits outside the Limen mount entirely, so
+// nothing metered it at all. Any session, verified or not (RequireSessionAllowUnverified), could
+// otherwise spend unlimited 64 MiB Argon2id computations per second: both a memory-exhaustion DoS
+// and an unmetered password-guessing oracle for anyone holding a stolen session cookie.
 func (s *Server) registerAccountRoutes() {
+	deleteMeRateLimit := RateLimit(s.db, "account.delete", 5, time.Minute, func(r *http.Request) string {
+		return ClientIP(r, s.cfg.TrustProxy)
+	})
 	s.mux.HandleFunc("PATCH /api/v1/me", s.authSvc.RequireSessionAllowUnverified(s.handleUpdateMe))
-	s.mux.HandleFunc("DELETE /api/v1/me", s.authSvc.RequireSessionAllowUnverified(s.handleDeleteMe))
+	s.mux.Handle("DELETE /api/v1/me", deleteMeRateLimit(s.authSvc.RequireSessionAllowUnverified(s.handleDeleteMe)))
 	s.mux.HandleFunc("GET /api/v1/me/organizations", s.authSvc.RequireSession(s.handleListMyOrganizations))
 	s.mux.HandleFunc("POST /api/v1/me/active-organization", s.authSvc.RequireSession(s.handleSwitchOrganization))
 }
