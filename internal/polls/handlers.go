@@ -43,6 +43,7 @@ import (
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/httpserver"
+	"github.com/refsdal/whenweall/internal/mailer"
 	"github.com/refsdal/whenweall/internal/polls/queries"
 )
 
@@ -1023,7 +1024,7 @@ func (s *Service) handleRosterCSV(w http.ResponseWriter, r *http.Request, sess *
 		writeServiceError(w, err)
 		return
 	}
-	csv, err := s.BuildRosterCSV(r.Context(), pollID)
+	csv, err := s.BuildRosterCSV(r.Context(), pollID, httpserver.RequestLocale(r, mailer.SupportedLocales))
 	if err != nil {
 		writeServiceError(w, err)
 		return

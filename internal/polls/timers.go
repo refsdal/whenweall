@@ -475,7 +475,7 @@ func (s *Service) sendFinalizedMail(ctx context.Context, m MailSender, poll quer
 		Data: map[string]any{
 			"PollTitle":     poll.Title,
 			"PollURL":       pollURL,
-			"OptionLabel":   optionLabelText(*option, poll.Timezone),
+			"OptionLabel":   optionLabelText(*option, locale, poll.Timezone),
 			"RecipientName": name,
 			"Locale":        locale,
 		},
@@ -599,6 +599,7 @@ func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, p
 	if p.PollID != poll.ID || !p.Email.Valid {
 		return nil
 	}
+	locale := orDefaultLocale(p.Locale)
 
 	votes, err := s.q.ListVotesByParticipant(ctx, p.ID)
 	if err != nil {
@@ -621,7 +622,7 @@ func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, p
 	slots := make([]string, 0, len(claimed))
 	for _, o := range options {
 		if claimed[o.ID] {
-			slots = append(slots, optionLabelText(o, poll.Timezone))
+			slots = append(slots, optionLabelText(o, locale, poll.Timezone))
 		}
 	}
 
@@ -633,7 +634,7 @@ func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, p
 			"PollTitle": poll.Title,
 			"PollURL":   pollURL,
 			"Slots":     slots,
-			"Locale":    orDefaultLocale(p.Locale),
+			"Locale":    locale,
 		},
 	})
 }
@@ -670,15 +671,13 @@ func buildDigestLines(items []DigestItem) []mailer.DigestLine {
 	return lines
 }
 
-// optionLabelText renders one poll option as a plain-English label for transactional mail
-// (finalized/claim_confirmation).
-//
-// Deviation/simplification: this is NOT a port of src/lib/time.ts's formatOptionLabel — that
-// helper is locale- and timezone-formatting-library-aware (Intl.DateTimeFormat) with no Go
-// equivalent brought over yet. This renders a plain English date/time string in the poll's own
-// timezone (falling back to UTC if the timezone name doesn't load) with no per-locale wording.
-// Flagged in the task report as a follow-up once a proper Go port of formatOptionLabel exists.
-func optionLabelText(o queries.PollOption, timezone string) string {
+// optionLabelText renders one poll option as a plain-text label in the recipient's locale —
+// formatOptionLabel (src/lib/time.ts) with primary/secondary/tertiary joined into one string,
+// built on internal/mailer's locale-aware formatters: a text option is its label; a date option
+// is a calendar date (FormatDate in UTC — never shifted by the poll's timezone); a datetime option
+// is FormatDateTime in the poll's timezone, or "<date>, <start>–<end>" when the option has an
+// end. Used by transactional mail (finalized/claim_confirmation) and the roster CSV.
+func optionLabelText(o queries.PollOption, locale, timezone string) string {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		loc = time.UTC
@@ -694,16 +693,16 @@ func optionLabelText(o queries.PollOption, timezone string) string {
 		if !o.StartAt.Valid {
 			return ""
 		}
-		return o.StartAt.Time.Format("Monday, January 2, 2006")
+		return mailer.FormatDate(locale, o.StartAt.Time, time.UTC)
 	case OptionKindDatetime:
 		if !o.StartAt.Valid {
 			return ""
 		}
-		s := o.StartAt.Time.In(loc).Format("Monday, January 2, 2006 3:04 PM")
 		if o.EndAt.Valid {
-			s += " – " + o.EndAt.Time.In(loc).Format("3:04 PM")
+			return mailer.FormatDate(locale, o.StartAt.Time, loc) + ", " +
+				mailer.FormatTimeRange(locale, o.StartAt.Time, o.EndAt.Time, loc)
 		}
-		return s
+		return mailer.FormatDateTime(locale, o.StartAt.Time, loc)
 	default:
 		return ""
 	}

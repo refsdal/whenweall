@@ -1248,3 +1248,110 @@ func TestUserRecipientMailUsesLocaleSource(t *testing.T) {
 		}
 	})
 }
+
+// fixtureStart/fixtureEnd is the one dated slot every locale-label test uses: Tue 1 Sep 2026,
+// 18:30–19:30 Europe/Oslo (16:30–17:30 UTC).
+const (
+	fixtureStart = "2026-09-01T16:30:00.000Z"
+	fixtureEnd   = "2026-09-01T17:30:00.000Z"
+	wantLabelEN  = "Tue 1 Sep, 18:30–19:30"
+	wantLabelNB  = "tir. 1. sep., 18:30–19:30"
+)
+
+// createDatedSignupPoll creates a sign-up sheet (Europe/Oslo) whose single slot is the fixture
+// datetime above, with unlimited capacity and maxClaims 2.
+func createDatedSignupPoll(t *testing.T, ctx context.Context, s *polls.Service, orgID, userID string) *polls.PollView {
+	t.Helper()
+	view, err := s.Create(ctx, orgID, userID, polls.CreatePollInput{
+		Type: polls.PollTypeSignup, Title: "Shifts", Timezone: "Europe/Oslo",
+		Options:         []polls.OptionInput{withCapacity(datetimeOption(fixtureStart, fixtureEnd), nil)},
+		SignupMaxClaims: intPtr(2),
+	})
+	if err != nil {
+		t.Fatalf("Create (dated signup): %v", err)
+	}
+	return view
+}
+
+// TestOptionLabelsFollowRecipientLocale ports formatOptionLabel's per-locale output
+// (main:src/lib/__tests__/time.test.ts:18-49: en "Tue 1 Sep" / "18:30" / "– 19:30", nb weekday
+// "tir…") as rendered into claim-confirmation Slots and the finalized mail's OptionLabel, via
+// Plan A's mailer.Format* helpers.
+func TestOptionLabelsFollowRecipientLocale(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("claim confirmation slots use the participant's locale", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		created := createDatedSignupPoll(t, ctx, s, orgID, ownerID)
+		slot := created.Options[0].ID
+
+		if _, err := s.Claim(ctx, created.ID, slot, polls.ClaimInput{Name: "Kari", Email: strPtr("kari@example.com"), Locale: strPtr("nb")}, polls.Viewer{}); err != nil {
+			t.Fatalf("Claim (nb): %v", err)
+		}
+		if _, err := s.Claim(ctx, created.ID, slot, polls.ClaimInput{Name: "Ada", Email: strPtr("ada@example.com")}, polls.Viewer{}); err != nil {
+			t.Fatalf("Claim (en): %v", err)
+		}
+
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+		drainJobs(t, ctx, w)
+
+		want := map[string][2]string{"kari@example.com": {"nb", wantLabelNB}, "ada@example.com": {"en", wantLabelEN}}
+		mails := rec.byTemplate("claim_confirmation")
+		if len(mails) != 2 {
+			t.Fatalf("claim_confirmation mails = %d, want 2", len(mails))
+		}
+		for _, m := range mails {
+			exp := want[m.To]
+			slots, _ := m.Data["Slots"].([]string)
+			if m.Data["Locale"] != exp[0] || len(slots) != 1 || slots[0] != exp[1] {
+				t.Errorf("mail to %s: Locale=%v Slots=%v, want Locale=%s Slots=[%s]", m.To, m.Data["Locale"], slots, exp[0], exp[1])
+			}
+		}
+	})
+
+	t.Run("finalized mail's OptionLabel uses the recipient's locale", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		s.SetLocaleSource(fakeLocales{ownerID: "nb"})
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeDatetime, Title: "Kickoff", Timezone: "Europe/Oslo",
+			Options: []polls.OptionInput{datetimeOption(fixtureStart, fixtureEnd)},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := s.AddParticipant(ctx, created.ID, polls.ParticipantInput{
+			Name: "Ada", Email: strPtr("ada@example.com"), Answers: map[string]string{created.Options[0].ID: "yes"},
+		}, polls.Viewer{}); err != nil {
+			t.Fatalf("AddParticipant: %v", err)
+		}
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ""); err != nil {
+			t.Fatalf("Finalize: %v", err)
+		}
+
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+		drainJobs(t, ctx, w)
+
+		var gotEN, gotNB bool
+		for _, m := range rec.byTemplate("finalized") {
+			switch {
+			case m.To == "ada@example.com" && m.Data["Locale"] == "en" && m.Data["OptionLabel"] == wantLabelEN:
+				gotEN = true
+			case m.To != "ada@example.com" && m.Data["Locale"] == "nb" && m.Data["OptionLabel"] == wantLabelNB:
+				gotNB = true
+			default:
+				t.Errorf("unexpected finalized mail: To=%s Locale=%v OptionLabel=%v", m.To, m.Data["Locale"], m.Data["OptionLabel"])
+			}
+		}
+		if !gotEN || !gotNB {
+			t.Errorf("finalized mails: en participant seen=%v, nb owner seen=%v; want both", gotEN, gotNB)
+		}
+	})
+}

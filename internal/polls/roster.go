@@ -3,11 +3,8 @@ package polls
 // Ports src/server/polls/roster.ts's buildRosterCsv: the owner-only roster export for a sign-up
 // sheet (one row per claim, plus a single zero-claim row for a still-open slot).
 //
-// Deviation: the TS source's buildRosterCsv takes a locale and renders each slot's label via
-// formatOptionLabel (Intl.DateTimeFormat-aware). This port reuses optionLabelText (timers.go) —
-// the same plain-English, non-locale-aware renderer already used for transactional mail bodies —
-// rather than a locale-aware Go port of formatOptionLabel, which doesn't exist yet. See
-// timers.go's optionLabelText doc comment for the same flagged follow-up.
+// Labels render through optionLabelText (timers.go) in the caller's locale — the roster route's
+// getLocale() in the TS source becomes httpserver.RequestLocale at the handler.
 import (
 	"context"
 	"database/sql"
@@ -57,7 +54,7 @@ func rosterCSVRow(fields []string) string {
 // (empty participant/email). Returns ErrNotFound for a missing/soft-deleted poll — the caller
 // (Task 7's HTTP handler) is expected to have already checked the caller may manage this poll
 // (roster export is owner-only, per the brief's "auth+org" row).
-func (s *Service) BuildRosterCSV(ctx context.Context, pollID string) (string, error) {
+func (s *Service) BuildRosterCSV(ctx context.Context, pollID, locale string) (string, error) {
 	poll, err := s.q.GetPoll(ctx, pollID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
@@ -93,7 +90,7 @@ func (s *Service) BuildRosterCSV(ctx context.Context, pollID string) (string, er
 	rows := []string{rosterCSVRow([]string{"slot", "capacity", "claimed", "participant", "email"})}
 
 	for _, option := range options {
-		slotLabel := optionLabelText(option, poll.Timezone)
+		slotLabel := optionLabelText(option, locale, poll.Timezone)
 		capacity := ""
 		if option.Capacity.Valid {
 			capacity = strconv.Itoa(int(option.Capacity.Int32))

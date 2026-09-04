@@ -1344,3 +1344,34 @@ func TestHandlerFinalizeReturnsSentCount(t *testing.T) {
 		t.Errorf("finalized mail:poll jobs = %d, want 3 (sent must equal what was actually queued)", n)
 	}
 }
+
+// TestHandlerRosterCSVUsesRequestLocale ports the roster route's getLocale() (main:src/routes/
+// p/$id/roster[.]csv.ts:54): slot labels render in the caller's locale — the SPA's locale cookie
+// first, Accept-Language otherwise.
+func TestHandlerRosterCSVUsesRequestLocale(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, a, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
+	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID})
+	created := createDatedSignupPoll(t, ctx, s, orgID, ownerID)
+	path := "/api/v1/polls/" + created.ID + "/roster.csv"
+
+	t.Run("Accept-Language: nb", func(t *testing.T) {
+		rec := doRequest(t, h, "GET", path, nil, map[string]string{"X-Test-Session": ownerID, "Accept-Language": "nb-NO,nb;q=0.9"})
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), wantLabelNB) {
+			t.Errorf("status = %d, body = %q; want 200 containing %q", rec.Code, rec.Body.String(), wantLabelNB)
+		}
+	})
+
+	t.Run("locale cookie wins over Accept-Language", func(t *testing.T) {
+		rec := doRequest(t, h, "GET", path, nil, map[string]string{
+			"X-Test-Session": ownerID, "Accept-Language": "nb", "Cookie": httpserver.LocaleCookieName + "=en",
+		})
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), wantLabelEN) {
+			t.Errorf("status = %d, body = %q; want 200 containing %q", rec.Code, rec.Body.String(), wantLabelEN)
+		}
+	})
+}
