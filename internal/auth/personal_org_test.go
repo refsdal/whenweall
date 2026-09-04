@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -304,5 +306,116 @@ func TestRequireOrgMemberSucceedsForPersonalOrg(t *testing.T) {
 	}
 	if gotSess != sess {
 		t.Errorf("RequireOrgMember returned session = %+v, want the same *Session passed in via context", gotSess)
+	}
+}
+
+// createOrgForUser creates an extra organization owned by user through Limen's own API (the same
+// call createPersonalOrgIfMissing makes), so the membership row is exactly the shape production
+// writes. Returns the new organization's bigint id.
+func createOrgForUser(t *testing.T, ts *testService, user *limen.User, name, slug string) int64 {
+	t.Helper()
+	org, err := ts.svc.orgs.CreateOrganization(context.Background(), user, &organization.CreateOrganizationRequest{Name: name, Slug: slug})
+	if err != nil {
+		t.Fatalf("CreateOrganization(%s): %v", name, err)
+	}
+	id, err := strconv.ParseInt(fmt.Sprint(org.ID), 10, 64)
+	if err != nil {
+		t.Fatalf("organization id %v is not an int64: %v", org.ID, err)
+	}
+	return id
+}
+
+// setMembershipCreatedAt pins one membership row's created_at so the "oldest membership" rule is
+// exercised on an explicit, clock-independent ordering (the same trick the TS original used).
+func setMembershipCreatedAt(t *testing.T, ts *testService, orgID, userID int64, createdAt string) {
+	t.Helper()
+	if _, err := ts.svc.db.ExecContext(context.Background(),
+		`UPDATE organization_members SET created_at = $3::timestamptz WHERE organization_id = $1 AND user_id = $2`,
+		orgID, userID, createdAt,
+	); err != nil {
+		t.Fatalf("pinning membership created_at for org %d: %v", orgID, err)
+	}
+}
+
+// probeActiveOrgID reads Session.ActiveOrgID off the /probe route for the harness's current cookie.
+func probeActiveOrgID(t *testing.T, ts *testService) string {
+	t.Helper()
+	body := decodeJSON(t, ts.get(t, "/probe"))
+	if anon, _ := body["anonymous"].(bool); anon {
+		t.Fatalf("probe reported anonymous: %+v", body)
+	}
+	id, _ := body["ActiveOrgID"].(string)
+	return id
+}
+
+// TestSessionFallsBackToOldestRemainingMembershipWhenActiveOrgMembershipIsDangling re-expresses
+// session.functions.workers.test.ts's "falls back to the oldest remaining membership when the
+// active org id is dangling": the session still names an organization the user has no membership
+// row in (the org itself survives), and the very next request must (a) report the OLDEST remaining
+// membership by organization_members.created_at — not by id, hence the pinned timestamps below,
+// which make the org created LAST the one that must win — and (b) persist that choice on the
+// session so it isn't re-derived on every request.
+func TestSessionFallsBackToOldestRemainingMembershipWhenActiveOrgMembershipIsDangling(t *testing.T) {
+	ts := newTestService(t)
+	ctx := context.Background()
+	email := "dangling-membership@example.com"
+
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    email,
+		"password": signupPassword,
+	}), "signup")
+	// Signup alone establishes no session — credential-password is configured with
+	// WithAutoSignInOnSignUp(false) (auth.go) — so an explicit signin is required before
+	// triggerSessionResolution's GET /me has any cookie to resolve (see TestSignupSigninMeFlow,
+	// which does the same two calls for the same reason).
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signin/credential", map[string]any{
+		"credential": email,
+		"password":   signupPassword,
+	}), "signin")
+	triggerSessionResolution(t, ts) // creates the personal org and makes it active
+
+	userID := lookupUserID(t, ts, email)
+	user := &limen.User{ID: userID, Email: email}
+	personalOrgID, err := strconv.ParseInt(probeActiveOrgID(t, ts), 10, 64)
+	if err != nil {
+		t.Fatalf("personal org id from probe: %v", err)
+	}
+
+	oldestOrgID := createOrgForUser(t, ts, user, "Oldest Org", fmt.Sprintf("oldest-org-%d", userID))
+	staleOrgID := createOrgForUser(t, ts, user, "Stale Org", fmt.Sprintf("stale-org-%d", userID))
+
+	// By id the personal org is oldest; by membership created_at "Oldest Org" is. The fallback
+	// must follow created_at.
+	setMembershipCreatedAt(t, ts, personalOrgID, userID, "2020-06-01")
+	setMembershipCreatedAt(t, ts, oldestOrgID, userID, "2020-01-01")
+	setMembershipCreatedAt(t, ts, staleOrgID, userID, "2020-09-01")
+
+	// Point the session at the stale org (the very column Limen's SetActiveOrganization writes),
+	// then delete only the membership — the organization row itself survives, so this is a
+	// dangling membership, not a deleted org (TestPersonalOrgRecreatedAfterCacheClearAndOrgDeleted
+	// already covers that one).
+	if _, err := ts.svc.db.ExecContext(ctx,
+		`UPDATE sessions SET active_organization_id = $1 WHERE user_id = $2`, staleOrgID, userID,
+	); err != nil {
+		t.Fatalf("pointing session at stale org: %v", err)
+	}
+	if _, err := ts.svc.db.ExecContext(ctx,
+		`DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2`, staleOrgID, userID,
+	); err != nil {
+		t.Fatalf("deleting stale membership: %v", err)
+	}
+
+	if got, want := probeActiveOrgID(t, ts), fmt.Sprint(oldestOrgID); got != want {
+		t.Errorf("Session.ActiveOrgID = %q, want the oldest remaining membership %q (stale org %d, personal org %d)", got, want, staleOrgID, personalOrgID)
+	}
+
+	var stored sql.NullInt64
+	if err := ts.svc.db.QueryRowContext(ctx,
+		`SELECT active_organization_id FROM sessions WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, userID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("reading session active_organization_id: %v", err)
+	}
+	if !stored.Valid || stored.Int64 != oldestOrgID {
+		t.Errorf("sessions.active_organization_id = %v, want %d persisted by the fallback", stored, oldestOrgID)
 	}
 }

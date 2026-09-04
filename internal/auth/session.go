@@ -130,14 +130,24 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	if validated.Session != nil {
 		activeOrgID, err := s.orgs.GetActiveOrganizationID(r.Context(), validated.Session)
 		switch {
-		case err == nil && activeOrgID != nil:
+		case err != nil:
+			// Leave ActiveOrgID "" rather than guess: handlers that need an org resolve it
+			// themselves (RequireOrgMember) and 403 cleanly on an empty one.
+			s.logger.Error("auth: read active organization failed", "user_id", sess.UserID, "error", err)
+		case activeOrgID != nil && !s.membershipDangling(r.Context(), activeOrgID, validated.User.ID):
 			sess.ActiveOrgID = fmt.Sprint(activeOrgID)
-		case err == nil:
-			// No active org yet — true for every fresh signup, since nothing ever calls
-			// organizations/switch on their behalf. Default to the user's first membership (the
-			// personal org ensurePersonalOrgOnce just guaranteed exists) rather than leaving
-			// ActiveOrgID "" until they happen to switch manually.
-			if org, ok := s.firstOrganization(r.Context(), validated.User); ok {
+		default:
+			// Either no active org yet — true for every fresh signup, since nothing ever calls
+			// organizations/switch on their behalf — or a DANGLING one: the session still names an
+			// organization this user has no membership row in any more (removed by an owner, left
+			// from another device, or the org deleted out from under them). Limen's
+			// GetActiveOrganizationID is a plain session-data read and never checks membership, so
+			// without the check above a stale pointer would reach every handler as the active org.
+			// Both cases default to the user's OLDEST remaining membership — the rule
+			// buildClientSession applied (main:src/server/auth/session.functions.ts) — which
+			// ensurePersonalOrgOnce just guaranteed exists, and persist that choice on the session
+			// so the next request doesn't re-derive it.
+			if org, ok := s.oldestMembership(r.Context(), validated.User); ok {
 				result, err := s.orgs.SetActiveOrganization(r.Context(), validated.Session, org)
 				if err != nil {
 					s.logger.Error("auth: set default active organization failed",
@@ -158,6 +168,25 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 	}
 
 	return sess
+}
+
+// membershipDangling reports whether the session's stored active organization no longer has an
+// organization_members row for this user. Only ErrMemberNotInOrganization counts as dangling: any
+// other error (a closed database, say) returns false, so an infrastructure fault leaves the
+// stored choice alone instead of silently re-pointing someone's active organization on a flaky
+// request — RequireOrgMember downstream still fails closed on its own check.
+func (s *Service) membershipDangling(ctx context.Context, orgID, userID any) bool {
+	err := s.orgs.CheckMemberExistsInOrganization(ctx, orgID, userID)
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, organization.ErrMemberNotInOrganization):
+		return true
+	default:
+		s.logger.Error("auth: active organization membership check failed; keeping stored active organization",
+			"user_id", fmt.Sprint(userID), "error", err)
+		return false
+	}
 }
 
 // isUserLocked reports whether userID (Limen's `any` user id, same value resolveSession scans

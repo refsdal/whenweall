@@ -593,16 +593,26 @@ func personalOrgSlug(email, userID string) string {
 	return normalized + "-" + userID
 }
 
-// firstOrganization returns user's first organization by Limen's default ordering, used by
-// resolveSession (session.go) to pick a default active organization for a session that doesn't
-// have one yet. ensurePersonalOrgOnce (called just before this in resolveSession) guarantees at
-// least one organization exists by the time this runs.
-func (s *Service) firstOrganization(ctx context.Context, user *limen.User) (*organization.Organization, bool) {
-	page, err := s.orgs.ListOrganizations(ctx, user, &organization.ListOrganizationsFilter{}, &limen.QueryOptions{Limit: 1})
-	if err != nil || len(page.Items) == 0 {
+// oldestMembership returns the organization behind user's OLDEST membership row
+// (organization_members.created_at, id as a tiebreak), used by resolveSession (session.go) to
+// pick an active organization for a session that has none — or whose stored one is dangling
+// (see membershipDangling). "Oldest membership" is the rule buildClientSession applied
+// (main:src/server/auth/session.functions.ts); deliberately not Limen's ListOrganizations, whose
+// default ordering is unspecified. ensurePersonalOrgOnce (called just before this in
+// resolveSession) guarantees at least one membership exists by the time this runs.
+func (s *Service) oldestMembership(ctx context.Context, user *limen.User) (*organization.Organization, bool) {
+	var orgID int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT organization_id FROM organization_members WHERE user_id = $1 ORDER BY created_at, id LIMIT 1`,
+		user.ID,
+	).Scan(&orgID); err != nil {
 		return nil, false
 	}
-	return page.Items[0], true
+	org, err := s.orgs.GetOrganization(ctx, orgID)
+	if err != nil || org == nil {
+		return nil, false
+	}
+	return org, true
 }
 
 // parseLimenID converts a Session's stringified id (UserID/ActiveOrgID, both fmt.Sprint of
