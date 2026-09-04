@@ -253,23 +253,15 @@ type StaffUser struct {
 	CreatedAt time.Time
 }
 
-type TwoFactor struct {
-	ID          int64
-	UserID      int64
-	Secret      sql.NullString
-	BackupCodes sql.NullString
-}
-
 type User struct {
-	ID               int64
-	Email            string
-	Password         sql.NullString
-	EmailVerifiedAt  sql.NullTime
-	FirstName        sql.NullString
-	LastName         sql.NullString
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	TwoFactorEnabled bool
+	ID              int64
+	Email           string
+	Password        sql.NullString
+	EmailVerifiedAt sql.NullTime
+	FirstName       sql.NullString
+	LastName        sql.NullString
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type UserPreference struct {

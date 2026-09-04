@@ -310,7 +310,7 @@ func (q *Queries) GetSubscription(ctx context.Context, arg GetSubscriptionParams
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, email, password, email_verified_at, first_name, last_name, created_at, updated_at, two_factor_enabled FROM users WHERE id = $1
+SELECT id, email, password, email_verified_at, first_name, last_name, created_at, updated_at FROM users WHERE id = $1
 `
 
 // Task 4 (notifications/finalize+claim mail/deadline+digest timers) queries below.
@@ -326,7 +326,6 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.LastName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TwoFactorEnabled,
 	)
 	return i, err
 }

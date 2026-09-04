@@ -18,6 +18,13 @@ jobs:
           go-version: '1.26'
           cache: true
       - run: go vet ./...
+      # Generated sqlc code must match the checked-in schema + queries: a stale models.go or
+      # *.sql.go (someone edited a migration or a query and forgot `sqlc generate`) fails here
+      # instead of drifting silently until the next regeneration produces an unrelated diff.
+      - uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: '1.31.1'
+      - run: sqlc diff
       - uses: golangci/golangci-lint-action@v9
       - run: go test ./...
       # internal/rooms runs UNFILTERED: this whole package IS the concurrency-sensitive surface

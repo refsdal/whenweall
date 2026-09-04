@@ -72,3 +72,30 @@ func TestMigrateNeverStarvesOnMinimalPool(t *testing.T) {
 		t.Errorf("MaxOpenConnections = %d, want 2 (floored)", got)
 	}
 }
+
+// TestTwoFactorLeftoversDropped pins migration 00010: Limen's two-factor plugin was unmounted in
+// 72a8306, and its schema — declared by the plugin, not by Limen core — must not linger in the
+// baseline (sqlc was generating a User.TwoFactorEnabled field nothing read, and admin's
+// DeleteUser was clearing a table nothing wrote).
+func TestTwoFactorLeftoversDropped(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+
+	var tables int
+	if err := d.QueryRowContext(ctx,
+		"SELECT count(*) FROM information_schema.tables WHERE table_name = 'two_factors'").Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Error("two_factors table still exists")
+	}
+
+	var columns int
+	if err := d.QueryRowContext(ctx,
+		"SELECT count(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'two_factor_enabled'").Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 0 {
+		t.Error("users.two_factor_enabled column still exists")
+	}
+}

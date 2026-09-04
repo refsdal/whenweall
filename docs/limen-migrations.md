@@ -2,9 +2,14 @@
 
 `migrations/00002_auth.sql` is Limen's own schema (`users`, `accounts`, `organizations`,
 `organization_invitations`, `organization_members`, `organization_member_roles`,
-`limen_rate_limits`, `sessions`, `two_factors`, `verifications`), generated once and hand-folded
+`limen_rate_limits`, `sessions`, `verifications`), generated once and hand-folded
 into a goose migration, plus our own `staff_users` table appended at the end. It is not
 hand-written and should not be hand-edited — regenerate it instead, and diff.
+
+00002 was generated while Limen's two-factor plugin was still mounted, so it also created
+`two_factors` and `users.two_factor_enabled`; `migrations/00010_drop_two_factor.sql` removes both
+(the plugin was unmounted in 72a8306). A future regeneration with the current plugin set will not
+emit them.
 
 This is needed again whenever:
 

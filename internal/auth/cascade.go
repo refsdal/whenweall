@@ -31,15 +31,13 @@ func CascadeDeleteUser(ctx context.Context, tx *sql.Tx, userID string) error {
 		return fmt.Errorf("auth: cascading organizations owned by user %s: %w", userID, err)
 	}
 
-	// accounts/sessions/two_factors all reference users(id) ON DELETE RESTRICT (migrations/00002),
-	// unlike organization_members and user_preferences (CASCADE, which the DELETE FROM users
-	// below triggers on its own) — so they must be cleared explicitly first, or that statement
-	// fails a foreign key check. Plan B's 00010_drop_two_factor.sql removes the two_factors line
-	// along with the table.
+	// accounts and sessions reference users(id) ON DELETE RESTRICT (migrations/00002), unlike
+	// organization_members and user_preferences (CASCADE, which the DELETE FROM users below
+	// triggers on its own) — so they must be cleared explicitly first, or that statement fails a
+	// foreign key check. (two_factors used to be in this list; migration 00010 dropped the table.)
 	for _, stmt := range []string{
 		`DELETE FROM sessions WHERE user_id = $1`,
 		`DELETE FROM accounts WHERE user_id = $1`,
-		`DELETE FROM two_factors WHERE user_id = $1`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, uid); err != nil {
 			return fmt.Errorf("auth: clearing dependent rows for user %s: %w", userID, err)
