@@ -8,7 +8,7 @@ import { m } from '#/lib/i18n'
 
 const PAGE_SIZE = 50
 
-export const Route = createFileRoute('/admin/users')({
+export const Route = createFileRoute('/admin/users/')({
   validateSearch: z.object({ q: z.string().optional(), cursor: z.string().optional() }),
   loaderDeps: ({ search }) => ({ q: search.q, cursor: search.cursor }),
   loader: ({ deps }) => fetchAdminUsers({ query: deps.q, cursor: deps.cursor, limit: PAGE_SIZE }),

@@ -25,10 +25,10 @@ import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitati
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as AdminAuditRouteImport } from './routes/admin/audit'
 import { Route as AdminJobsRouteImport } from './routes/admin/jobs'
-import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
-import { Route as AdminUsersIdRouteImport } from './routes/admin/users.$id'
+import { Route as AdminUsersIndexRouteImport } from './routes/admin/users/index'
+import { Route as AdminUsersIdRouteImport } from './routes/admin/users/$id'
 import { Route as BookHandleSlugRouteImport } from './routes/book/$handle/$slug'
 import { Route as BookingIdIndexRouteImport } from './routes/booking/$id/index'
 import { Route as BookingsIdIndexRouteImport } from './routes/bookings/$id/index'
@@ -116,11 +116,6 @@ const AdminJobsRoute = AdminJobsRouteImport.update({
   path: '/jobs',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminUsersRoute = AdminUsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
 const BookingsIndexRoute = BookingsIndexRouteImport.update({
   id: '/bookings/',
   path: '/bookings/',
@@ -131,10 +126,15 @@ const BookingsNewRoute = BookingsNewRouteImport.update({
   path: '/bookings/new',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminUsersIdRoute = AdminUsersIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => AdminUsersRoute,
+  id: '/users/$id',
+  path: '/users/$id',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const BookHandleSlugRoute = BookHandleSlugRouteImport.update({
   id: '/book/$handle/$slug',
@@ -183,7 +183,6 @@ export interface FileRoutesByFullPath {
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/jobs': typeof AdminJobsRoute
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/bookings/new': typeof BookingsNewRoute
   '/admin/': typeof AdminIndexRoute
   '/bookings/': typeof BookingsIndexRoute
@@ -191,6 +190,7 @@ export interface FileRoutesByFullPath {
   '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/edit': typeof PIdEditRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
   '/booking/$id/': typeof BookingIdIndexRoute
   '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
@@ -210,7 +210,6 @@ export interface FileRoutesByTo {
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/jobs': typeof AdminJobsRoute
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/bookings/new': typeof BookingsNewRoute
   '/admin': typeof AdminIndexRoute
   '/bookings': typeof BookingsIndexRoute
@@ -218,6 +217,7 @@ export interface FileRoutesByTo {
   '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/edit': typeof PIdEditRoute
+  '/admin/users': typeof AdminUsersIndexRoute
   '/booking/$id': typeof BookingIdIndexRoute
   '/bookings/$id': typeof BookingsIdIndexRoute
   '/p/$id': typeof PIdIndexRoute
@@ -239,7 +239,6 @@ export interface FileRoutesById {
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/jobs': typeof AdminJobsRoute
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/bookings/new': typeof BookingsNewRoute
   '/admin/': typeof AdminIndexRoute
   '/bookings/': typeof BookingsIndexRoute
@@ -247,6 +246,7 @@ export interface FileRoutesById {
   '/book/$handle/$slug': typeof BookHandleSlugRoute
   '/bookings/$id/edit': typeof BookingsIdEditRoute
   '/p/$id/edit': typeof PIdEditRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
   '/booking/$id/': typeof BookingIdIndexRoute
   '/bookings/$id/': typeof BookingsIdIndexRoute
   '/p/$id/': typeof PIdIndexRoute
@@ -269,7 +269,6 @@ export interface FileRouteTypes {
     | '/accept-invitation/$id'
     | '/admin/audit'
     | '/admin/jobs'
-    | '/admin/users'
     | '/bookings/new'
     | '/admin/'
     | '/bookings/'
@@ -277,6 +276,7 @@ export interface FileRouteTypes {
     | '/book/$handle/$slug'
     | '/bookings/$id/edit'
     | '/p/$id/edit'
+    | '/admin/users/'
     | '/booking/$id/'
     | '/bookings/$id/'
     | '/p/$id/'
@@ -296,7 +296,6 @@ export interface FileRouteTypes {
     | '/accept-invitation/$id'
     | '/admin/audit'
     | '/admin/jobs'
-    | '/admin/users'
     | '/bookings/new'
     | '/admin'
     | '/bookings'
@@ -304,6 +303,7 @@ export interface FileRouteTypes {
     | '/book/$handle/$slug'
     | '/bookings/$id/edit'
     | '/p/$id/edit'
+    | '/admin/users'
     | '/booking/$id'
     | '/bookings/$id'
     | '/p/$id'
@@ -324,7 +324,6 @@ export interface FileRouteTypes {
     | '/accept-invitation/$id'
     | '/admin/audit'
     | '/admin/jobs'
-    | '/admin/users'
     | '/bookings/new'
     | '/admin/'
     | '/bookings/'
@@ -332,6 +331,7 @@ export interface FileRouteTypes {
     | '/book/$handle/$slug'
     | '/bookings/$id/edit'
     | '/p/$id/edit'
+    | '/admin/users/'
     | '/booking/$id/'
     | '/bookings/$id/'
     | '/p/$id/'
@@ -475,13 +475,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminJobsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/admin/users': {
-      id: '/admin/users'
-      path: '/users'
-      fullPath: '/admin/users'
-      preLoaderRoute: typeof AdminUsersRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
     '/bookings/': {
       id: '/bookings/'
       path: '/bookings'
@@ -496,12 +489,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BookingsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/users/': {
+      id: '/admin/users/'
+      path: '/users'
+      fullPath: '/admin/users/'
+      preLoaderRoute: typeof AdminUsersIndexRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/users/$id': {
       id: '/admin/users/$id'
-      path: '/$id'
+      path: '/users/$id'
       fullPath: '/admin/users/$id'
       preLoaderRoute: typeof AdminUsersIdRouteImport
-      parentRoute: typeof AdminUsersRoute
+      parentRoute: typeof AdminRouteRoute
     }
     '/book/$handle/$slug': {
       id: '/book/$handle/$slug'
@@ -548,30 +548,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AdminUsersRouteChildren {
-  AdminUsersIdRoute: typeof AdminUsersIdRoute
-}
-
-const AdminUsersRouteChildren: AdminUsersRouteChildren = {
-  AdminUsersIdRoute: AdminUsersIdRoute,
-}
-
-const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
-  AdminUsersRouteChildren,
-)
-
 interface AdminRouteRouteChildren {
   AdminAuditRoute: typeof AdminAuditRoute
   AdminJobsRoute: typeof AdminJobsRoute
-  AdminUsersRoute: typeof AdminUsersRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminUsersIdRoute: typeof AdminUsersIdRoute
+  AdminUsersIndexRoute: typeof AdminUsersIndexRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminAuditRoute: AdminAuditRoute,
   AdminJobsRoute: AdminJobsRoute,
-  AdminUsersRoute: AdminUsersRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
+  AdminUsersIdRoute: AdminUsersIdRoute,
+  AdminUsersIndexRoute: AdminUsersIndexRoute,
 }
 
 const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
