@@ -56,6 +56,23 @@ func (q *Queries) DeletePollOption(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteSubscriptionsByScope = `-- name: DeleteSubscriptionsByScope :exec
+DELETE FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2
+`
+
+type DeleteSubscriptionsByScopeParams struct {
+	ScopeType string
+	ScopeID   string
+}
+
+// The manual cascade for the polymorphic (scope_type, scope_id) pair — no FK is possible there,
+// so deletePoll called deleteScopeSubscriptions (subscriptions.ts) explicitly; Delete (service.go)
+// does the same inside its own transaction.
+func (q *Queries) DeleteSubscriptionsByScope(ctx context.Context, arg DeleteSubscriptionsByScopeParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSubscriptionsByScope, arg.ScopeType, arg.ScopeID)
+	return err
+}
+
 const deleteVote = `-- name: DeleteVote :exec
 DELETE FROM votes WHERE participant_id = $1 AND option_id = $2
 `

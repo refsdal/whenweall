@@ -13,6 +13,10 @@ type Querier interface {
 	DeleteNotificationSubscription(ctx context.Context, arg DeleteNotificationSubscriptionParams) error
 	DeleteParticipant(ctx context.Context, id string) error
 	DeletePollOption(ctx context.Context, id string) error
+	// The manual cascade for the polymorphic (scope_type, scope_id) pair — no FK is possible there,
+	// so deletePoll called deleteScopeSubscriptions (subscriptions.ts) explicitly; Delete (service.go)
+	// does the same inside its own transaction.
+	DeleteSubscriptionsByScope(ctx context.Context, arg DeleteSubscriptionsByScopeParams) error
 	DeleteVote(ctx context.Context, arg DeleteVoteParams) error
 	DeleteVotesByParticipant(ctx context.Context, participantID string) error
 	FinalizePoll(ctx context.Context, arg FinalizePollParams) error

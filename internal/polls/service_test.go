@@ -968,6 +968,45 @@ func TestDelete(t *testing.T) {
 			t.Errorf("second Delete err = %v, want ErrNotFound", err)
 		}
 	})
+
+	t.Run("removes the poll's notification_subscriptions rows (the manual cascade for the polymorphic scope)", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		created := createTestPoll(t, ctx, s, orgID, ownerID) // Create subscribes the creator
+		mateID := seedUser(t, d)
+		if err := s.SetFollowing(ctx, created.ID, orgID, mateID, true); err != nil {
+			t.Fatalf("SetFollowing: %v", err)
+		}
+		// A second, undeleted poll's own subscription — proves the delete is scoped to exactly
+		// created.ID and does not touch another poll's rows via a too-broad predicate.
+		other := createTestPoll(t, ctx, s, orgID, ownerID)
+		countSubs := func(pollID string) int {
+			var n int
+			if err := d.QueryRowContext(ctx,
+				`SELECT count(*) FROM notification_subscriptions WHERE scope_type = 'poll' AND scope_id = $1`, pollID,
+			).Scan(&n); err != nil {
+				t.Fatalf("count subscriptions: %v", err)
+			}
+			return n
+		}
+		if got := countSubs(created.ID); got != 2 {
+			t.Fatalf("subscriptions before delete = %d, want 2 (creator + follower)", got)
+		}
+		if got := countSubs(other.ID); got != 1 {
+			t.Fatalf("other poll's subscriptions before delete = %d, want 1 (its own creator)", got)
+		}
+
+		if err := s.Delete(ctx, created.ID, orgID); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if got := countSubs(created.ID); got != 0 {
+			t.Errorf("subscriptions after delete = %d, want 0", got)
+		}
+		if got := countSubs(other.ID); got != 1 {
+			t.Errorf("other poll's subscriptions after delete = %d, want 1 (must survive; scoping must not bleed across polls)", got)
+		}
+	})
 }
 
 func TestDuplicate(t *testing.T) {

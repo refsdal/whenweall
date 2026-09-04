@@ -197,3 +197,9 @@ DELETE FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2 A
 -- comment in subscriptions.ts).
 UPDATE notification_subscriptions SET channels = $4::jsonb, updated_at = $5
 WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3;
+
+-- name: DeleteSubscriptionsByScope :exec
+-- The manual cascade for the polymorphic (scope_type, scope_id) pair — no FK is possible there,
+-- so deletePoll called deleteScopeSubscriptions (subscriptions.ts) explicitly; Delete (service.go)
+-- does the same inside its own transaction.
+DELETE FROM notification_subscriptions WHERE scope_type = $1 AND scope_id = $2;

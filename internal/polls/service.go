@@ -726,6 +726,15 @@ func (s *Service) Delete(ctx context.Context, pollID, orgID string) error {
 	}); err != nil {
 		return err
 	}
+
+	// deletePoll's deleteScopeSubscriptions (service.ts:436-448): subscriptions are keyed by a
+	// polymorphic scope, so no FK cascades them — drop them here, in the same transaction.
+	if err := q.DeleteSubscriptionsByScope(ctx, queries.DeleteSubscriptionsByScopeParams{
+		ScopeType: "poll", ScopeID: pollID,
+	}); err != nil {
+		return err
+	}
+
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
 		return err
 	}
