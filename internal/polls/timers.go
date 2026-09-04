@@ -58,14 +58,18 @@ const (
 	reminderLead = 24 * time.Hour
 )
 
-// DigestFanOutFailAfterN is a test-only fault-injection seam for fanOutDigestItems's per-recipient
+// digestFanOutFailAfterN is a test-only fault-injection seam for fanOutDigestItems's per-recipient
 // loop: when non-zero, the (N+1)th recipient's enqueueMailPoll call returns a synthetic error
 // instead of writing its row, letting a test reproduce "the digest fan-out failed partway through
 // delivery" (some recipients already enqueued when a later one errors) deterministically, without
 // depending on database faults or timing. Zero (its default) in production — RegisterJobs and
-// processDigestJob never set it themselves. A test that sets it must reset it to 0 when done
-// (e.g. via t.Cleanup), since it's a package-level var shared across the whole test binary.
-var DigestFanOutFailAfterN int
+// processDigestJob never set it themselves. Unexported: a package-level fault-injection switch has
+// no business being part of this package's public API (see export_test.go's SetDigestFanOutFailAfterN,
+// the rooms package's PendingNotifyLen/SeedPendingNotify/etc. establish the same idiom) — only a
+// test in this package or polls_test (via the setter) can ever reach it. A test that sets it must
+// reset it to 0 when done (e.g. via t.Cleanup), since it's a package-level var shared across the
+// whole test binary.
+var digestFanOutFailAfterN int
 
 // mailPollPayload is the "mail:poll" job's ids-only payload — pollId/event plus whichever
 // recipient identifier applies (a participant for finalized/claim_confirmation, a user for
@@ -445,8 +449,8 @@ func (s *Service) fanOutDigestItems(ctx context.Context, q *queries.Queries, tx 
 	}
 
 	for i, uid := range order {
-		if DigestFanOutFailAfterN > 0 && i == DigestFanOutFailAfterN {
-			return fmt.Errorf("polls: synthetic digest fan-out failure after %d recipient(s) (test seam)", DigestFanOutFailAfterN)
+		if digestFanOutFailAfterN > 0 && i == digestFanOutFailAfterN {
+			return fmt.Errorf("polls: synthetic digest fan-out failure after %d recipient(s) (test seam)", digestFanOutFailAfterN)
 		}
 		if err := enqueueMailPoll(ctx, tx, mailPollPayload{
 			PollID: payload.PollID, Event: "digest", UserID: uid, Items: byRecipient[uid].items,

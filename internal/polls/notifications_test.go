@@ -1580,7 +1580,7 @@ func TestDigestItemEnqueuedMidRunIsNotResent(t *testing.T) {
 // mid-fan-out failure must roll back the ownership-taking UPDATE too, leaving the retry with the
 // original batch intact.
 //
-// Reproduced deterministically via polls.DigestFanOutFailAfterN (a test-only fault-injection
+// Reproduced deterministically via polls.SetDigestFanOutFailAfterN (a test-only fault-injection
 // seam): with two recipients subscribed to the same event, set it to 1 so the SECOND recipient's
 // enqueueMailPoll call fails after the FIRST has already run inside the same (as-yet uncommitted)
 // transaction — proving a partial, in-flight fan-out rolls back completely, not just the failing
@@ -1611,8 +1611,8 @@ func TestDigestFanOutFailurePreservesItemsForRetry(t *testing.T) {
 	// Force the SECOND recipient's enqueue to fail: the first recipient's mail:poll INSERT has
 	// already run (inside the still-open transaction) by the time this one errors, so this proves
 	// a PARTIAL fan-out rolls back completely, not just the failing call.
-	polls.DigestFanOutFailAfterN = 1
-	t.Cleanup(func() { polls.DigestFanOutFailAfterN = 0 })
+	restore := polls.SetDigestFanOutFailAfterN(1)
+	t.Cleanup(restore)
 
 	w.ProcessClaimed(ctx, held)
 
@@ -1629,7 +1629,7 @@ func TestDigestFanOutFailurePreservesItemsForRetry(t *testing.T) {
 	// Retry: turn off the injected fault, force the same row due again, and run exactly one more
 	// poll.digest pass (not a full drain) so the resulting mail:poll rows can be inspected before
 	// they're themselves processed and deleted.
-	polls.DigestFanOutFailAfterN = 0
+	polls.SetDigestFanOutFailAfterN(0)
 	forceDue(t, d, "poll.digest")
 	if _, err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("RunOnce (retry): %v", err)
