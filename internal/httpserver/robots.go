@@ -1,8 +1,8 @@
 package httpserver
 
 // Crawler policy for the SPA's routes, in one place: the X-Robots-Tag header a private path
-// answers with, and the robots.txt that lists the same paths. Both are generated from
-// noindexRoutes below, so the two can never drift apart.
+// answers with, and the robots.txt that lists which of them may not even be fetched. Both are
+// generated from noindexRoutes below, so the two can never drift apart.
 //
 // Why a response header rather than a `<meta name="robots">` in the page: this is a pure SPA.
 // Every one of these paths is served the SAME static index.html (spa.go), and the per-route meta
@@ -30,6 +30,20 @@ type privateRoute struct {
 	// routes (/p/<id>, never a bare /p). It decides both how a request is matched and how the
 	// robots.txt line is written.
 	subtree bool
+	// crawlable is true for the pages people actually share — a poll, a public booking page.
+	// They are noindex like everything else here, but robots.txt must NOT disallow them:
+	//
+	//   - Slackbot, Twitterbot and Facebook's scraper all honour robots.txt, so a Disallow turns
+	//     every poll link pasted into a group chat back into a bare URL. That link is the
+	//     product's entire distribution model.
+	//   - A crawler forbidden to FETCH a page never reads its X-Robots-Tag. Google documents
+	//     this trap directly: a disallowed URL can still be indexed URL-only from an inbound
+	//     link, and the noindex that would have removed it is never seen. Allowing the fetch is
+	//     what makes the noindex effective.
+	//
+	// False for everything whose URL is a credential or that only its owner should ever load:
+	// there is no preview to preserve, and no reason for a bot to fetch it at all.
+	crawlable bool
 }
 
 // matches reports whether urlPath is this route or, where applicable, below it. The comparison is
@@ -64,17 +78,18 @@ func (r privateRoute) disallow() string {
 // Deliberately NOT here: /, /privacy, /terms, /login and /signup. Those are the marketing and
 // entry surface and are meant to be found.
 var noindexRoutes = []privateRoute{
-	{path: "/p", subtree: true},                 // polls and sign-up sheets, incl. /p/<id>/edit
-	{path: "/book", subtree: true},              // public booking pages, /book/<handle>/<slug>
-	{path: "/booking", subtree: true},           // a single booking's manage view
-	{path: "/bookings"},                         // the organiser's own booking pages list
-	{path: "/dashboard"},                        //
-	{path: "/settings"},                         //
-	{path: "/admin"},                            // also covered by its own route meta tag
-	{path: "/new"},                              // the creator wizard
-	{path: "/accept-invitation", subtree: true}, // URL carries the invitation token
-	{path: "/reset-password"},                   // URL carries the reset token
-	{path: "/verify-email"},                     // URL carries the verification token
+	// Shared links: noindex, but crawlable so their previews still unfurl.
+	{path: "/p", subtree: true, crawlable: true},    // polls and sign-up sheets, incl. /p/<id>/edit
+	{path: "/book", subtree: true, crawlable: true}, // public booking pages, /book/<handle>/<slug>
+	{path: "/booking", subtree: true},               // a single booking's manage view
+	{path: "/bookings"},                             // the organiser's own booking pages list
+	{path: "/dashboard"},                            //
+	{path: "/settings"},                             //
+	{path: "/admin"},                                // also covered by its own route meta tag
+	{path: "/new"},                                  // the creator wizard
+	{path: "/accept-invitation", subtree: true},     // URL carries the invitation token
+	{path: "/reset-password"},                       // URL carries the reset token
+	{path: "/verify-email"},                         // URL carries the verification token
 }
 
 // robotsOnlyDisallow are paths listed in robots.txt but not header-tagged: /api/ answers JSON to
@@ -92,6 +107,9 @@ func buildRobotsTxt() string {
 	b.WriteString("# token in its URL. See internal/httpserver/robots.go.\n")
 	b.WriteString("User-agent: *\n")
 	for _, r := range noindexRoutes {
+		if r.crawlable {
+			continue
+		}
 		b.WriteString("Disallow: " + r.disallow() + "\n")
 	}
 	for _, p := range robotsOnlyDisallow {

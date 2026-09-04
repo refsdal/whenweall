@@ -102,8 +102,10 @@ func TestRobotsTxt(t *testing.T) {
 		t.Errorf("a Disallow line precedes the wildcard group:\n%s", body)
 	}
 	for _, want := range []string{
-		"Disallow: /p/", "Disallow: /book/", "Disallow: /booking/", "Disallow: /bookings",
-		"Disallow: /dashboard", "Disallow: /settings", "Disallow: /admin", "Disallow: /api/",
+		"Disallow: /booking/", "Disallow: /bookings", "Disallow: /dashboard",
+		"Disallow: /settings", "Disallow: /admin", "Disallow: /new",
+		"Disallow: /accept-invitation/", "Disallow: /reset-password",
+		"Disallow: /verify-email", "Disallow: /api/",
 	} {
 		if !strings.Contains(body, want+"\n") {
 			t.Errorf("robots.txt is missing %q:\n%s", want, body)
@@ -111,5 +113,31 @@ func TestRobotsTxt(t *testing.T) {
 	}
 	if strings.Contains(body, "Disallow: /\n") {
 		t.Error("robots.txt disallows the whole site; the landing page must stay crawlable")
+	}
+}
+
+// The shared links — a poll and a public booking page — must stay CRAWLABLE even though they
+// are noindex. Two reasons, and they point the same way:
+//
+//   - Slackbot, Twitterbot and Facebook's scraper all honour robots.txt. Disallowing /p/ would
+//     turn every poll link pasted into a group chat back into a bare URL, which is the product's
+//     entire distribution model.
+//   - A page a crawler is forbidden to FETCH is a page whose X-Robots-Tag it never reads. Google
+//     documents this exact trap: a disallowed URL can still be indexed URL-only from an inbound
+//     link, and the noindex that would have removed it is never seen. Allow the fetch, deny the
+//     index.
+func TestRobotsTxtKeepsSharedLinksCrawlable(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/robots.txt", nil))
+	body := rec.Body.String()
+
+	for _, mustNot := range []string{"Disallow: /p/", "Disallow: /p\n", "Disallow: /book/", "Disallow: /book\n"} {
+		if strings.Contains(body, mustNot) {
+			t.Errorf("robots.txt contains %q — link previews for shared pages would stop working:\n%s", mustNot, body)
+		}
 	}
 }
