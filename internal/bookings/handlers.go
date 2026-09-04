@@ -97,7 +97,6 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("GET /api/v1/booking-pages/{id}/google-status", httpserver.WithOrgSession(a, s.handleGoogleStatus))
 
 	mux.Handle("POST /api/v1/org/handle", httpserver.WithOrgSession(a, s.handleSetOrgSlug))
-	mux.Handle("POST /api/v1/me/google/disconnect", s.handleDisconnectGoogle(a))
 
 	mux.Handle("GET /api/v1/book/{org}/{page}", readLimit(http.HandlerFunc(s.handleGetPublicPage)))
 	mux.Handle("GET /api/v1/book/{org}/{page}/availability", readLimit(http.HandlerFunc(s.handlePublicAvailability)))
@@ -169,6 +168,21 @@ func mapServiceError(err error) (status int, code, message string, fields map[st
 
 func respondOK(w http.ResponseWriter) {
 	httpserver.JSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// rejectGoogleSync enforces the v5 decision that Google Calendar sync is not available (user
+// decision 2026-09-03): a page request asking for googleSync=true is refused up front with 400
+// google_sync_unavailable, before CreatePage/UpdatePage ever run. The service layer itself still
+// accepts the flag — google.go's sync code is dormant, not deleted, and its own tests drive it
+// directly — so this handler-level check is the one switch the SPA can reach. Returns true when
+// the response has been written.
+func rejectGoogleSync(w http.ResponseWriter, req pageRequest) bool {
+	if !req.GoogleSync {
+		return false
+	}
+	httpserver.Err(w, http.StatusBadRequest, "google_sync_unavailable",
+		"google calendar sync is not available in this version", nil)
+	return true
 }
 
 // requireOwnerSession resolves the signed-in owner branch's own session gate — the same two
@@ -289,6 +303,9 @@ func (s *Service) handleCreatePage(w http.ResponseWriter, r *http.Request, sess 
 	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
+	if rejectGoogleSync(w, req) {
+		return
+	}
 	view, err := s.CreatePage(r.Context(), sess.ActiveOrgID, sess.UserID, req.toInput())
 	if err != nil {
 		writeServiceError(w, err)
@@ -334,6 +351,9 @@ func (s *Service) handleUpdatePage(w http.ResponseWriter, r *http.Request, sess 
 	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
+	if rejectGoogleSync(w, req) {
+		return
+	}
 	view, err := s.UpdatePage(r.Context(), pageID, sess.ActiveOrgID, req.toInput())
 	if err != nil {
 		writeServiceError(w, err)
@@ -377,26 +397,19 @@ func (s *Service) handleListPageBookings(w http.ResponseWriter, r *http.Request,
 	httpserver.JSON(w, http.StatusOK, views)
 }
 
-// handleGoogleStatus ports getGoogleCalendarStatus (pages.functions.ts) at Task 6's own
-// per-page shape — see Service.GoogleStatus's own doc comment (google.go) for how this
-// simplifies the TS source. Gated by RequireManageablePage, the same canManageContent-shaped
-// check every other owner-facing route over a page id in this file uses (requirement (a)) — a
-// page belonging to a different org (or a caller who neither created it nor manages the org)
-// must 404/403 before GoogleStatus ever runs, the same leak-avoidance rule requireOrgPage's own
-// doc comment gives (pages.go): a page id's existence, and now whether it has Google sync wired
-// up, must never be revealed outside its own org.
+// handleGoogleStatus — GET /api/v1/booking-pages/{id}/google-status. Google Calendar sync is
+// disabled in v5 (user decision 2026-09-03): after the same RequireManageablePage gate every other
+// owner-facing page route has (a page id's existence must never leak across orgs — requirement
+// (a)), this answers a constant {"connected":false,"syncEnabled":false} regardless of the page's
+// own google_sync flag, the capability config, or any linked Google account. Service.GoogleStatus
+// (google.go) stays as dormant code for when the feature returns with a real consent flow.
 func (s *Service) handleGoogleStatus(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	pageID := r.PathValue("id")
 	if err := s.RequireManageablePage(r.Context(), pageID, sess.ActiveOrgID, sess.UserID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	available, err := s.GoogleStatus(r.Context(), pageID)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	httpserver.JSON(w, http.StatusOK, map[string]bool{"available": available})
+	httpserver.JSON(w, http.StatusOK, map[string]bool{"connected": false, "syncEnabled": false})
 }
 
 // handleSetOrgSlug ports setHandle (pages.functions.ts) — gated by RequireOwnerRole (authz.go),
@@ -418,24 +431,6 @@ func (s *Service) handleSetOrgSlug(w http.ResponseWriter, r *http.Request, sess 
 		return
 	}
 	respondOK(w)
-}
-
-// handleDisconnectGoogle ports disconnectGoogleCalendar (pages.functions.ts) — "auth" only (a
-// plain session, not an org), matching Service.DisconnectGoogleSync's own signature (userID,
-// no org at all).
-func (s *Service) handleDisconnectGoogle(a Auth) http.HandlerFunc {
-	return a.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-		sess, ok := a.FromContext(r.Context())
-		if !ok {
-			httpserver.Err(w, http.StatusUnauthorized, "unauthenticated", "authentication required", nil)
-			return
-		}
-		if err := s.DisconnectGoogleSync(r.Context(), sess.UserID); err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		respondOK(w)
-	})
 }
 
 // ---- handlers: public booking flow -------------------------------------------------------------

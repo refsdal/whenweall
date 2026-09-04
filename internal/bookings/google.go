@@ -356,6 +356,9 @@ func (s *Service) SetGoogleEventID(ctx context.Context, bookingID string, eventI
 	})
 }
 
+// DORMANT (Google Calendar sync is disabled in v5 — handlers.go's handleGoogleStatus answers a
+// constant and no route calls this; kept, with its tests, for the feature's return).
+//
 // GoogleStatus ports getGoogleCalendarStatus (calendar.ts) for Task 6's
 // GET /api/v1/booking-pages/{id}/google-status endpoint, simplified to this task's brief: whether
 // pageID's own member has a linked Google account row at all, rather than the TS source's fuller
@@ -389,6 +392,9 @@ func (s *Service) GoogleStatus(ctx context.Context, pageID string) (bool, error)
 	return true, nil
 }
 
+// DORMANT (Google Calendar sync is disabled in v5 — no route calls this now that
+// POST /api/v1/me/google/disconnect is unmounted; kept, with its tests, for the feature's return).
+//
 // DisconnectGoogleSync ports disconnectGoogleSync (pages.ts): turns googleSync off on every
 // booking page whose memberUserId is userID. Deliberately does NOT touch the underlying Limen
 // accounts row (the Google OAuth connection itself lives — and stays linked — outside this

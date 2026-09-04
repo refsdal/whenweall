@@ -323,6 +323,22 @@ func TestHandlerCreatePage(t *testing.T) {
 			t.Errorf("code = %q, want invalid", errCode(t, rec))
 		}
 	})
+
+	t.Run("400 google_sync_unavailable when googleSync is true (sync disabled in v5)", func(t *testing.T) {
+		withSync := map[string]any{}
+		for k, v := range body {
+			withSync[k] = v
+		}
+		withSync["slug"] = "synced-call"
+		withSync["googleSync"] = true
+		rec := doRequest(t, h, "POST", "/api/v1/booking-pages", withSync, sessHeader(userID))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "google_sync_unavailable" {
+			t.Errorf("code = %q, want google_sync_unavailable", errCode(t, rec))
+		}
+	})
 }
 
 // ---- row 2: GET /api/v1/booking-pages (auth -> ListMyPages) --------------------------------
@@ -492,6 +508,25 @@ func TestHandlerUpdatePage(t *testing.T) {
 		}
 		if errFields(t, rec)["availability"] == "" {
 			t.Errorf("fields = %+v, want an availability entry", errFields(t, rec))
+		}
+	})
+
+	t.Run("400 google_sync_unavailable when googleSync is true (sync disabled in v5)", func(t *testing.T) {
+		withSync := map[string]any{}
+		for k, v := range body {
+			withSync[k] = v
+		}
+		withSync["googleSync"] = true
+		rec := doRequest(t, p.h, "PATCH", "/api/v1/booking-pages/"+p.pageID, withSync, sessHeader(p.ownerID))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "google_sync_unavailable" {
+			t.Errorf("code = %q, want google_sync_unavailable", errCode(t, rec))
+		}
+		view := decodeBody[bookings.PageView](t, doRequest(t, p.h, "GET", "/api/v1/booking-pages/"+p.pageID, nil, sessHeader(p.ownerID)))
+		if view.GoogleSync {
+			t.Errorf("GoogleSync = true after a rejected PATCH, want false")
 		}
 	})
 }
@@ -1220,20 +1255,26 @@ func TestHandlerReschedule(t *testing.T) {
 func TestHandlerGoogleStatus(t *testing.T) {
 	p := setupHandlerPage(t, testConfig(t))
 
-	// The Google capability is off in testConfig (no client id/secret) — s.google stays nil, so
-	// every page reports {"available":false} regardless of its own memberUserId.
+	// The answer is a constant — even with the Google capability configured, a linked Google
+	// account for the page's member AND the page's own google_sync flag on. Google Calendar sync
+	// is disabled in v5 (user decision 2026-09-03); Service.GoogleStatus stays dormant.
+	p.s.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.d))
+	insertGoogleAccount(t, p.d, ownerUserID(t, p.d, p.pageID), "access-tok", "refresh-tok")
+	if _, err := p.d.ExecContext(context.Background(), `UPDATE booking_pages SET google_sync = true WHERE id = $1`, p.pageID); err != nil {
+		t.Fatalf("set google_sync: %v", err)
+	}
+
 	rec := doRequest(t, p.h, "GET", "/api/v1/booking-pages/"+p.pageID+"/google-status", nil, sessHeader(p.ownerID))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
 	}
-	var out struct {
-		Available bool `json:"available"`
-	}
+	var out map[string]bool
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Available {
-		t.Errorf("Available = true, want false (nil GoogleSync)")
+	want := map[string]bool{"connected": false, "syncEnabled": false}
+	if len(out) != 2 || out["connected"] != want["connected"] || out["syncEnabled"] != want["syncEnabled"] {
+		t.Errorf("body = %v, want exactly %v", out, want)
 	}
 
 	t.Run("401 without a session", func(t *testing.T) {
@@ -1266,22 +1307,15 @@ func TestHandlerGoogleStatus(t *testing.T) {
 	})
 }
 
-// ---- row 15: POST /api/v1/me/google/disconnect (auth) --------------------------------------
+// ---- row 15: POST /api/v1/me/google/disconnect — NOT mounted (Google Calendar sync disabled) ---
 
-func TestHandlerDisconnectGoogle(t *testing.T) {
+func TestHandlerDisconnectGoogleRouteRemoved(t *testing.T) {
 	p := setupHandlerPage(t, testConfig(t))
 
 	rec := doRequest(t, p.h, "POST", "/api/v1/me/google/disconnect", nil, sessHeader(p.ownerID))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (route not mounted while Google Calendar sync is disabled); body=%s", rec.Code, rec.Body)
 	}
-
-	t.Run("401 without a session", func(t *testing.T) {
-		rec := doRequest(t, p.h, "POST", "/api/v1/me/google/disconnect", nil, nil)
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", rec.Code)
-		}
-	})
 }
 
 // TestHandlerCreatePageRateLimited is internal/polls's TestHandlerCreateRateLimited for booking
