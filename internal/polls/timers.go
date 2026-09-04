@@ -58,6 +58,15 @@ const (
 	reminderLead = 24 * time.Hour
 )
 
+// DigestFanOutFailAfterN is a test-only fault-injection seam for fanOutDigestItems's per-recipient
+// loop: when non-zero, the (N+1)th recipient's enqueueMailPoll call returns a synthetic error
+// instead of writing its row, letting a test reproduce "the digest fan-out failed partway through
+// delivery" (some recipients already enqueued when a later one errors) deterministically, without
+// depending on database faults or timing. Zero (its default) in production — RegisterJobs and
+// processDigestJob never set it themselves. A test that sets it must reset it to 0 when done
+// (e.g. via t.Cleanup), since it's a package-level var shared across the whole test binary.
+var DigestFanOutFailAfterN int
+
 // mailPollPayload is the "mail:poll" job's ids-only payload — pollId/event plus whichever
 // recipient identifier applies (a participant for finalized/claim_confirmation, a user for
 // closed/digest), and — for a digest send only — the batched items themselves (event+name+
@@ -145,12 +154,16 @@ func armDeadline(ctx context.Context, tx db.DBTX, pollID string, deadlineAt *tim
 //
 // Interplay with the running handler (the mid-run race): jobs.Schedule's upsert swaps in a NEW id
 // on conflict, so an enqueue that lands while a worker holds this row makes the worker's
-// Complete(oldID) a no-op and the replacement row due again — before takeDigestItems existed that
-// re-sent the whole old batch. Now the handler first empties the row's items under this same
-// advisory lock (keyed by the id it claimed); an enqueue that wins the lock first merges the old
-// batch into a replacement row (and the handler, finding its id gone, sends nothing — the
-// replacement carries everything); an enqueue that comes second finds an empty accumulator and
-// starts a fresh window (above). Either way every item is sent exactly once.
+// Complete(oldID) a no-op and the replacement row due again — before processDigestJob existed
+// that re-sent the whole old batch. Now the handler first empties the row's items under this same
+// advisory lock (keyed by the id it claimed) AND fans them out to mail:poll jobs in the SAME
+// transaction (processDigestJob's own doc comment: ownership transfer and delivery are atomic, so
+// a fan-out failure never leaves the row empty with nothing enqueued). An enqueue that wins the
+// lock first merges the old batch into a replacement row (and the handler, finding its id gone,
+// sends nothing — the replacement carries everything); an enqueue that comes second finds an
+// empty accumulator and starts a fresh window (above). Either way every item is sent exactly
+// once, and a fan-out failure's retry sees the original batch intact (the whole transaction rolled
+// back), never an emptied one.
 func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item DigestItem) error {
 	if !isDigestEvent(item.Event) {
 		return fmt.Errorf("polls: %q is not a digest-batched event", item.Event)
@@ -213,38 +226,56 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 	return tx.Commit()
 }
 
-// takeDigestItems is the "poll.digest" handler's ownership step — see EnqueueDigestItem's doc
-// comment for the race it closes. Under the same poll-scoped advisory lock, empty the item list
-// of the row the worker claimed, addressed by that exact job id. Returns false when no row has
-// that id anymore: EnqueueDigestItem has already merged this batch into a replacement row (the
-// upsert swaps ids), which the next poll processes in full — so the caller must send nothing.
-// After true, the batch the caller was handed is exclusively its own; any later enqueue sees an
-// empty accumulator and starts a fresh window instead of re-queuing these items.
-func (s *Service) takeDigestItems(ctx context.Context, jobID, pollID string) (bool, error) {
+// processDigestJob is "poll.digest"'s complete body: it takes ownership of the claimed row's
+// items AND fans them out to per-recipient "mail:poll" jobs inside ONE transaction, under the
+// same poll-scoped advisory lock EnqueueDigestItem uses. That atomicity is the point — an earlier
+// version emptied the row's items in its own committed transaction (takeDigestItems) and only
+// THEN ran the fan-out; if the fan-out failed partway (one recipient's enqueueMailPoll erroring,
+// or the job's 2-minute jobTimeout firing mid-loop for a poll with many recipients),
+// jobs.Worker's fail() reschedules the SAME job id without touching payload — so the retry would
+// find the row already emptied and silently no-op, permanently losing every item that hadn't been
+// fanned out yet. Folding both steps into one transaction fixes that: either the row ends up
+// empty AND every recipient's mail:poll job exists, or (any error at all) the whole transaction
+// rolls back, leaving the row's items exactly as the job was claimed with — so a retry reprocesses
+// the original batch in full, exactly like the pre-race-fix behaviour, rather than losing it.
+//
+// Returns nil (and commits the no-op) when no row has jobID anymore: EnqueueDigestItem has
+// already merged this batch into a replacement row (the upsert swaps ids), which the next poll
+// processes in full, so this claimed job must send nothing.
+func (s *Service) processDigestJob(ctx context.Context, jobID string, payload digestPayload) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('poll.digest:' || $1))`, pollID); err != nil {
-		return false, err
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('poll.digest:' || $1))`, payload.PollID); err != nil {
+		return err
 	}
+
 	res, err := tx.ExecContext(ctx,
 		`UPDATE scheduled_jobs SET payload = jsonb_build_object('pollId', $2::text, 'items', '[]'::jsonb) WHERE id = $1 AND kind = $3`,
-		jobID, pollID, jobKindDigest,
+		jobID, payload.PollID, jobKindDigest,
 	)
 	if err != nil {
-		return false, err
+		return err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, err
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return false, err
+	if n != 1 {
+		// Merged into a replacement row by a concurrent enqueue — nothing of this claimed job's
+		// to keep locked. Commit (there's nothing to roll back beyond releasing the advisory
+		// lock) rather than let the deferred Rollback run, purely so this reads as "handled",
+		// not "failed".
+		return tx.Commit()
 	}
-	return n == 1, nil
+
+	if err := s.fanOutDigestItems(ctx, queries.New(tx), tx, payload); err != nil {
+		return err // rollback via defer restores the pre-take payload for the job's retry
+	}
+	return tx.Commit()
 }
 
 // MailSender is the narrow seam this package's send paths need from *mailer.Mailer — the
@@ -286,14 +317,7 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m MailSender) {
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("polls: decode poll.digest payload: %w", err)
 		}
-		owned, err := s.takeDigestItems(ctx, job.ID, p.PollID)
-		if err != nil {
-			return err
-		}
-		if !owned {
-			return nil // merged into a replacement row by a concurrent enqueue; that row sends it
-		}
-		return s.handleDigestJob(ctx, p)
+		return s.processDigestJob(ctx, job.ID, p)
 	})
 
 	w.Register(jobKindMailPoll, func(ctx context.Context, job jobs.Job) error {
@@ -365,12 +389,19 @@ func (s *Service) handleReminderJob(ctx context.Context, pollID string) error {
 	return nil
 }
 
-// handleDigestJob is "poll.digest"'s body: resolve recipients per distinct event among the
-// accumulated items (once per event, not once per item — a burst of twenty votes resolves once,
-// same as PollRoom#processDigest), invert into "what does each recipient get" (dropping items
-// they caused themselves), and schedule one "digest" mail:poll job per recipient.
-func (s *Service) handleDigestJob(ctx context.Context, payload digestPayload) error {
-	poll, err := s.q.GetPoll(ctx, payload.PollID)
+// fanOutDigestItems is "poll.digest"'s recipient fan-out: resolve recipients per distinct event
+// among the accumulated items (once per event, not once per item — a burst of twenty votes
+// resolves once, same as PollRoom#processDigest), invert into "what does each recipient get"
+// (dropping items they caused themselves), and schedule one "digest" mail:poll job per recipient.
+//
+// Takes q and tx separately (rather than reaching for s.q/s.db itself) so processDigestJob can
+// run this entirely inside the transaction that also took ownership of the row's items — see its
+// doc comment for why that atomicity matters. q reads through the same transaction (so it never
+// observes a state this transaction hasn't committed yet, though these are read-only lookups that
+// would be correct either way); tx is where the mail:poll rows this function writes actually land,
+// which is the half that must not commit independently of the ownership-taking UPDATE.
+func (s *Service) fanOutDigestItems(ctx context.Context, q *queries.Queries, tx db.DBTX, payload digestPayload) error {
+	poll, err := q.GetPoll(ctx, payload.PollID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -386,7 +417,7 @@ func (s *Service) handleDigestJob(ctx context.Context, payload digestPayload) er
 		if _, ok := perEvent[item.Event]; ok {
 			continue
 		}
-		recips, err := s.resolveRecipients(ctx, s.q, poll.OrganizationID, payload.PollID, item.Event, "")
+		recips, err := s.resolveRecipients(ctx, q, poll.OrganizationID, payload.PollID, item.Event, "")
 		if err != nil {
 			return err
 		}
@@ -413,8 +444,11 @@ func (s *Service) handleDigestJob(ctx context.Context, payload digestPayload) er
 		}
 	}
 
-	for _, uid := range order {
-		if err := enqueueMailPoll(ctx, s.db, mailPollPayload{
+	for i, uid := range order {
+		if DigestFanOutFailAfterN > 0 && i == DigestFanOutFailAfterN {
+			return fmt.Errorf("polls: synthetic digest fan-out failure after %d recipient(s) (test seam)", DigestFanOutFailAfterN)
+		}
+		if err := enqueueMailPoll(ctx, tx, mailPollPayload{
 			PollID: payload.PollID, Event: "digest", UserID: uid, Items: byRecipient[uid].items,
 		}); err != nil {
 			return err
@@ -603,7 +637,7 @@ func (s *Service) sendReminderMail(ctx context.Context, m MailSender, poll queri
 }
 
 // sendDigestMail ports PollRoom#processDigest's per-recipient send (the render+mail half only —
-// the resolve/invert half already ran in handleDigestJob).
+// the resolve/invert half already ran in fanOutDigestItems).
 func (s *Service) sendDigestMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if payload.UserID == "" {
 		return nil

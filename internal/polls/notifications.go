@@ -330,7 +330,7 @@ type DigestItem struct {
 }
 
 // digestPayload is the "poll.digest" job's payload shape: the accumulating item list for one
-// poll's debounce window (timers.go's EnqueueDigestItem/handleDigestJob).
+// poll's debounce window (timers.go's EnqueueDigestItem/processDigestJob).
 type digestPayload struct {
 	PollID string       `json:"pollId"`
 	Items  []DigestItem `json:"items"`

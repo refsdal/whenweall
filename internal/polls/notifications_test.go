@@ -1434,12 +1434,49 @@ func TestClaimConfirmationAttachesMultiEventICS(t *testing.T) {
 	})
 }
 
+// claimOnePollDigest claims exactly one due "poll.digest" job by hand (jobs.ClaimDue directly,
+// not through a Worker), so a test can hold it "mid-run" before deciding what happens next.
+func claimOnePollDigest(t *testing.T, ctx context.Context, d *sql.DB) jobs.Job {
+	t.Helper()
+	claimed, err := jobs.ClaimDue(ctx, d, "test-replica", 20)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].Kind != "poll.digest" {
+		t.Fatalf("claimed = %+v, want exactly one poll.digest job", claimed)
+	}
+	return claimed[0]
+}
+
+// digestJobRow reads back a poll's pending "poll.digest" row's run_at and the names of its
+// accumulated items, straight from scheduled_jobs.
+func digestJobRow(t *testing.T, ctx context.Context, d *sql.DB, pollID string) (runAt time.Time, names []string) {
+	t.Helper()
+	var raw []byte
+	err := d.QueryRowContext(ctx,
+		`SELECT run_at, payload FROM scheduled_jobs WHERE kind = 'poll.digest' AND room_key = $1`, "poll:"+pollID,
+	).Scan(&runAt, &raw)
+	if err != nil {
+		t.Fatalf("digest row: %v", err)
+	}
+	var p struct {
+		Items []polls.DigestItem `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("decode digest payload %s: %v", raw, err)
+	}
+	for _, it := range p.Items {
+		names = append(names, it.Name)
+	}
+	return runAt, names
+}
+
 // TestDigestItemEnqueuedMidRunIsNotResent reproduces the race deterministically by driving the
 // worker's two steps by hand: ClaimDue (the row is now "mid-run") -> EnqueueDigestItem lands
 // -> the claimed job's handler runs (ProcessClaimed) -> the next poll runs. Before the fix, the
 // handler fanned out its stale batch AND the merged replacement row was processed again, so the
 // owner received Ada twice. PollRoom.ts's #clearDigest-after-send made this impossible by
-// construction; takeDigestItems is that guarantee's Postgres form.
+// construction; processDigestJob is that guarantee's Postgres form.
 func TestDigestItemEnqueuedMidRunIsNotResent(t *testing.T) {
 	ctx := context.Background()
 
@@ -1449,36 +1486,9 @@ func TestDigestItemEnqueuedMidRunIsNotResent(t *testing.T) {
 			t.Fatalf("EnqueueDigestItem(%s): %v", name, err)
 		}
 	}
-	claimOne := func(t *testing.T, d *sql.DB) jobs.Job {
-		t.Helper()
-		claimed, err := jobs.ClaimDue(ctx, d, "test-replica", 20)
-		if err != nil {
-			t.Fatalf("ClaimDue: %v", err)
-		}
-		if len(claimed) != 1 || claimed[0].Kind != "poll.digest" {
-			t.Fatalf("claimed = %+v, want exactly one poll.digest job", claimed)
-		}
-		return claimed[0]
-	}
+	claimOne := func(t *testing.T, d *sql.DB) jobs.Job { return claimOnePollDigest(t, ctx, d) }
 	digestRow := func(t *testing.T, d *sql.DB, pollID string) (runAt time.Time, names []string) {
-		t.Helper()
-		var raw []byte
-		err := d.QueryRowContext(ctx,
-			`SELECT run_at, payload FROM scheduled_jobs WHERE kind = 'poll.digest' AND room_key = $1`, "poll:"+pollID,
-		).Scan(&runAt, &raw)
-		if err != nil {
-			t.Fatalf("digest row: %v", err)
-		}
-		var p struct {
-			Items []polls.DigestItem `json:"items"`
-		}
-		if err := json.Unmarshal(raw, &p); err != nil {
-			t.Fatalf("decode digest payload %s: %v", raw, err)
-		}
-		for _, it := range p.Items {
-			names = append(names, it.Name)
-		}
-		return runAt, names
+		return digestJobRow(t, ctx, d, pollID)
 	}
 
 	t.Run("item landing between claim and handler: one digest, each item exactly once", func(t *testing.T) {
@@ -1559,4 +1569,80 @@ func TestDigestItemEnqueuedMidRunIsNotResent(t *testing.T) {
 			t.Errorf("Bob's fresh window was disturbed: items = %v", names)
 		}
 	})
+}
+
+// TestDigestFanOutFailurePreservesItemsForRetry closes the review finding on the round-1 fix
+// (takeDigestItems committing the emptied-accumulator row in its own transaction, separately from
+// handleDigestJob's fan-out): if the fan-out failed partway through delivery — one recipient's
+// enqueueMailPoll erroring after an earlier recipient's had already gone through — the retry
+// would find the row already emptied and silently no-op, permanently losing every item that
+// hadn't been fanned out yet. processDigestJob now does both steps in ONE transaction, so a
+// mid-fan-out failure must roll back the ownership-taking UPDATE too, leaving the retry with the
+// original batch intact.
+//
+// Reproduced deterministically via polls.DigestFanOutFailAfterN (a test-only fault-injection
+// seam): with two recipients subscribed to the same event, set it to 1 so the SECOND recipient's
+// enqueueMailPoll call fails after the FIRST has already run inside the same (as-yet uncommitted)
+// transaction — proving a partial, in-flight fan-out rolls back completely, not just the failing
+// call.
+func TestDigestFanOutFailurePreservesItemsForRetry(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := polls.NewService(d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "member")
+	mateID := seedUser(t, d)
+	addOrgMember(t, d, orgID, mateID, "member")
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+	if err := s.SetFollowing(ctx, created.ID, orgID, mateID, true); err != nil {
+		t.Fatalf("SetFollowing: %v", err)
+	}
+
+	rec := &recordingMailer{}
+	w := jobs.NewWorker(d, "test-replica", slog.Default())
+	s.RegisterJobs(w, rec)
+
+	if err := s.EnqueueDigestItem(ctx, created.ID, polls.DigestItem{Event: polls.EventResponseCreated, Name: "Ada"}); err != nil {
+		t.Fatalf("EnqueueDigestItem: %v", err)
+	}
+	forceDue(t, d, "poll.digest")
+	held := claimOnePollDigest(t, ctx, d)
+
+	// Force the SECOND recipient's enqueue to fail: the first recipient's mail:poll INSERT has
+	// already run (inside the still-open transaction) by the time this one errors, so this proves
+	// a PARTIAL fan-out rolls back completely, not just the failing call.
+	polls.DigestFanOutFailAfterN = 1
+	t.Cleanup(func() { polls.DigestFanOutFailAfterN = 0 })
+
+	w.ProcessClaimed(ctx, held)
+
+	if n := countJobs(t, d, "mail:poll"); n != 0 {
+		t.Fatalf("mail:poll jobs after a failed fan-out = %d, want 0 (the whole transaction must roll back, including the first recipient's already-attempted insert)", n)
+	}
+	if n := countJobs(t, d, "poll.digest"); n != 1 {
+		t.Fatalf("poll.digest rows = %d, want 1 (the failed job must be retried, not completed)", n)
+	}
+	if _, names := digestJobRow(t, ctx, d, created.ID); len(names) != 1 || names[0] != "Ada" {
+		t.Fatalf("digest row items after a failed fan-out = %v, want [Ada] intact (not emptied)", names)
+	}
+
+	// Retry: turn off the injected fault, force the same row due again, and run exactly one more
+	// poll.digest pass (not a full drain) so the resulting mail:poll rows can be inspected before
+	// they're themselves processed and deleted.
+	polls.DigestFanOutFailAfterN = 0
+	forceDue(t, d, "poll.digest")
+	if _, err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (retry): %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, p := range filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "digest") {
+		got[p.UserID] = true
+	}
+	if len(got) != 2 || !got[ownerID] || !got[mateID] {
+		t.Fatalf("digest mail:poll recipients after retry = %v, want exactly {%s, %s} (each exactly once)", got, ownerID, mateID)
+	}
+	if n := countJobs(t, d, "poll.digest"); n != 0 {
+		t.Errorf("poll.digest rows left after a successful retry = %d, want 0", n)
+	}
 }
