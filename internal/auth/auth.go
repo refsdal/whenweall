@@ -303,6 +303,26 @@ func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption 
 	}
 	opts = append(opts, limen.WithHTTPRateLimiter(limiterOpts...))
 
+	// Under `bun dev` the SPA is served by Vite on :5173 and proxies /api to this process, so an
+	// OAuth sign-in started from that page sends redirect_uri=http://localhost:5173/... — which
+	// Limen's oauth plugin validates with IsTrustedOrigin (its own base URL, i.e. APP_URL, plus
+	// this list) and would otherwise refuse with 403 "redirect_uri is not trusted". Development
+	// only: production has exactly one origin, APP_URL, and it is trusted implicitly.
+	//
+	// WithHTTPOriginCheck(false) goes with it deliberately. Limen's origin-check middleware is a
+	// no-op while this list is empty, but the moment it is non-empty it requires an Origin (or
+	// Referer) header matching the list on EVERY mutating request — a bare curl, or this
+	// package's own tests posting JSON without an Origin header, would start failing with 403.
+	// Our own internal/httpserver.CheckOrigin already guards every mutating /api/ request (and,
+	// like browsers, treats an absent Origin as "not a cross-site form"), and Limen's CSRF
+	// protection stays on, so nothing is lost by switching Limen's stricter duplicate off here.
+	if cfg.AppEnv == "development" {
+		opts = append(opts,
+			limen.WithHTTPTrustedOrigins([]string{"http://localhost:5173"}),
+			limen.WithHTTPOriginCheck(false),
+		)
+	}
+
 	return opts
 }
 

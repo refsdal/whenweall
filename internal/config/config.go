@@ -218,11 +218,13 @@ func Load(env map[string]string) (*Config, []string, error) {
 
 	cfg.IsProduction = cfg.AppEnv == "production"
 
-	// Disabling the captcha is a real reduction in abuse protection on public, unauthenticated
-	// endpoints (poll creation, voting). Fine for a private instance, worth saying out loud for
-	// one on the open internet — so it is a warning in production and silent elsewhere.
+	// Disabling the captcha is a real reduction in abuse protection on the public, unauthenticated
+	// endpoints that demand one — guest voting, commenting, sign-up claims and booking (poll
+	// creation always required a session and never had a captcha). Fine for a private instance,
+	// worth saying out loud for one on the open internet — so it is a warning in production and
+	// silent elsewhere.
 	if !cfg.Capabilities.Turnstile && cfg.IsProduction {
-		warnings = append(warnings, "Turnstile is not configured — captcha protection is OFF on public endpoints.")
+		warnings = append(warnings, "Turnstile is not configured — captcha protection is OFF for guest voting, commenting, sign-up claims and booking.")
 	}
 
 	if cfg.EnableTestRoutes && cfg.IsProduction {

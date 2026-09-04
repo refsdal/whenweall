@@ -552,3 +552,37 @@ func TestMakeStaffUnknownEmailErrors(t *testing.T) {
 		t.Error("MakeStaff(unknown email) = nil error, want an error")
 	}
 }
+
+// TestOAuthAuthorizeTrustsViteDevOriginOnlyInDevelopment: under `bun dev` the SPA runs on Vite's
+// :5173 and proxies /api to :3000, so GoogleButton sends redirect_uri=http://localhost:5173/...
+// — which Limen's oauth plugin checks against IsTrustedOrigin (its base URL, i.e. APP_URL, plus
+// WithHTTPTrustedOrigins). Development trusts the Vite origin; production trusts APP_URL alone.
+func TestOAuthAuthorizeTrustsViteDevOriginOnlyInDevelopment(t *testing.T) {
+	cfgFor := func(env string) *config.Config {
+		return &config.Config{
+			AppEnv:             env,
+			AppURL:             "http://localhost:3000",
+			LimenSecret:        make([]byte, 32),
+			GoogleClientID:     "client-id",
+			GoogleClientSecret: "client-secret",
+			Capabilities:       config.Capabilities{Google: true},
+		}
+	}
+	const viteRedirect = "/api/v1/auth/oauth/google/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Flogin"
+
+	dev := newTestServiceWithConfig(t, cfgFor("development"))
+	devResp := dev.get(t, viteRedirect)
+	defer func() { _ = devResp.Body.Close() }()
+	if devResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(devResp.Body)
+		t.Fatalf("development: status %d, want 200 (Vite's origin must be a trusted redirect_uri): %s", devResp.StatusCode, body)
+	}
+
+	prod := newTestServiceWithConfig(t, cfgFor("production"))
+	prodResp := prod.get(t, viteRedirect)
+	defer func() { _ = prodResp.Body.Close() }()
+	if prodResp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(prodResp.Body)
+		t.Fatalf("production: status %d, want 403 (only APP_URL's origin is trusted): %s", prodResp.StatusCode, body)
+	}
+}

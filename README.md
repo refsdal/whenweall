@@ -298,9 +298,9 @@ near the actual typo, is worse than refusing to light up at all.
 | `EMAIL_FROM`            | no       | `whenweall <no-reply@localhost>`  | `From:` on every outgoing e-mail.                                                                  |
 | `TURNSTILE_SITE_KEY`    | no       | —                                  | Optional captcha on sign-in/sign-up/password reset and guest voting/commenting/booking. Needs `TURNSTILE_SECRET_KEY` too. |
 | `TURNSTILE_SECRET_KEY`  | no       | —                                  | See above. Without this pair, no endpoint asks for a captcha (the UI hides the widget) — fine for a private instance, worth knowing for one on the open internet. |
-| `GOOGLE_CLIENT_ID`      | no       | —                                  | Optional "Continue with Google" and Google Calendar sync. Needs `GOOGLE_CLIENT_SECRET` too.        |
+| `GOOGLE_CLIENT_ID`      | no       | —                                  | Optional "Continue with Google". Needs `GOOGLE_CLIENT_SECRET` too. Register `<APP_URL>/api/v1/auth/oauth/google/callback` as the **Authorized redirect URI** in Google Cloud Console — a mismatch there is the single most common OAuth misconfiguration. |
 | `GOOGLE_CLIENT_SECRET`  | no       | —                                  | See above.                                                                                          |
-| `OIDC_ISSUER`           | no       | —                                  | Optional external SSO. Needs `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` too (all three, not a pair). The issuer must assert `email_verified: true` in its userinfo/ID token: a sign-in whose email is not verified by the IdP is refused, because an OIDC email is what links the sign-in to an existing account. |
+| `OIDC_ISSUER`           | no       | —                                  | Optional external SSO. Needs `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` too (all three, not a pair). Register `<APP_URL>/api/v1/auth/oauth/<OIDC_NAME>/callback` (default `.../oauth/sso/callback`) as the redirect URI at your provider. The issuer must assert `email_verified: true` in its userinfo/ID token: a sign-in whose email is not verified by the IdP is refused, because an OIDC email is what links the sign-in to an existing account. |
 | `OIDC_CLIENT_ID`        | no       | —                                  | See above.                                                                                          |
 | `OIDC_CLIENT_SECRET`    | no       | —                                  | See above.                                                                                          |
 | `OIDC_NAME`             | no       | `sso`                                | Label on the OIDC sign-in button.                                                                  |
@@ -414,14 +414,23 @@ git clone https://github.com/refsdal/whenweall.git whenweall
 cd whenweall
 
 docker compose up -d db          # Postgres only — the app itself runs outside the container
-cp .env.example .env             # then fill in AUTH_SECRET, SMTP_HOST, etc. for local use
+cp .env.example .env             # then fill in AUTH_SECRET, SMTP_HOST, POSTGRES_PASSWORD, etc.
 
+# The binary reads only the process environment — nothing loads .env for you outside compose.
+set -a; . ./.env; set +a
+export DATABASE_URL="postgres://whenweall:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT:-5433}/whenweall?sslmode=disable"
+export APP_ENV=development
 go run ./cmd/whenweall           # migrates on boot, serves the API on :3000
 
 cd web
 bun install                      # also compiles the Paraglide messages
 bun dev                          # Vite on :5173, proxying /api to :3000
 ```
+
+`go run ./cmd/whenweall migrate` and `... create-staff-user` read the same variables, so run them
+from the same shell (or prefix them the same way). With `APP_ENV=development` the server also
+trusts `http://localhost:5173` as an OAuth `redirect_uri` origin, so "Continue with Google" works
+from the Vite dev server too.
 
 Open `http://localhost:5173`. The API server itself also serves the last **built** SPA
 at `http://localhost:3000` (whatever `cd web && bun run build` last produced) — useful

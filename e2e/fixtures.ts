@@ -32,7 +32,7 @@ async function seed(
   })
   if (!response.ok()) {
     throw new Error(
-      `POST /api/test/seed responded ${response.status()} — is ENABLE_TEST_ROUTES=true in .dev.vars?`,
+      `POST /api/test/seed responded ${response.status()} — is the server running with ENABLE_TEST_ROUTES=true (playwright.config.ts's webServer.env sets it)?`,
     )
   }
   return (await response.json()) as SeededUser
@@ -47,8 +47,8 @@ type Fixtures = {
   userWithSignup: SeededUser
   /**
    * A verified user with a handle and one seeded booking page: weekday 09:00–17:00
-   * Europe/Oslo, 30-minute slots, slug `intro-call` — see `sampleBookingPage` in
-   * `src/routes/api/test/seed.ts`.
+   * Europe/Oslo, 30-minute slots, slug `intro-call` — see the seed route in
+   * `internal/httpserver/testroutes.go`.
    */
   userWithBookingPage: SeededUser
   /** A verified user carrying the platform staff role, for the admin console. */
@@ -57,8 +57,8 @@ type Fixtures = {
 
 /**
  * Every fixture seeds its own user via the test-only `/api/test/seed` route (gated to
- * non-production builds with `ENABLE_TEST_ROUTES=true`, see `.dev.vars.example`), so specs never
- * share state and can run in any order or in parallel.
+ * non-production builds with `ENABLE_TEST_ROUTES=true`, set by `playwright.config.ts`'s
+ * `webServer.env`), so specs never share state and can run in any order or in parallel.
  */
 // The fixture callback's second parameter is named `provide` rather than Playwright's usual
 // `use` so `eslint-plugin-react-hooks` doesn't mistake `use(...)` for a React hook call — this

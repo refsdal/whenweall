@@ -58,8 +58,8 @@ If your change touches the realtime WebSocket protocol (`internal/rooms`), read 
 [`internal/rooms/PROTOCOL.md`](./internal/rooms/PROTOCOL.md) — it's the wire contract both
 the Go hub and `web/src/lib/room-socket.ts` are held to.
 
-If your change alters the UI in a way the README screenshots show, regenerate them with
-`bun run screenshots` and include the updated PNGs — see
-[docs/screenshots/README.md](./docs/screenshots/README.md).
+No screenshots are committed to this repository. If you want to check a UI change visually the
+way the README describes the product, `bun run screenshots` generates a local set from the running
+app (git-ignored) — see [docs/screenshots/README.md](./docs/screenshots/README.md).
 
 Then open a PR using the provided template, describing the change and how you tested it.

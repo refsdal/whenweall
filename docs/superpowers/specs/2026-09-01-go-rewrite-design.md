@@ -241,6 +241,57 @@ this spec's sketches. Three deliberate deltas, ruled during plan 1's final revie
 - **`ws_presence` keeps per-replica counts** (`room_key`, `replica_id`, `count`, `heartbeat_at`),
   not §4's per-connection rows. Presence totals are sums over replicas.
 
+## Amendment (2026-09-03, completion pass): what shipped differently
+
+Recorded after the parity audit of PR #67 so this spec describes the code it approved. Each item
+supersedes the earlier text it names; the completion plans
+`docs/superpowers/plans/2026-09-03-complete-0*.md` implement them.
+
+- **Magic links and TOTP 2FA are not mounted** (decisions table, "Auth library" row; §3 bullets 1
+  and "Rate limiting"). Commit 72a8306 removed Limen's `magic-link` and `two-factor` plugins:
+  neither ever had a UI, and magic-link auto-created an account on first verify
+  (`autoCreateUser` default), bypassing the credential sign-up's validation on every deployment
+  that mounted it. Limen features in use: email+password (verification, password reset), Google
+  OAuth, generic OIDC, sessions, organizations. `WithSendMagicLink` is not wired; the Postgres
+  rate limiter wraps sign-in, sign-up and password-reset requests only. Migration
+  `00010_drop_two_factor.sql` removes the plugin's leftover schema (`two_factors`,
+  `users.two_factor_enabled`).
+- **Email verification gates the app** (§3 bullet 1 implied it; the first cut lost it). An
+  unverified credential account can sign in, but every API route except `GET /api/v1/auth/me`,
+  `POST .../signout`, `POST .../verify-email`, `POST .../email-verifications` and
+  `GET /api/v1/config` answers 403 `email_unverified`; the SPA shows the "verify your address"
+  card with a resend button. OAuth-created users count as verified.
+- **Per-user locale is persisted** in `user_preferences(user_id, locale, updated_at)`
+  (migration `00009_user_profile.sql`); guest forms send `locale`; mail renders in `en` or `nb`
+  with locale-aware dates (§5 "Email localization keeps parity with today" — this is how).
+- **Google Calendar sync is disabled for now** (decisions table, "Kept features"). The Go sync
+  code (`internal/bookings/google.go`) stays, but Limen's OAuth link route cannot request the
+  incremental calendar scopes, so the UI is hidden behind the capability flag, status always
+  reports "not connected", and the README says the feature is not yet available. Re-enabling
+  means a second Limen Google provider configured with the calendar scopes and
+  `access_type=offline` — not a custom consent flow.
+- **Playwright runs twice in CI** (§9): against `go run` (the existing fast job) and against the
+  built Docker image started with compose's hardening flags (`read_only`, `cap_drop: [ALL]`,
+  `no-new-privileges`) — the run that "keeps the hardening claims honest".
+- **Security headers** (§7 said nothing; the old `src/start.ts` set them): every response carries
+  a Content-Security-Policy whose `script-src` allows `'self'`, Turnstile's origin and one
+  `sha256-` hash per inline `<script>` in the embedded `index.html` (computed once at boot — no
+  `'unsafe-inline'` for scripts), `Permissions-Policy: camera=(), microphone=(), geolocation=()`,
+  and `Strict-Transport-Security` when `APP_URL` is https. `/api/` request bodies are capped at
+  1 MiB (413 `payload_too_large`); the server has a 30 s `ReadTimeout`.
+- **Graceful shutdown** (§4/§7 said nothing): on SIGTERM the hub closes every WebSocket with a
+  `GoingAway` close frame, waits for the handlers, deletes this replica's `ws_presence` rows, and
+  the process waits for the hub and the job worker to unwind before closing the pool.
+  `compose.yaml` gives it a 20 s `stop_grace_period`.
+- **Landing stats have a REST read**: `GET /api/v1/stats` returns the `UsageStats` snapshot for
+  first paint; the stats WebSocket remains the live source (§4 "Stats room").
+- **Toolchain line: Go 1.26** (§7 `golang:1.25-alpine` superseded) — go.mod `go 1.26`,
+  `golang:1.26-alpine`, CI `1.26`. The 1.25 line left Go's support window when 1.27 shipped.
+- **Rate limiting** (decisions table, "Billing": abuse control = rate limiting only): poll
+  creation/duplication and booking-page creation are limited at 20/min per IP alongside the
+  existing vote/comment/claim/book/ws-connect buckets; every public limiter is a pass-through
+  under `ENABLE_TEST_ROUTES` so the Playwright harness's single IP never trips one.
+
 ## Out of scope
 
 - Data migration of any kind (no live users).

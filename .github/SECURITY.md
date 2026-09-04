@@ -27,5 +27,5 @@ The following must be enabled in the GitHub UI (not managed by code):
 - Secret scanning, with push protection enabled.
 - Dependabot alerts and Dependabot security updates.
 - Private vulnerability reporting.
-- CodeQL default setup: **off** — this repository runs its own CodeQL
-  workflow (`.github/workflows/codeql.yml`) instead.
+- CodeQL: GitHub's default setup — this repository does not ship a CodeQL
+  workflow of its own.

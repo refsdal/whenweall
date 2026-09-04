@@ -1,16 +1,14 @@
 node_modules
 .DS_Store
 dist
-dist-ssr
 *.local
 .env
-.tanstack
-__unconfig*
 todos.json
 
 test-results
 playwright-report
 blob-report
+docs/screenshots/*.png
 
 !.env.example
 
