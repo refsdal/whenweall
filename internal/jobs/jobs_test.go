@@ -531,3 +531,26 @@ func TestCancelRemovesRoomJob(t *testing.T) {
 		t.Errorf("Cancel (nonexistent): %v, want nil", err)
 	}
 }
+
+// TestPayloadExpired pins the rule the admin console's 409 "payload_expired" and FailedJobView's
+// payloadExpired flag both lean on: only a mail:* job can have had its payload purged (every mail
+// kind is enqueued WITH one), so a NULL payload on one means deadletter:sweep cleared it.
+func TestPayloadExpired(t *testing.T) {
+	cases := []struct {
+		kind       string
+		hasPayload bool
+		want       bool
+	}{
+		{"mail:send", false, true},
+		{"mail:poll", false, true},
+		{"mail:booking", false, true},
+		{"mail:send", true, false},
+		{"poll.digest", false, false},
+		{"deadletter:sweep", false, false},
+	}
+	for _, c := range cases {
+		if got := jobs.PayloadExpired(c.kind, c.hasPayload); got != c.want {
+			t.Errorf("PayloadExpired(%q, hasPayload=%v) = %v, want %v", c.kind, c.hasPayload, got, c.want)
+		}
+	}
+}

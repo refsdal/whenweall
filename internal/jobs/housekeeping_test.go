@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -275,7 +276,145 @@ func TestRatelimitSweepDeletesExpiredRowsAndReschedules(t *testing.T) {
 	}
 }
 
-func TestEnsureScheduledSeedsAllThreeSingletons(t *testing.T) {
+// seedDeadRow inserts a dead-lettered scheduled_jobs row (attempts == max_attempts, so jobs.Dead
+// lists it and ClaimDue never will) directly, with run_at pushed `age` (a Postgres interval
+// literal, e.g. "2 days") into the past — the sweep measures a dead row's age on run_at (see
+// sweepDeadLetters). A nil payload inserts SQL NULL.
+func seedDeadRow(t *testing.T, d *sql.DB, kind string, payload *string, age string) string {
+	t.Helper()
+	id := db.NewID()
+	if _, err := d.ExecContext(context.Background(), `
+		INSERT INTO scheduled_jobs (id, kind, run_at, payload, attempts, max_attempts, last_error)
+		VALUES ($1, $2, now() - $3::interval, $4::jsonb, 3, 3, 'smtp: connection refused')
+	`, id, kind, age, payload); err != nil {
+		t.Fatalf("seeding dead %s row: %v", kind, err)
+	}
+	return id
+}
+
+func strPtr(s string) *string { return &s }
+
+// deadRowState is what the sweep must and must not touch on a row; found == false once deleted.
+type deadRowState struct {
+	found      bool
+	hasPayload bool
+	attempts   int
+	lastError  sql.NullString
+}
+
+func readDeadRow(t *testing.T, d *sql.DB, id string) deadRowState {
+	t.Helper()
+	var s deadRowState
+	err := d.QueryRowContext(context.Background(),
+		`SELECT payload IS NOT NULL, attempts, last_error FROM scheduled_jobs WHERE id = $1`, id,
+	).Scan(&s.hasPayload, &s.attempts, &s.lastError)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return deadRowState{}
+	case err != nil:
+		t.Fatalf("reading job %s: %v", id, err)
+	}
+	s.found = true
+	return s
+}
+
+// runDeadletterSweep schedules deadletter:sweep due now and runs one worker pass, the same way the
+// other housekeeping tests in this file drive their kinds. Exactly one job must be processed —
+// the sweep itself; the seeded dead rows are never claimable.
+func runDeadletterSweep(t *testing.T, d *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	w := jobs.NewWorker(d, "w1", slog.Default())
+	jobs.RegisterHousekeeping(w, d, rooms.BroadcastPresenceTotal)
+	room := "global"
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "deadletter:sweep", RoomKey: &room, RunAt: time.Now().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	processed, err := w.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1 (only the sweep itself is claimable)", processed)
+	}
+}
+
+// TestDeadletterSweepPurgesOldMailPayloadsOnly: a dead mail:* row older than 24h loses its payload
+// (the recipient address and any verify/reset token) but keeps kind/attempts/last_error, so the
+// console still shows WHAT failed and WHY; a dead mail row younger than 24h keeps its payload (a
+// staff member may still Retry it); a dead non-mail row keeps its payload regardless (ids only,
+// nothing sensitive, and Retry must keep working for it).
+func TestDeadletterSweepPurgesOldMailPayloadsOnly(t *testing.T) {
+	d := testdb.New(t)
+	mailPayload := strPtr(`{"to":"secret-recipient@example.com","data":{"URL":"http://app.example/verify-email?token=super-secret"}}`)
+	oldMail := seedDeadRow(t, d, "mail:send", mailPayload, "2 days")
+	freshMail := seedDeadRow(t, d, "mail:send", mailPayload, "1 hour")
+	oldOther := seedDeadRow(t, d, "poll.digest", strPtr(`{"pollId":"p1"}`), "2 days")
+
+	runDeadletterSweep(t, d)
+
+	if got := readDeadRow(t, d, oldMail); !got.found || got.hasPayload || got.attempts != 3 ||
+		!got.lastError.Valid || got.lastError.String != "smtp: connection refused" {
+		t.Errorf("old mail row after sweep = %+v, want present with payload NULL and attempts/last_error intact", got)
+	}
+	if got := readDeadRow(t, d, freshMail); !got.found || !got.hasPayload {
+		t.Errorf("fresh mail row after sweep = %+v, want untouched (younger than 24h — staff may still retry it)", got)
+	}
+	if got := readDeadRow(t, d, oldOther); !got.found || !got.hasPayload {
+		t.Errorf("old non-mail row after sweep = %+v, want payload kept (only mail:* payloads carry addresses/tokens)", got)
+	}
+
+	var runAt time.Time
+	if err := d.QueryRowContext(context.Background(),
+		"SELECT run_at FROM scheduled_jobs WHERE kind = $1 AND room_key = $2", "deadletter:sweep", "global",
+	).Scan(&runAt); err != nil {
+		t.Fatalf("select rescheduled job: %v", err)
+	}
+	if !runAt.After(time.Now()) {
+		t.Errorf("run_at = %v, want in the future (rescheduled)", runAt)
+	}
+}
+
+// TestDeadletterSweepDeletesDeadRowsOlderThan30Days: the dead-letter screen is a to-do list, not
+// an archive — a dead row of ANY kind older than 30 days is deleted outright; a 29-day-old one
+// survives (payload purged, as above); a LIVE row is never touched however old its run_at is.
+func TestDeadletterSweepDeletesDeadRowsOlderThan30Days(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	ancientMail := seedDeadRow(t, d, "mail:send", nil, "31 days")
+	ancientOther := seedDeadRow(t, d, "booking.reminder", strPtr(`{"bookingId":"b1"}`), "31 days")
+	recentMail := seedDeadRow(t, d, "mail:send", strPtr(`{"to":"x@example.com"}`), "29 days")
+
+	// A live row (attempts < max_attempts) with an ancient run_at is merely overdue, not dead. It
+	// is locked by another replica a moment ago so THIS worker's RunOnce skips it (ClaimDue's
+	// lock check) and the sweep is the only job processed.
+	liveID := db.NewID()
+	if _, err := d.ExecContext(ctx, `
+		INSERT INTO scheduled_jobs (id, kind, run_at, payload, attempts, max_attempts, locked_by, locked_at)
+		VALUES ($1, 'mail:send', now() - interval '40 days', '{"to":"live@example.com"}'::jsonb, 1, 5, 'other-replica', now())
+	`, liveID); err != nil {
+		t.Fatalf("seeding live row: %v", err)
+	}
+
+	runDeadletterSweep(t, d)
+
+	if got := readDeadRow(t, d, ancientMail); got.found {
+		t.Errorf("31-day-old dead mail row still present (%+v), want deleted", got)
+	}
+	if got := readDeadRow(t, d, ancientOther); got.found {
+		t.Errorf("31-day-old dead booking.reminder row still present (%+v), want deleted — the 30-day delete is for every kind", got)
+	}
+	if got := readDeadRow(t, d, recentMail); !got.found || got.hasPayload {
+		t.Errorf("29-day-old dead mail row = %+v, want present with payload purged", got)
+	}
+	if got := readDeadRow(t, d, liveID); !got.found || !got.hasPayload {
+		t.Errorf("live row = %+v, want untouched — the sweep only ever touches attempts >= max_attempts", got)
+	}
+}
+
+func TestEnsureScheduledSeedsAllFourSingletons(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()
 
@@ -283,8 +422,9 @@ func TestEnsureScheduledSeedsAllThreeSingletons(t *testing.T) {
 		t.Fatalf("EnsureScheduled: %v", err)
 	}
 
-	firstRunAt := make(map[string]time.Time, 3)
-	for _, kind := range []string{"rooms:prune", "presence:sweep", "ratelimit:sweep"} {
+	kinds := []string{"rooms:prune", "presence:sweep", "ratelimit:sweep", "deadletter:sweep"}
+	firstRunAt := make(map[string]time.Time, len(kinds))
+	for _, kind := range kinds {
 		var count, maxAttempts int
 		var runAt time.Time
 		if err := d.QueryRowContext(ctx,
@@ -311,8 +451,8 @@ func TestEnsureScheduledSeedsAllThreeSingletons(t *testing.T) {
 	if err := d.QueryRowContext(ctx, "SELECT count(*) FROM scheduled_jobs").Scan(&total); err != nil {
 		t.Fatalf("total count: %v", err)
 	}
-	if total != 3 {
-		t.Errorf("total = %d, want 3 (no duplicates)", total)
+	if total != len(kinds) {
+		t.Errorf("total = %d, want %d (no duplicates)", total, len(kinds))
 	}
 
 	// ...and, IMPORTANT 4 (reboot starvation), it must not move run_at either. A restart-happy

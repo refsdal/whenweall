@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -351,4 +352,15 @@ func scanJob(s rowScanner) (Job, error) {
 		j.Payload = json.RawMessage(payload)
 	}
 	return j, nil
+}
+
+// PayloadExpired reports whether a dead-lettered job's payload has been purged by the
+// deadletter:sweep housekeeping job (housekeeping.go): a "mail:*" job whose payload is NULL. Every
+// mail kind is enqueued WITH a payload — mailer.Enqueue's rendered Message for "mail:send", the
+// ids-only payloads of internal/polls' "mail:poll" and internal/bookings' "mail:booking" — so a
+// missing one can only mean the sweep cleared it, and such a job can never be retried: its
+// handler would have nothing to send. Non-mail kinds legitimately run with no payload at all
+// (the housekeeping chains, poll.deadline) and are never "expired".
+func PayloadExpired(kind string, hasPayload bool) bool {
+	return strings.HasPrefix(kind, "mail:") && !hasPayload
 }

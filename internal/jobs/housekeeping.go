@@ -17,12 +17,30 @@ const housekeepingRoomKey = "global"
 
 // Housekeeping job kinds and the interval each reschedules itself for after a run.
 const (
-	roomsPruneKind         = "rooms:prune"
-	roomsPruneInterval     = 10 * time.Minute
-	presenceSweepKind      = "presence:sweep"
-	presenceSweepInterval  = time.Minute
-	ratelimitSweepKind     = "ratelimit:sweep"
-	ratelimitSweepInterval = time.Hour
+	roomsPruneKind          = "rooms:prune"
+	roomsPruneInterval      = 10 * time.Minute
+	presenceSweepKind       = "presence:sweep"
+	presenceSweepInterval   = time.Minute
+	ratelimitSweepKind      = "ratelimit:sweep"
+	ratelimitSweepInterval  = time.Hour
+	deadletterSweepKind     = "deadletter:sweep"
+	deadletterSweepInterval = time.Hour
+)
+
+// Dead-letter retention, as Postgres interval literals spliced into sweepDeadLetters' SQL (fixed
+// constants, never caller input). Age is measured on run_at: fail (jobs.go) leaves run_at
+// untouched once the attempt budget is spent (its CASE's ELSE branch), so on a dead row it is
+// the moment the final attempt became due — the closest thing this table has to a "died at"
+// timestamp without a migration (Retry resets it to now(), so a re-dead job ages from its second
+// death, which is also right).
+//
+// 24h for payloads is well past the whole retry window (10 mail attempts with backoff capped at
+// an hour is roughly four hours), so nothing that could still succeed on its own is purged, and a
+// staff member has had a full day to Retry from the console. 30 days for rows because the
+// dead-letter screen is a to-do list, not an archive.
+const (
+	deadletterPayloadRetention = "interval '24 hours'"
+	deadletterRowRetention     = "interval '30 days'"
 )
 
 // housekeepingMaxAttempts is deliberately enormous (IMPORTANT 5), unlike mailer's bounded
@@ -43,11 +61,11 @@ const housekeepingMaxAttempts = 1_000_000
 // this parameter — the two signatures match exactly, so no adapter is needed.
 type broadcastPresenceTotal func(ctx context.Context, sqlDB db.DBTX, roomKey string) error
 
-// RegisterHousekeeping wires the three self-rescheduling housekeeping jobs into w: pruning old
-// room_events rows, sweeping stale ws_presence rows, and sweeping expired rate_limits rows. Each
-// handler deletes its rows and then reschedules its own next run, so once EnsureScheduled has
-// seeded the first run, the chain keeps itself alive without a cron process or external
-// scheduler.
+// RegisterHousekeeping wires the four self-rescheduling housekeeping jobs into w: pruning old
+// room_events rows, sweeping stale ws_presence rows, sweeping expired rate_limits rows, and
+// sweeping the dead-letter queue (sweepDeadLetters). Each handler deletes its rows and then
+// reschedules its own next run, so once EnsureScheduled has seeded the first run, the chain keeps
+// itself alive without a cron process or external scheduler.
 //
 // broadcastPresence is called once per distinct room the presence sweep just deleted a stale row
 // from, after the DELETE commits — see this job's own doc comment below and
@@ -86,6 +104,13 @@ func RegisterHousekeeping(w *Worker, sqlDB *sql.DB, broadcastPresence broadcastP
 		}
 		return rescheduleHousekeeping(ctx, sqlDB, ratelimitSweepKind, ratelimitSweepInterval)
 	})
+
+	w.Register(deadletterSweepKind, func(ctx context.Context, _ Job) error {
+		if err := sweepDeadLetters(ctx, sqlDB); err != nil {
+			return err
+		}
+		return rescheduleHousekeeping(ctx, sqlDB, deadletterSweepKind, deadletterSweepInterval)
+	})
 }
 
 // deleteStalePresenceRows deletes every ws_presence row whose heartbeat has lapsed past 90s and
@@ -113,7 +138,39 @@ func deleteStalePresenceRows(ctx context.Context, sqlDB *sql.DB) (map[string]str
 	return roomKeys, nil
 }
 
-// EnsureScheduled seeds all three housekeeping jobs to run shortly after boot, but only the
+// sweepDeadLetters is the dead-letter queue's only reclaimer (jobs.go's Dead: "Nothing reclaims
+// these" — until this). Two statements:
+//
+//  1. NULL the payload of every dead-lettered "mail:*" row older than deadletterPayloadRetention.
+//     mailer.Enqueue stores the fully rendered Message as the payload — the recipient address
+//     and, for verify_email/reset_password (internal/auth's enqueueTokenMail), the raw token in
+//     Data.URL — and a dead row otherwise keeps it forever, readable by anyone with DB access.
+//     kind/attempts/last_error are kept so the admin console's failed-jobs screen still shows
+//     WHAT failed and WHY; only the sensitive part goes. Retry of such a row is refused with 409
+//     "payload_expired" (internal/admin/handlers.go, via PayloadExpired). Non-mail kinds carry ids
+//     only and are left alone so Retry keeps working for them.
+//  2. DELETE every dead-lettered row of any kind older than deadletterRowRetention.
+//
+// Both predicates require attempts >= max_attempts: a live row is never touched however old its
+// run_at is (an overdue job is the worker's business, not this sweep's). Housekeeping chains have
+// housekeepingMaxAttempts and can never be dead, so the sweep cannot eat its own kind.
+func sweepDeadLetters(ctx context.Context, sqlDB *sql.DB) error {
+	if _, err := sqlDB.ExecContext(ctx, `
+		UPDATE scheduled_jobs SET payload = NULL
+		WHERE kind LIKE 'mail:%'
+		  AND attempts >= max_attempts
+		  AND payload IS NOT NULL
+		  AND run_at < now() - `+deadletterPayloadRetention); err != nil {
+		return err
+	}
+	_, err := sqlDB.ExecContext(ctx, `
+		DELETE FROM scheduled_jobs
+		WHERE attempts >= max_attempts
+		  AND run_at < now() - `+deadletterRowRetention)
+	return err
+}
+
+// EnsureScheduled seeds all four housekeeping jobs to run shortly after boot, but only the
 // first time — a pre-existing job of that kind (from an earlier boot, still correctly scheduled
 // for the future, or mid-chain) is left completely alone. It is meant to be called once from
 // serve() on every replica startup; that's safe with any number of concurrent callers because
@@ -134,6 +191,7 @@ func EnsureScheduled(ctx context.Context, sqlDB *sql.DB) error {
 		{roomsPruneKind, roomsPruneInterval},
 		{presenceSweepKind, presenceSweepInterval},
 		{ratelimitSweepKind, ratelimitSweepInterval},
+		{deadletterSweepKind, deadletterSweepInterval},
 	} {
 		if err := seedHousekeeping(ctx, sqlDB, s.kind, s.interval); err != nil {
 			return err
