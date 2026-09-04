@@ -47,12 +47,24 @@ cd web && bun run typecheck && bun run lint && bunx vitest run
 ```
 
 End-to-end tests need a browser once per machine, then run against the real built SPA
-served by the real Go binary (see [`e2e/run-server.sh`](./e2e/run-server.sh)):
+served by the real Go binary on `:3100`, with a throwaway Postgres and Mailpit (see
+[`e2e/run-server.sh`](./e2e/run-server.sh)). Specs that involve e-mail read the inbox through
+[`e2e/mailpit.ts`](./e2e/mailpit.ts); fixtures come from `POST /api/test/seed`
+(`internal/httpserver/testroutes.go`) and fail loudly rather than skip when the seed is
+incomplete. Turnstile is off in this harness.
 
 ```bash
 bunx playwright install --with-deps chromium
 bunx playwright test
 ```
+
+CI also runs the suite against the built Docker image (`e2e-image` job). To reproduce that
+locally: `docker build -t whenweall:e2e . && e2e/compose-e2e.sh up -d --wait &&
+e2e/assert-hardening.sh && E2E_SERVER=image bunx playwright test; e2e/compose-e2e.sh down -v`.
+
+New e2e specs: one journey per file, role-based locators (`getByRole`/`getByLabel`), auto-waiting
+`expect(...)` over fixed sleeps, `expect.poll` for anything that arrives through the jobs worker
+(mail), and a fresh `browser.newContext()` per additional person in the story.
 
 If your change touches the realtime WebSocket protocol (`internal/rooms`), read and update
 [`internal/rooms/PROTOCOL.md`](./internal/rooms/PROTOCOL.md) — it's the wire contract both

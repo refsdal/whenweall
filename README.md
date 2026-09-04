@@ -445,13 +445,36 @@ golangci-lint run ./...
 ```
 
 End-to-end tests (Playwright, the oracle for this whole rewrite) run against the real
-built SPA served by the real Go binary — see
+built SPA served by the real Go binary on `:3100` — see
 [`e2e/run-server.sh`](./e2e/run-server.sh), the harness `playwright.config.ts`'s
-`webServer` drives:
+`webServer` drives. It starts a throwaway Postgres and a pinned [Mailpit](https://mailpit.axllent.org/)
+(the specs read the inbox through Mailpit's HTTP API on `:8026` to follow verification, reset,
+invitation and booking links) and removes exactly the containers it started when the run ends.
+Turnstile is off in this harness; the server-side verifier has its own Go tests.
 
 ```bash
 bunx playwright install --with-deps chromium   # once
 bunx playwright test
+```
+
+To iterate quickly, keep the server running yourself and let Playwright reuse it
+(`reuseExistingServer`) — a run then neither restarts the server nor drops its database:
+
+```bash
+bash e2e/run-server.sh    # in one terminal (needs the env playwright.config.ts would pass; see the script header)
+bunx playwright test e2e/comments.spec.ts   # in another, as often as you like
+```
+
+The same suite also runs against the **built Docker image** with the compose hardening flags
+(read-only root, all capabilities dropped, no-new-privileges, user 65532) — what CI's
+`e2e-image` job does:
+
+```bash
+docker build -t whenweall:e2e .
+e2e/compose-e2e.sh up -d --wait      # compose.yaml + compose.e2e.yaml, app on :3100
+e2e/assert-hardening.sh              # proves the flags are live on the running container
+E2E_SERVER=image bunx playwright test
+e2e/compose-e2e.sh down -v
 ```
 
 ## Testing
@@ -465,24 +488,35 @@ Three layers, all runnable from a clean checkout:
 - **Frontend unit** (`cd web && bunx vitest run`) — component behaviour via Testing
   Library, the typed API client, time-zone and availability-rendering helpers, and
   message-catalogue parity between `en`/`nb`.
-- **End-to-end** (`bunx playwright test`, Chromium) — account sign-up, sign-in, the full
-  create → vote → edit → finalise → `.ics` flow, a live update landing in a second
-  browser context, dashboard duplicate/delete, the locale switch, the sign-up sheet
-  journey (a guest claims a slot, a second guest sees it full and claims another, the
-  change appears live in the first guest's tab, and the owner downloads the roster CSV),
-  and the booking journey: a visitor picks an open slot on `/book/<handle>/<slug>`,
-  books it, gets a confirmation with a working `.ics` link (also re-downloadable from the
-  manage page), the slot disappears live for a second visitor watching the same page, the
-  organiser sees the booking on `/bookings/<pageId>`, and cancelling via the manage link
-  frees the slot live again.
+- **End-to-end** (`bunx playwright test`, Chromium) — every journey a user can take, against the
+  real binary and the real built SPA, with e-mail read back out of Mailpit: sign-up → verification
+  link → sign-in (and the unverified card's resend), forgot → reset link → new password; the full
+  create → vote → edit → finalise → `.ics` flow with the "N people were notified" toast and the
+  decided mail; a choice poll and a time-slot dates poll built through the wizard (with the
+  time-zone switch); editing a voted poll (lost-vote confirmation) and a deadline closing it for a
+  guest; comments posted and deleted live across two tabs; a signed-in voter editing their answer
+  from a second device; a live update landing in a second browser context; dashboard
+  duplicate/delete; the locale switch (cookie and, when signed in, the profile); settings (rename,
+  locale, password-checked account deletion); the sign-up sheet journey (a guest claims a slot, a
+  second guest sees it full and claims another, the change appears live in the first guest's tab,
+  and the owner downloads the roster CSV); the booking journey on a seeded page (book, `.ics`,
+  live slot removal, organiser view, cancel) and on a page created through the UI (handle on
+  `/settings`, `/bookings/new`, book, reschedule from the manage link, confirmation and
+  rescheduled mails); an organisation invitation accepted from the mail with the org switch; and
+  the admin console (stats, search, lock/unlock/delete with reasons and the audit log, the
+  dead-letter jobs page with retry, plus the not-found page and 403/401 an outsider gets).
+  CI runs this suite twice: against `go run` (`e2e`) and against the built Docker image under
+  compose's hardening flags (`e2e-image`, see [Development](#development)).
 
 Running just one thing:
 
 ```bash
 go test ./internal/bookings/...
-go test -race -run 'Race|Concurrent|Winner|LateCommitter|Slow' ./internal/polls/... ./internal/bookings/... ./internal/auth/... ./internal/jobs/... ./internal/db/...
+go test -race -run 'Race|Concurrent' ./internal/polls/... ./internal/bookings/...
 cd web && bunx vitest run src/components/poll/__tests__/VoteGrid.test.tsx
 bunx playwright test e2e/poll-flow.spec.ts
+bunx playwright test e2e/auth-email.spec.ts     # the Mailpit-backed flows
+E2E_SERVER=image bunx playwright test e2e/smoke.spec.ts   # against the running image stack
 bunx playwright test --ui   # interactive
 ```
 
