@@ -126,7 +126,7 @@ func TestSendRedactsRecipientAddressFromError(t *testing.T) {
 		EmailFrom: "whenweall <no-reply@whenweall.example>",
 		AppURL:    "https://whenweall.example",
 	}
-	m := mailer.New(cfg)
+	m := mailer.New(cfg, nil)
 
 	msg := mailer.Message{
 		To:       rejectedRecipient,
@@ -164,7 +164,7 @@ func TestSendRedactsUnparseableRecipientAddress(t *testing.T) {
 		EmailFrom: "whenweall <no-reply@whenweall.example>",
 		AppURL:    "https://whenweall.example",
 	}
-	m := mailer.New(cfg)
+	m := mailer.New(cfg, nil)
 
 	msg := mailer.Message{
 		To:       badAddress,

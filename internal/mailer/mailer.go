@@ -41,11 +41,20 @@ type Mailer struct {
 	fromName   string
 	fromEmail  string
 	appURL     string
+	secret     string
+	// suppressions is the handle Send reads mail_unsubscribes through. nil disables the check
+	// entirely, which is for unit tests that have no database — a nil store must never mean
+	// "drop the mail", so Send treats it as "nobody has unsubscribed" and delivers.
+	suppressions db.DBTX
 }
 
 // New builds a Mailer from validated application config: the SMTP host/port/credentials/TLS mode,
 // and EMAIL_FROM (parsed via ParseFromAddress into the sender name/address go-mail sends with).
-func New(cfg *config.Config) *Mailer {
+//
+// suppressions is the database handle Send checks the unsubscribe list against, and is a
+// parameter rather than an optional setter so that every construction site has to answer the
+// question. Production passes the pool; pass nil only where there is no database (see the field).
+func New(cfg *config.Config, suppressions db.DBTX) *Mailer {
 	fromName, fromEmail := ParseFromAddress(cfg.EmailFrom)
 
 	opts := []gomail.Option{gomail.WithPort(cfg.SMTPPort)}
@@ -69,11 +78,13 @@ func New(cfg *config.Config) *Mailer {
 	// for Mailpit and other unauthenticated local relays.
 
 	return &Mailer{
-		host:       cfg.SMTPHost,
-		clientOpts: opts,
-		fromName:   fromName,
-		fromEmail:  fromEmail,
-		appURL:     cfg.AppURL,
+		host:         cfg.SMTPHost,
+		clientOpts:   opts,
+		fromName:     fromName,
+		fromEmail:    fromEmail,
+		appURL:       cfg.AppURL,
+		secret:       cfg.AuthSecret,
+		suppressions: suppressions,
 	}
 }
 
@@ -87,13 +98,36 @@ func (m *Mailer) AppURL() string { return m.appURL }
 // handler and tests call this directly — request handlers must go through Enqueue instead, so a
 // slow or failing SMTP relay never blocks the request that triggered the mail.
 func (m *Mailer) Send(ctx context.Context, msg Message) error {
+	// The suppression list, checked here and only here: one choke point every send path already
+	// funnels through, so no caller can forget it and no new send path can miss it. Returning nil
+	// (not an error) is deliberate — the job did what it should, which was not to send.
+	unsubscribeURL, oneClickURL := "", ""
+	if IsNotificationTemplate(msg.Template) {
+		if m.suppressions != nil {
+			suppressed, err := IsSuppressed(ctx, m.suppressions, msg.To)
+			if err != nil {
+				// Not "assume subscribed and send anyway": a database blip must not deliver
+				// mail to someone who withdrew consent. Failing lets the job retry.
+				return fmt.Errorf("mailer: suppression lookup: %w", err)
+			}
+			if suppressed {
+				return nil
+			}
+		}
+		token := UnsubscribeToken(m.secret, msg.To)
+		unsubscribeURL = m.appURL + "/unsubscribe?token=" + token
+		oneClickURL = m.appURL + "/api/v1/unsubscribe?token=" + token
+	}
+
 	// Render takes AppURL from data rather than injecting it itself, so it's merged in here — a
 	// copy, not a mutation of msg.Data, since that map may be shared with the caller.
-	data := make(map[string]any, len(msg.Data)+1)
+	data := make(map[string]any, len(msg.Data)+2)
 	for k, v := range msg.Data {
 		data[k] = v
 	}
 	data["AppURL"] = m.appURL
+	// Empty for transactional mail, which is what makes the layout's footer link conditional.
+	data["UnsubscribeURL"] = unsubscribeURL
 
 	rendered, err := Render(msg.Template, data)
 	if err != nil {
@@ -126,8 +160,32 @@ func (m *Mailer) Send(ctx context.Context, msg Message) error {
 	}
 
 	gm.Subject(rendered.Subject)
-	gm.SetBodyString(gomail.TypeTextPlain, rendered.Text)
+
+	// The plain-text half of the unsubscribe footer. Appended here rather than written into each
+	// notification template's .txt, for the same reason the HTML half lives in the shared layout:
+	// a new notification template must not be able to ship without one. Same catalog keys as the
+	// layout, so the two halves cannot drift apart in wording or locale.
+	text := rendered.Text
+	if unsubscribeURL != "" {
+		locale, _ := data["Locale"].(string)
+		text = strings.TrimRight(text, "\n") + "\n\n" +
+			translate(locale, "email_unsubscribe") + " " + unsubscribeURL + "\n"
+	}
+
+	gm.SetBodyString(gomail.TypeTextPlain, text)
 	gm.AddAlternativeString(gomail.TypeTextHTML, rendered.HTML)
+
+	if oneClickURL != "" {
+		// RFC 8058 one-click, which Gmail and Yahoo require of bulk senders and which turns the
+		// client's own "unsubscribe" button into a single POST — no page, no confusion, and a
+		// far better outcome for deliverability than the recipient reaching for "report spam".
+		// SetListUnsubscribeOneClick refuses a non-https URL, which is every local dev setup, so
+		// http falls back to a plain List-Unsubscribe: the header still works in clients that
+		// offer it, just not as one-click.
+		if err := gm.SetListUnsubscribeOneClick(oneClickURL); err != nil {
+			gm.SetListUnsubscribe(oneClickURL)
+		}
+	}
 
 	for _, a := range msg.Attachments {
 		reader := bytes.NewReader(a.Content)

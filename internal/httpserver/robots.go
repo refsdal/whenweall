@@ -90,6 +90,7 @@ var noindexRoutes = []privateRoute{
 	{path: "/accept-invitation", subtree: true},     // URL carries the invitation token
 	{path: "/reset-password"},                       // URL carries the reset token
 	{path: "/verify-email"},                         // URL carries the verification token
+	{path: "/unsubscribe"},                          // URL carries the unsubscribe token
 }
 
 // robotsOnlyDisallow are paths listed in robots.txt but not header-tagged: /api/ answers JSON to

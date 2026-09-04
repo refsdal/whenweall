@@ -36,6 +36,51 @@ var names = []string{
 	"booking_sync_failed",
 }
 
+// notificationTemplates splits the list above in two, and it is the ONLY place that split is
+// expressed — Send reads it, no call site passes a flag, so a send path cannot forget to mark
+// its mail (#47's whole failure mode was mail nobody could opt out of).
+//
+// true = NOTIFICATION mail: something the recipient asked to be told about, sent on the basis of
+// their consent, which they must be able to withdraw as easily as they gave it (GDPR Art. 7(3)).
+// Send checks the suppression list before delivering these, sets the RFC 8058 List-Unsubscribe
+// headers, and gives the layout an UnsubscribeURL for the footer link.
+//
+// false = TRANSACTIONAL mail: the direct answer to something the person just did. There is no
+// consent to withdraw, so there is nothing to unsubscribe from, and an unsubscribe control would
+// be inviting someone to opt out of the one message they are waiting for. Withholding a
+// verification link from an address that once muted a digest would break the account rather than
+// respect a preference.
+//
+// The judgement call in here is booking_sync_failed: it is unsolicited, but it reports that the
+// recipient's OWN calendar connection is broken and needs their action, and a silently suppressed
+// "your sync is dead" leaves them worse off than an unwanted mail does. Filed as transactional.
+//
+// TestEveryTemplateIsClassified fails if a template is added without an entry, which is what
+// keeps this honest.
+var notificationTemplates = map[string]bool{
+	"verify_email":                  false,
+	"reset_password":                false,
+	"org_invite":                    false,
+	"claim_confirmation":            false,
+	"booking_confirmed":             false,
+	"booking_cancelled":             false,
+	"booking_rescheduled":           false,
+	"booking_sync_failed":           false,
+	"finalized":                     true,
+	"closed":                        true,
+	"digest":                        true,
+	"notification":                  true,
+	"booking_reminder":              true,
+	"booking_organiser_notice":      true,
+	"booking_rescheduled_organiser": true,
+}
+
+// IsNotificationTemplate reports whether mail rendered from this template is notification-class,
+// and so carries an unsubscribe path and honours the suppression list. An unknown name is treated
+// as transactional: Render will reject it moments later anyway, and the safe reading of "I don't
+// recognise this" is "do not silently drop it".
+func IsNotificationTemplate(name string) bool { return notificationTemplates[name] }
+
 var (
 	htmlTemplates = make(map[string]*template.Template, len(names))
 	textTemplates = make(map[string]*textTemplate.Template, len(names))
@@ -152,4 +197,29 @@ func Render(name string, data map[string]any) (Rendered, error) {
 		HTML:    htmlBuf.String(),
 		Text:    strings.TrimSpace(textBuf.String()),
 	}, nil
+}
+
+// TemplateNames returns every template Render accepts, and TemplateClassification/
+// ClassifiedTemplateNames expose the notification-vs-transactional table. Exported for the tests
+// that hold the two lists against each other (unsubscribe_test.go) — production code asks
+// IsNotificationTemplate instead.
+func TemplateNames() []string {
+	out := make([]string, len(names))
+	copy(out, names)
+	return out
+}
+
+// TemplateClassification returns whether name is notification-class, and whether it is classified
+// at all — the second return is the point: an unclassified template is a bug, not a default.
+func TemplateClassification(name string) (notification, classified bool) {
+	notification, classified = notificationTemplates[name]
+	return notification, classified
+}
+
+func ClassifiedTemplateNames() []string {
+	out := make([]string, 0, len(notificationTemplates))
+	for name := range notificationTemplates {
+		out = append(out, name)
+	}
+	return out
 }

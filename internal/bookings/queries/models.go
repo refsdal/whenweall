@@ -104,6 +104,12 @@ type LockedUser struct {
 	CreatedAt time.Time
 }
 
+type MailUnsubscribe struct {
+	Email     string
+	Source    string
+	CreatedAt time.Time
+}
+
 type NotificationPref struct {
 	UserID    int64
 	Channels  pqtype.NullRawMessage

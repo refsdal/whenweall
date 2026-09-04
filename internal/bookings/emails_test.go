@@ -115,7 +115,7 @@ func reminderJob(t *testing.T, d *sql.DB, bookingID string) (runAt time.Time, ok
 func testBookingMailer(appURL string) *mailer.Mailer {
 	return mailer.New(&config.Config{
 		SMTPHost: "127.0.0.1", SMTPPort: 1, EmailFrom: "whenweall <no-reply@whenweall.example>", AppURL: appURL,
-	})
+	}, nil)
 }
 
 // ownerEmail reads the email of pageID's assigned member (CreatePage defaults it to the creator).
@@ -513,7 +513,7 @@ func TestMailBookingDeliversRealMail(t *testing.T) {
 	m := mailer.New(&config.Config{
 		SMTPHost: smtpHost, SMTPPort: smtpPort,
 		EmailFrom: "whenweall <no-reply@whenweall.example>", AppURL: "https://whenweall.example",
-	})
+	}, nil)
 
 	ctx := context.Background()
 	p := setupBookablePage(t, nil)
@@ -666,7 +666,7 @@ func TestMailBookingOrganiserFailureDoesNotResendVisitor(t *testing.T) {
 	m := mailer.New(&config.Config{
 		SMTPHost: smtpHost, SMTPPort: smtpPort,
 		EmailFrom: "whenweall <no-reply@whenweall.example>", AppURL: "https://whenweall.example",
-	})
+	}, nil)
 
 	ctx := context.Background()
 	p := setupBookablePage(t, nil)

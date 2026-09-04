@@ -114,7 +114,7 @@ func filterByEvent(payloads []mailPollPayload, event string) []mailPollPayload {
 func testMailer(appURL string) *mailer.Mailer {
 	return mailer.New(&config.Config{
 		SMTPHost: "127.0.0.1", SMTPPort: 1, EmailFrom: "whenweall <no-reply@whenweall.example>", AppURL: appURL,
-	})
+	}, nil)
 }
 
 // TestFinalizeEnqueuesMailForEachEmailedParticipant is the brief's required Step-1 test: N
@@ -978,7 +978,7 @@ func TestMailPollDeliversRealMail(t *testing.T) {
 	m := mailer.New(&config.Config{
 		SMTPHost: smtpHost, SMTPPort: smtpPort,
 		EmailFrom: "whenweall <no-reply@whenweall.example>", AppURL: "https://whenweall.example",
-	})
+	}, nil)
 
 	ctx := context.Background()
 	d := testdb.New(t)

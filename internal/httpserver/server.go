@@ -147,6 +147,7 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/v1/auth/", authRouteHandler)
 
 	s.registerAccountRoutes()
+	s.registerUnsubscribeRoutes()
 
 	// /api/ misses land here rather than falling through to the SPA fallback: an unmatched API
 	// route is a real 404, not a client-side route the SPA should render.
