@@ -29,11 +29,11 @@ function readStats(value: unknown): UsageStats | null {
  * every other room uses) — a stale marketing counter recovering on its own is strictly better than
  * one that never does, and this route has nothing else competing for the retry budget.
  *
- * `stats:global` has no REST snapshot endpoint of its own (unlike polls/booking-pages) — the
- * websocket's own `snapshot` frame IS this room's one source of a fresh read, both for an ordinary
- * connect and for `resync`: `internal/rooms/PROTOCOL.md`'s "on resync, refetch a snapshot from the
- * ordinary REST endpoint" rule is satisfied here by tearing down and reopening the socket, since
- * reopening is exactly what re-triggers that same snapshot frame.
+ * `stats:global` also has a REST read (`GET /api/v1/stats`, `web/src/api/stats.ts`) that the route
+ * loader uses for first paint; this hook deliberately does not call it. The websocket's own
+ * `snapshot` frame is this hook's source of a fresh read, both for an ordinary connect and for
+ * `resync`: `internal/rooms/PROTOCOL.md`'s "on resync, refetch a snapshot" rule is satisfied here
+ * by tearing down and reopening the socket, since reopening re-triggers that same snapshot frame.
  *
  * No-ops during SSR, and returns `initial` unchanged until a frame actually arrives, so the
  * server-rendered markup and the first client render always agree.

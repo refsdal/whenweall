@@ -15,6 +15,12 @@ the code itself is what's wrong.
 | `GET /api/v1/booking-pages/{pageId}/ws` | public (Snapshot data withheld unless the caller manages the page) | `booking:{pageId}` | off |
 | `GET /api/v1/stats/ws` | public, no gate at all | `stats:global` | off |
 
+The stats room additionally has a plain REST read, `GET /api/v1/stats`, returning the same
+`UsageStats` object the stats route's snapshot frame nests under `data`, with
+`Cache-Control: no-store`. The landing route's loader uses it for first paint (and it is the only
+source of real numbers behind a proxy that does not forward WebSocket upgrades); the socket
+remains the live source once connected.
+
 The booking route's path is `/api/v1/booking-pages/{pageId}/ws` (renamed from
 `/api/v1/bookings/{pageId}/ws` to match the REST surface's own `/api/v1/booking-pages/*` naming —
 see the M5 hardening pass). Presence is off for booking (M4: this route has no presence UI to

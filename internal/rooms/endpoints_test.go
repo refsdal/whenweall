@@ -12,6 +12,7 @@ package rooms_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -374,5 +375,41 @@ func TestStatsWS_PublicNoPresence(t *testing.T) {
 	frame := readWSFrame(t, conn, 5*time.Second)
 	if frame["type"] != "snapshot" {
 		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+}
+
+// TestStatsREST_ReturnsCurrentCounters covers the landing page's first-paint read: the same
+// UsageStats the WS snapshot frame nests under "data", as a plain, uncacheable JSON GET — so a
+// deployment whose proxy drops WebSocket upgrades still shows real numbers instead of zeros.
+func TestStatsREST_ReturnsCurrentCounters(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	hub := startHub(t, url, sqlDB)
+	stats := rooms.NewStatsService(sqlDB, nil)
+	ctx := context.Background()
+
+	mux := http.NewServeMux()
+	rooms.Register(mux, hub, newFakeWSAuth(), &fakePollService{byID: map[string]any{}}, &fakeBookingService{}, stats, &config.Config{})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	stats.Record(ctx, map[string]int64{rooms.StatsPollsCreated: 3, rooms.StatsResponsesYes: 2})
+
+	resp, err := http.Get(server.URL + "/api/v1/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	var got rooms.UsageStats
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.PollsCreated != 3 || got.ResponsesYes != 2 {
+		t.Errorf("stats = %+v, want PollsCreated=3 ResponsesYes=2", got)
 	}
 }

@@ -2,7 +2,7 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { motion } from 'motion/react'
 import { ArrowRight, CalendarPlus, Check, Link2, Sparkles, Users } from 'lucide-react'
 import { appConfig } from '#/app.config'
-import { EMPTY_STATS, type UsageStats } from '#/lib/stats-types'
+import { loadLandingStats } from '#/api/stats'
 import { UsageStatsSection } from '#/components/landing/UsageStats'
 import { VoteGridMock } from '#/components/landing/VoteGridMock'
 import { DecideTogether } from '#/components/landing/steps/DecideTogether'
@@ -14,14 +14,12 @@ import { staggerContainer, staggerItem } from '#/lib/motion'
 import { cn } from '#/lib/utils'
 
 /**
- * `stats:global` has no REST snapshot endpoint (`internal/rooms/PROTOCOL.md`) — its own websocket
- * `snapshot` frame is the one source of a fresh read, so unlike the old Durable Object version
- * there is nothing left to server-render here: the loader hands down all-zero counters, and
- * `UsageStatsSection`'s socket (opened once the section scrolls into view) replaces them with the
- * real numbers on the first live frame.
+ * The loader reads `GET /api/v1/stats` (`loadLandingStats`) so the counters are right on first
+ * paint — no zero-flash, and correct behind a proxy that drops WebSocket upgrades.
+ * `UsageStatsSection`'s socket (opened once the section scrolls into view) then keeps them live.
  */
 export const Route = createFileRoute('/')({
-  loader: (): { stats: UsageStats } => ({ stats: EMPTY_STATS }),
+  loader: loadLandingStats,
   head: () => ({
     meta: [
       { title: `${appConfig.name} — ${appConfig.tagline}` },

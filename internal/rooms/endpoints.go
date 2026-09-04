@@ -119,6 +119,11 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
 	mux.Handle("GET /api/v1/booking-pages/{pageId}/ws", connectLimit(bookingWSHandler(h, a, bookings)))
 	mux.Handle("GET /api/v1/stats/ws", connectLimit(statsWSHandler(h, stats)))
+
+	// The stats room's REST read: the landing route's loader fetches this for first paint, then
+	// the WS route above takes over for live updates. Unmetered (it is one cheap row read, and
+	// the landing page is the most-visited URL on the site) and unauthenticated, like the WS route.
+	mux.HandleFunc("GET /api/v1/stats", statsSnapshotHandler(stats))
 }
 
 // pollWSHandler builds one poll WS connection's handler per request (rather than a single
@@ -215,4 +220,20 @@ func statsWSHandler(h *Hub, stats *StatsService) http.HandlerFunc {
 		Snapshot:  stats.Snapshot,
 		Presence:  false,
 	})
+}
+
+// statsSnapshotHandler serves StatsService.Snapshot as plain JSON — byte-for-byte the object the
+// stats WS route nests under "data" in its snapshot frame (PROTOCOL.md), so the frontend's
+// UsageStats type covers both. no-store: a cached counter is exactly the stale number this
+// endpoint exists to avoid.
+func statsSnapshotHandler(stats *StatsService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snapshot, err := stats.Snapshot(r.Context(), RoomKeyStats)
+		if err != nil {
+			httpserver.Err(w, http.StatusInternalServerError, "internal", "internal error", nil)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		httpserver.JSON(w, http.StatusOK, snapshot)
+	}
 }
