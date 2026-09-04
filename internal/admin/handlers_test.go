@@ -833,3 +833,46 @@ func TestHandleRetryJob_UnknownIDReturns404(t *testing.T) {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+// countAuditRows is the whole admin_audit_log row count — the before/after probe the read-only
+// parity test below (and Task 5's payload_expired tests) compare.
+func countAuditRows(t *testing.T, d *sql.DB) int64 {
+	t.Helper()
+	var n int64
+	if err := d.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log`).Scan(&n); err != nil {
+		t.Fatalf("counting admin_audit_log: %v", err)
+	}
+	return n
+}
+
+// TestReadOnlyEndpoints_AreNotAudited re-expresses audit.workers.test.ts's "does not audit
+// read-only admin endpoints": every GET the console makes (stats, search, detail, audit log, the
+// dead-letter list) must leave admin_audit_log exactly as it found it. Auditing list views would
+// bury the lock/unlock/delete/retry entries that matter (docs/admin-console.md).
+func TestReadOnlyEndpoints_AreNotAudited(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	client := staffClient(t, h, "staff-readonly@example.com")
+	targetID, targetEmail := seedUser(t, d)
+	seedDeadJob(t, d) // so GET jobs/failed has a row to render, not an empty list
+
+	before := countAuditRows(t, d)
+
+	for _, path := range []string{
+		"/api/v1/admin/stats",
+		"/api/v1/admin/users?" + url.Values{"query": {targetEmail}}.Encode(),
+		"/api/v1/admin/users/" + targetID,
+		"/api/v1/admin/audit",
+		"/api/v1/admin/jobs/failed",
+	} {
+		resp := h.requestJSON(t, client, http.MethodGet, path, nil)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status %d, want 200", path, resp.StatusCode)
+		}
+	}
+
+	if after := countAuditRows(t, d); after != before {
+		t.Errorf("admin_audit_log rows went from %d to %d across read-only GETs; reads must never be audited", before, after)
+	}
+}
