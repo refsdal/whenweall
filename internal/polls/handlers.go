@@ -168,6 +168,8 @@ func mapServiceError(err error) (status int, code, message string, fields map[st
 		return http.StatusConflict, "email_required", "an email address is required for this poll", nil, true
 	case errors.Is(err, ErrConflict):
 		return http.StatusConflict, "conflict", "the poll's current state does not allow this", nil, true
+	case errors.Is(err, ErrNotSignup):
+		return http.StatusBadRequest, "not_signup", "not a sign-up sheet", nil, true
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not_found", "not found", nil, true
 	case errors.Is(err, ErrForbidden):
@@ -989,7 +991,7 @@ func (s *Service) handleCalendarICS(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pollID := r.PathValue("id")
 		pollURL := icsPollURL(cfg, pollID)
-		filename, ics, err := BuildPollICS(r.Context(), s.q, pollID, pollURL)
+		_, ics, err := BuildPollICS(r.Context(), s.q, pollID, pollURL)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -999,7 +1001,7 @@ func (s *Service) handleCalendarICS(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="whenweall-`+pollID+`.ics"`)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(ics)
 	}
@@ -1030,7 +1032,7 @@ func (s *Service) handleRosterCSV(w http.ResponseWriter, r *http.Request, sess *
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="roster.csv"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="whenweall-`+pollID+`-roster.csv"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(csv))
 }

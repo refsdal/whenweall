@@ -49,6 +49,11 @@ var (
 	// exist or is soft-deleted.
 	ErrNotFound = errors.New("polls: not found")
 
+	// ErrNotSignup is returned by BuildRosterCSV for a poll that is not a sign-up sheet: only
+	// sheets have a roster. The old roster route answered 400 "Not a sign-up sheet" — owner-only
+	// past the auth check, so there's nothing to leak by being explicit (its own comment).
+	ErrNotSignup = errors.New("polls: not a sign-up sheet")
+
 	// ErrConflict is returned when the poll's current state precludes the requested action and
 	// no more specific sentinel below applies (TS: the plain CONFLICT code — see this file's
 	// package-level doc comment for the full code table and the more specific sentinels that

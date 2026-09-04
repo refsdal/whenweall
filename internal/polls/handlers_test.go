@@ -550,6 +550,9 @@ func TestHandlerCalendarICS(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/calendar") {
 		t.Errorf("content-type = %q, want text/calendar", ct)
 	}
+	if want := `attachment; filename="whenweall-` + created.ID + `.ics"`; rec.Header().Get("Content-Disposition") != want {
+		t.Errorf("Content-Disposition = %q, want %q", rec.Header().Get("Content-Disposition"), want)
+	}
 	if !strings.Contains(rec.Body.String(), "BEGIN:VCALENDAR") {
 		t.Errorf("body missing VCALENDAR: %s", rec.Body.String())
 	}
@@ -603,6 +606,25 @@ func TestHandlerRosterCSV(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), "Ada") {
 			t.Errorf("csv missing claimant: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("filename carries the poll id", func(t *testing.T) {
+		rec := doRequest(t, h, "GET", "/api/v1/polls/"+created.ID+"/roster.csv", nil, sessHeader(ownerID))
+		want := `attachment; filename="whenweall-` + created.ID + `-roster.csv"`
+		if got := rec.Header().Get("Content-Disposition"); got != want {
+			t.Errorf("Content-Disposition = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("400 not_signup for a scheduling poll", func(t *testing.T) {
+		scheduling := createTestPoll(t, ctx, s, orgID, ownerID)
+		rec := doRequest(t, h, "GET", "/api/v1/polls/"+scheduling.ID+"/roster.csv", nil, sessHeader(ownerID))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "not_signup" {
+			t.Errorf("code = %q, want not_signup", errCode(t, rec))
 		}
 	})
 }

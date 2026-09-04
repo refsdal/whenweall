@@ -62,6 +62,9 @@ func (s *Service) BuildRosterCSV(ctx context.Context, pollID, locale string) (st
 	if err != nil {
 		return "", err
 	}
+	if poll.Type != string(PollTypeSignup) {
+		return "", ErrNotSignup
+	}
 
 	options, err := s.q.ListOptionsByPoll(ctx, pollID)
 	if err != nil {
