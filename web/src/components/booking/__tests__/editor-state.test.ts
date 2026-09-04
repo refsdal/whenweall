@@ -391,7 +391,7 @@ describe('draftFromPage', () => {
     expect(draft.dateOverrides).toEqual({})
   })
 
-  it('round-trips a page through the draft unchanged', () => {
+  it('round-trips a page through the draft, except googleSync which is always off', () => {
     const page = pageFixture()
 
     const input = draftToInput(draftFromPage(page))
@@ -409,9 +409,15 @@ describe('draftFromPage', () => {
       maxDaysAhead: page.maxDaysAhead,
       availability: page.availability,
       dateOverrides: page.dateOverrides,
-      googleSync: page.googleSync,
+      googleSync: false,
       reminders: page.reminders,
     })
+  })
+
+  it('never asks for googleSync, even for a page that had it on (sync is disabled in v5)', () => {
+    const input = draftToInput(draftFromPage(pageFixture({ googleSync: true })))
+
+    expect(input?.googleSync).toBe(false)
   })
 })
 

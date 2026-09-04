@@ -16,7 +16,7 @@ export const Route = createFileRoute('/bookings/$id/edit')({
 
 function EditBookingPageRoute() {
   const page = Route.useLoaderData()
-  const { session, publicConfig } = Route.useRouteContext()
+  const { session } = Route.useRouteContext()
 
   return (
     <PageEditor
@@ -25,7 +25,6 @@ function EditBookingPageRoute() {
       page={page}
       handle={session?.org?.slug ?? null}
       appUrl={window.location.origin}
-      googleEnabled={publicConfig.googleEnabled}
     />
   )
 }

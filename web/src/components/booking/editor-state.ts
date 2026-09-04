@@ -265,7 +265,10 @@ export function draftToInput(draft: EditorDraft): CreateBookingPageInput | null 
     maxDaysAhead: draft.maxDaysAhead,
     availability,
     dateOverrides: overridesFor(draft),
-    googleSync: draft.googleSync,
+    // Google Calendar sync is disabled in v5: the API refuses `googleSync: true` (400
+    // google_sync_unavailable), so the editor never asks for it — even for a page saved with the
+    // flag on before the switch was thrown.
+    googleSync: false,
     reminders: draft.reminders,
   }
 

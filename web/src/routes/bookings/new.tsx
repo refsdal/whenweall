@@ -13,14 +13,7 @@ export const Route = createFileRoute('/bookings/new')({
 })
 
 function NewBookingPageRoute() {
-  const { session, publicConfig } = Route.useRouteContext()
+  const { session } = Route.useRouteContext()
 
-  return (
-    <PageEditor
-      page={null}
-      handle={session?.org?.slug ?? null}
-      appUrl={window.location.origin}
-      googleEnabled={publicConfig.googleEnabled}
-    />
-  )
+  return <PageEditor page={null} handle={session?.org?.slug ?? null} appUrl={window.location.origin} />
 }

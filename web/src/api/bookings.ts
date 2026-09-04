@@ -183,18 +183,8 @@ export function listPageBookings(
   })
 }
 
-export function getGoogleCalendarStatus(pageId: string): Promise<{ connected: boolean }> {
-  return api<{ available: boolean }>('GET', `/api/v1/booking-pages/${pageId}/google-status`).then(
-    (r) => ({ connected: r.available }),
-  )
-}
-
 export async function setHandle(handle: string): Promise<void> {
   await api('POST', '/api/v1/org/handle', { handle })
-}
-
-export async function disconnectGoogleCalendar(): Promise<void> {
-  await api('POST', '/api/v1/me/google/disconnect')
 }
 
 // ---- public booking flow -------------------------------------------------------------------

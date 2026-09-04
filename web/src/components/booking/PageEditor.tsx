@@ -4,7 +4,6 @@ import { Save, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AvailabilityEditor } from '#/components/booking/AvailabilityEditor'
 import { DateOverridesEditor } from '#/components/booking/DateOverridesEditor'
-import { GoogleCalendarCard } from '#/components/booking/GoogleCalendarCard'
 import { SlotPreview } from '#/components/booking/SlotPreview'
 import { bookingPrefix } from '#/components/booking/HandleField'
 import {
@@ -132,12 +131,10 @@ export function PageEditor({
   page,
   handle,
   appUrl,
-  googleEnabled,
 }: {
   page: PageView | null
   handle: string | null
   appUrl: string
-  googleEnabled: boolean
 }) {
   const navigate = useNavigate()
   const router = useRouter()
@@ -392,21 +389,6 @@ export function PageEditor({
       <Section title={m.booking_editor_section_overrides()}>
         <DateOverridesEditor overrides={draft.dateOverrides} issues={issues} dispatch={dispatch} />
       </Section>
-
-      {!isCreate && (
-        <Section title={m.booking_editor_section_integrations()}>
-          {/* Google Calendar status is per-PAGE now (GET /booking-pages/{id}/google-status), not
-              per-account — there is no page id to ask about until the page exists, so this section
-              (and the connect/sync toggle) only appears once editing an already-saved page. */}
-          <GoogleCalendarCard
-            pageId={page.id}
-            googleSync={draft.googleSync}
-            googleEnabled={googleEnabled}
-            callbackURL={`/bookings/${page.id}/edit`}
-            onSyncChange={(next) => setField('googleSync', next)}
-          />
-        </Section>
-      )}
 
       <Section title={m.booking_editor_section_notifications()}>
         <div className="flex items-start gap-3">

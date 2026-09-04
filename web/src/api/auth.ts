@@ -167,23 +167,16 @@ export async function oauthAuthorizeUrl(provider: string, redirectUri?: string):
   return url
 }
 
-/** `GET /oauth/:provider/link` — the incremental-consent counterpart of `/authorize` for an
- * already-signed-in caller (protected). `scopes` is sent best-effort as a comma-joined query param
- * (no confirmed contract in routes.txt for extra scopes on this route — flagged in the report). */
-export async function oauthLinkUrl(
-  provider: string,
-  opts?: { scopes?: string[]; redirectUri?: string },
-): Promise<string> {
+/** `GET /oauth/:provider/link` — links a second sign-in provider to an already-signed-in caller
+ * (protected). Limen's handler reads only `redirect_uri`/`error_redirect_uri` and always requests
+ * the provider's fixed default scopes (openid/email/profile for Google): there is no incremental
+ * consent here, which is why Google Calendar sync is disabled in v5. */
+export async function oauthLinkUrl(provider: string, opts?: { redirectUri?: string }): Promise<string> {
   const { url } = await api<AuthorizeResponse>(
     'GET',
     `/api/v1/auth/oauth/${provider}/link`,
     undefined,
-    {
-      query: {
-        redirect_uri: opts?.redirectUri,
-        scopes: opts?.scopes?.join(','),
-      },
-    },
+    { query: opts?.redirectUri ? { redirect_uri: opts.redirectUri } : undefined },
   )
   return url
 }
