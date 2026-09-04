@@ -706,3 +706,90 @@ func TestMailBookingOrganiserFailureDoesNotResendVisitor(t *testing.T) {
 		t.Fatalf("mailpit total after retry = %d, want still 1", total)
 	}
 }
+
+// TestBookingMailLocale ports emails.ts's per-recipient locale handling: the visitor's mail follows
+// bookings.visitor_locale, the organiser's follows their own account locale (auth.Service.LocaleFor
+// via SetLocaleResolver), and the "When" line is rendered in that locale (mailer.FormatDate/
+// FormatTimeRange) — not a fixed English layout for everyone.
+func TestBookingMailLocale(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, nil) // page timezone UTC, 30-minute slots
+	start := futureUTCSlot(3, 9, 0)
+	end := start.Add(30 * time.Minute)
+	in := bookInput(start, "bob@example.com") // visitor timezone UTC
+	nb := "nb"
+	in.Locale = &nb
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, in)
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	const appURL = "https://whenweall.example"
+
+	wantNB := mailer.FormatDate("nb", start, time.UTC) + ", " + mailer.FormatTimeRange("nb", start, end, time.UTC)
+	wantEN := mailer.FormatDate("en", start, time.UTC) + ", " + mailer.FormatTimeRange("en", start, end, time.UTC)
+	if wantNB == wantEN {
+		t.Fatalf("test precondition: nb and en renderings must differ, both are %q", wantNB)
+	}
+
+	compose := func(t *testing.T, recipient string) *mailer.Message {
+		t.Helper()
+		msg, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+			Kind: "confirmed", BookingID: result.BookingID, Recipient: recipient,
+		})
+		if err != nil || msg == nil {
+			t.Fatalf("compose %s: msg=%v err=%v", recipient, msg, err)
+		}
+		return msg
+	}
+
+	t.Run("visitor mail follows visitor_locale", func(t *testing.T) {
+		msg := compose(t, "visitor")
+		if msg.Data["Locale"] != "nb" {
+			t.Errorf("Locale = %v, want nb", msg.Data["Locale"])
+		}
+		if msg.Data["When"] != wantNB {
+			t.Errorf("When = %q, want %q", msg.Data["When"], wantNB)
+		}
+	})
+
+	t.Run("organiser mail is en when no locale resolver is wired", func(t *testing.T) {
+		msg := compose(t, "organiser")
+		if msg.Data["Locale"] != "en" {
+			t.Errorf("Locale = %v, want en", msg.Data["Locale"])
+		}
+		if msg.Data["When"] != wantEN {
+			t.Errorf("When = %q, want %q", msg.Data["When"], wantEN)
+		}
+	})
+
+	t.Run("organiser mail follows the resolver's locale for the page's member", func(t *testing.T) {
+		var askedFor string
+		p.svc.SetLocaleResolver(func(_ context.Context, userID string) string {
+			askedFor = userID
+			return "nb"
+		})
+		msg := compose(t, "organiser")
+		if askedFor != ownerUserID(t, p.db, p.pageID) {
+			t.Errorf("resolver asked for user %q, want the page's member %q", askedFor, ownerUserID(t, p.db, p.pageID))
+		}
+		if msg.Data["Locale"] != "nb" {
+			t.Errorf("Locale = %v, want nb", msg.Data["Locale"])
+		}
+		if msg.Data["When"] != wantNB {
+			t.Errorf("When = %q, want %q", msg.Data["When"], wantNB)
+		}
+	})
+
+	t.Run("a reschedule's previous start (no end) renders as a bare date-time", func(t *testing.T) {
+		prev := start.Add(-24 * time.Hour)
+		msg, err := p.svc.ComposeBookingMailForTest(ctx, appURL, bookings.MailBookingPayload{
+			Kind: "rescheduled", BookingID: result.BookingID, Recipient: "visitor", PreviousStartAt: &prev,
+		})
+		if err != nil || msg == nil {
+			t.Fatalf("compose rescheduled: msg=%v err=%v", msg, err)
+		}
+		if want := mailer.FormatDateTime("nb", prev, time.UTC); msg.Data["PreviousWhen"] != want {
+			t.Errorf("PreviousWhen = %q, want %q", msg.Data["PreviousWhen"], want)
+		}
+	})
+}

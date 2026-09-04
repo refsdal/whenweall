@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net/mail"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/refsdal/whenweall/internal/auth"
+	"github.com/refsdal/whenweall/internal/mailer"
 )
 
 // Limits ported from src/server/bookings/schemas.ts's LIMITS.
@@ -267,6 +269,12 @@ func (in BookInput) Validate() error {
 
 	if in.Note != nil && len(strings.TrimSpace(*in.Note)) > LimitNote {
 		fields["note"] = fmt.Sprintf("note must be at most %d characters", LimitNote)
+	}
+
+	// bookSlotSchema's locale was `z.enum(locales)` in the TS source; only a locale the mailer has
+	// a catalog for may be stored, or the visitor's mail would silently fall back to English.
+	if in.Locale != nil && !slices.Contains(mailer.SupportedLocales, *in.Locale) {
+		fields["locale"] = "locale must be one of " + strings.Join(mailer.SupportedLocales, ", ")
 	}
 
 	if msg := validateTimezone(in.Timezone); msg != "" {

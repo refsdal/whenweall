@@ -39,6 +39,11 @@ type Service struct {
 	// like a page with googleSync off, so PublicAvailability/Book/Cancel/Reschedule behave
 	// unchanged for every existing caller/test that never calls SetGoogleSync.
 	google GoogleSync
+
+	// localeFor resolves a user's preferred mail locale — nil until SetLocaleResolver wires
+	// auth.Service.LocaleFor (cmd/whenweall/main.go); emails.go's organiserLocale falls back to
+	// "en" when unset, so every existing NewService caller/test keeps rendering English.
+	localeFor func(ctx context.Context, userID string) string
 }
 
 // NewService builds a Service bound to sqlDB, with Google Calendar sync off (see SetGoogleSync)
@@ -53,6 +58,14 @@ func NewService(cfg *config.Config, sqlDB *sql.DB) *Service {
 // off), the same value NewGoogleSync itself returns when the capability isn't configured.
 func (s *Service) SetGoogleSync(g GoogleSync) {
 	s.google = g
+}
+
+// SetLocaleResolver wires the per-user locale lookup the organiser half of every booking mail
+// renders with (emails.go's organiserLocale) — auth.Service.LocaleFor in production. A setter,
+// like SetGoogleSync, so NewService's signature and every existing caller stay unchanged; nil
+// means "always en".
+func (s *Service) SetLocaleResolver(fn func(ctx context.Context, userID string) string) {
+	s.localeFor = fn
 }
 
 // isSlugConflict reports whether err is a raw Postgres unique-violation on the partial unique

@@ -817,6 +817,41 @@ func TestHandlerBook(t *testing.T) {
 			t.Errorf("code = %q, want captcha_failed", errCode(t, rec))
 		}
 	})
+
+	t.Run("the visitor's locale lands in visitor_locale and the response", func(t *testing.T) {
+		body := bookBody(futureUTCSlot(4, 10, 0))
+		body["locale"] = "nb"
+		rec := doRequest(t, p.h, "POST", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/bookings", body, nil)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		booked := decodeBody[struct {
+			Booking bookings.BookingView `json:"booking"`
+		}](t, rec)
+		if booked.Booking.VisitorLocale == nil || *booked.Booking.VisitorLocale != "nb" {
+			t.Errorf("response visitorLocale = %v, want nb", booked.Booking.VisitorLocale)
+		}
+		var stored sql.NullString
+		if err := p.d.QueryRowContext(context.Background(),
+			`SELECT visitor_locale FROM bookings WHERE id = $1`, booked.Booking.ID).Scan(&stored); err != nil {
+			t.Fatalf("read visitor_locale: %v", err)
+		}
+		if !stored.Valid || stored.String != "nb" {
+			t.Errorf("visitor_locale = %+v, want nb", stored)
+		}
+	})
+
+	t.Run("422 for an unsupported locale", func(t *testing.T) {
+		body := bookBody(futureUTCSlot(4, 11, 0))
+		body["locale"] = "de"
+		rec := doRequest(t, p.h, "POST", "/api/v1/book/"+p.orgSlug+"/"+p.slug+"/bookings", body, nil)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body)
+		}
+		if errFields(t, rec)["locale"] == "" {
+			t.Errorf("fields = %+v, want a locale entry", errFields(t, rec))
+		}
+	})
 }
 
 // ---- row 11: GET /api/v1/bookings/{id}/manage (public(token) -> ManagedBooking) ------------

@@ -330,4 +330,25 @@ func TestBookInputValidate(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("rejects a locale the mailer has no catalog for", func(t *testing.T) {
+		de := "de"
+		in := baseBookInput(func(in *bookings.BookInput) { in.Locale = &de })
+		fields := fieldsOf(t, in.Validate())
+		if fields["locale"] == "" {
+			t.Errorf("Fields = %+v, want a locale entry", fields)
+		}
+	})
+
+	t.Run("accepts every supported locale, and no locale at all", func(t *testing.T) {
+		for _, l := range []string{"en", "nb"} {
+			locale := l
+			if err := baseBookInput(func(in *bookings.BookInput) { in.Locale = &locale }).Validate(); err != nil {
+				t.Errorf("Validate(locale=%s) = %v, want nil", l, err)
+			}
+		}
+		if err := baseBookInput(func(in *bookings.BookInput) { in.Locale = nil }).Validate(); err != nil {
+			t.Errorf("Validate(no locale) = %v, want nil", err)
+		}
+	})
 }

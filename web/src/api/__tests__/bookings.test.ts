@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { ApiError } from '#/api/client'
-import { getPublicAvailability, getPublicPage, updateBookingPageSchema } from '#/api/bookings'
+import { bookSlot, getPublicAvailability, getPublicPage, updateBookingPageSchema } from '#/api/bookings'
 
 const server = setupServer()
 
@@ -84,5 +84,30 @@ describe('updateBookingPageSchema', () => {
     expect(
       updateBookingPageSchema.safeParse({ ...validCreateInput, pageId: 'p1', status: 'paused' }).success,
     ).toBe(true)
+  })
+})
+
+describe('bookSlot', () => {
+  it('sends the visitor locale so the confirmation mail renders in their language', async () => {
+    let seenBody: Record<string, unknown> | null = null
+    server.use(
+      http.post('/api/v1/book/ada/intro/bookings', async ({ request }) => {
+        seenBody = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json(
+          { booking: { id: 'bk_1' }, manageToken: 'tok' },
+          { status: 201 },
+        )
+      }),
+    )
+
+    await bookSlot('ada', 'intro', {
+      startAt: '2026-09-15T07:00:00.000Z',
+      name: 'Ada',
+      email: 'ada@example.com',
+      timezone: 'Europe/Oslo',
+    })
+
+    // paraglide's runtime resolves the base locale ("en") under vitest.
+    expect(seenBody).toMatchObject({ locale: 'en', timezone: 'Europe/Oslo' })
   })
 })

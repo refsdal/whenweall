@@ -44,15 +44,11 @@
 //     this narrow race is not worth a second query shape; treating it uniformly as a no-op is the
 //     safer simplification.
 //
-//   - The email body's "When" text is plain English, timezone-aware but not locale-aware — the
-//     same simplification internal/polls/timers.go's optionLabelText already made and documented,
-//     since there is no Go port of formatOptionLabel/Intl.DateTimeFormat yet. The .ics attachment
-//     and the template catalog (messages.go) are still genuinely localized via booking.VisitorLocale/
-//     the recipient's Locale field.
-//
-//   - No user-locale column exists in this Go port's `users` table (unlike Drizzle's `user.locale`)
-//     — mirrors notifications.go's own note — so the organiser side of every mail always renders
-//     "en". The visitor side keeps its own real per-booking locale (bookings.visitor_locale).
+//   - Both mails are rendered in their recipient's own locale, as emails.ts did: the visitor's from
+//     bookings.visitor_locale, the organiser's from their account preference (SetLocaleResolver →
+//     auth.Service.LocaleFor, user_preferences.locale); the "When" line goes through internal/
+//     mailer's FormatDate/FormatTimeRange/FormatDateTime (the Go stand-in for formatOptionLabel's
+//     Intl.DateTimeFormat), so a Norwegian organiser reads "tir. 1. sep., 09:00–09:30".
 package bookings
 
 import (
@@ -61,6 +57,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -363,20 +360,34 @@ func pageDescriptionText(page queries.BookingPage) string {
 	return ""
 }
 
-// bookingWhenText renders a plain-English "When" line for a booking mail — see this file's package
-// doc comment on why this isn't locale-aware the way src/lib/time.ts's formatOptionLabel is. end is
-// nil for a bare point in time (a reschedule's *previous* start, whose end was never recorded —
-// mirrors emails.ts's own bookingWhen(startAt, endAt | null, ...) signature).
-func bookingWhenText(start time.Time, end *time.Time, timezone string) string {
+// organiserLocale resolves the organiser recipient's mail locale through the resolver wired by
+// SetLocaleResolver (auth.Service.LocaleFor in production — the per-user locale persisted in
+// user_preferences). "en" when no resolver is wired, there is no owner, or the resolver has no
+// answer.
+func (s *Service) organiserLocale(ctx context.Context, owner *queries.User) string {
+	if s.localeFor == nil || owner == nil {
+		return "en"
+	}
+	if l := s.localeFor(ctx, strconv.FormatInt(owner.ID, 10)); l != "" {
+		return l
+	}
+	return "en"
+}
+
+// bookingWhenText renders a booking mail's "When" line in the recipient's locale and timezone —
+// the port of emails.ts's bookingWhen (formatOptionLabel in the recipient's locale). end is nil for
+// a bare point in time (a reschedule's *previous* start, whose end was never recorded).
+//
+//	en: "Tue 1 Sep, 09:00–09:30"    nb: "tir. 1. sep., 09:00–09:30"    no end: "Tue 1 Sep, 09:00"
+func bookingWhenText(locale string, start time.Time, end *time.Time, timezone string) string {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		loc = time.UTC
 	}
-	s := start.In(loc).Format("Monday, January 2, 2006 3:04 PM")
-	if end != nil {
-		s += " – " + end.In(loc).Format("3:04 PM")
+	if end == nil {
+		return mailer.FormatDateTime(locale, start, loc)
 	}
-	return s
+	return mailer.FormatDate(locale, start, loc) + ", " + mailer.FormatTimeRange(locale, start, *end, loc)
 }
 
 // bookingManageURL/bookingDashboardURL/bookingPublicPageURL mirror emails.ts's manageUrl/
@@ -407,7 +418,7 @@ func (s *Service) bookingICSAttachment(appURL string, booking queries.Booking, p
 
 // composeBookingConfirmed ports sendBookingEmails' kind==='confirmed' branch for ONE recipient:
 // the visitor's confirmation (with its .ics invite), or the organiser notice — nil when the page
-// has no assigned member whose account still resolves.
+// has no assigned member whose account still resolves. Each side gets its own locale and timezone.
 func (s *Service) composeBookingConfirmed(ctx context.Context, appURL, recipient string, booking queries.Booking, page queries.BookingPage, org queries.Organization) (*mailer.Message, error) {
 	organiserName, owner, err := s.resolveOrganiser(ctx, page, org)
 	if err != nil {
@@ -418,6 +429,7 @@ func (s *Service) composeBookingConfirmed(ctx context.Context, appURL, recipient
 	attachments := s.bookingICSAttachment(appURL, booking, page)
 
 	if recipient == mailRecipientVisitor {
+		locale := orDefaultLocale(booking.VisitorLocale)
 		return &mailer.Message{
 			To:       booking.VisitorEmail,
 			Template: "booking_confirmed",
@@ -425,10 +437,10 @@ func (s *Service) composeBookingConfirmed(ctx context.Context, appURL, recipient
 				"VisitorName":   booking.VisitorName,
 				"PageTitle":     page.Title,
 				"OrganiserName": organiserName,
-				"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
+				"When":          bookingWhenText(locale, booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
 				"Location":      location,
 				"ManageURL":     manageURL,
-				"Locale":        orDefaultLocale(booking.VisitorLocale),
+				"Locale":        locale,
 			},
 			Attachments: attachments,
 		}, nil
@@ -436,6 +448,7 @@ func (s *Service) composeBookingConfirmed(ctx context.Context, appURL, recipient
 	if owner == nil {
 		return nil, nil //nolint:nilnil // no organiser to notify
 	}
+	locale := s.organiserLocale(ctx, owner)
 	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_organiser_notice",
@@ -444,10 +457,10 @@ func (s *Service) composeBookingConfirmed(ctx context.Context, appURL, recipient
 			"VisitorName":  booking.VisitorName,
 			"VisitorEmail": booking.VisitorEmail,
 			"VisitorNote":  nullString(booking.VisitorNote),
-			"When":         bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone),
+			"When":         bookingWhenText(locale, booking.StartAt, &booking.EndAt, page.Timezone),
 			"Location":     location,
 			"ViewURL":      bookingDashboardURL(appURL, page.ID),
-			"Locale":       "en",
+			"Locale":       locale,
 		},
 		Attachments: attachments,
 	}, nil
@@ -472,16 +485,17 @@ func (s *Service) composeBookingCancelled(ctx context.Context, appURL, recipient
 		if cancelledBy == "visitor" {
 			visitorCancelledBy = "you"
 		}
+		locale := orDefaultLocale(booking.VisitorLocale)
 		return &mailer.Message{
 			To:       booking.VisitorEmail,
 			Template: "booking_cancelled",
 			Data: map[string]any{
 				"RecipientName": booking.VisitorName,
 				"PageTitle":     page.Title,
-				"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
+				"When":          bookingWhenText(locale, booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
 				"CancelledBy":   visitorCancelledBy,
 				"ViewURL":       bookingPublicPageURL(appURL, org.Slug, page.Slug),
-				"Locale":        orDefaultLocale(booking.VisitorLocale),
+				"Locale":        locale,
 			},
 		}, nil
 	}
@@ -492,17 +506,18 @@ func (s *Service) composeBookingCancelled(ctx context.Context, appURL, recipient
 	if cancelledBy == "organiser" {
 		organiserCancelledBy = "you"
 	}
+	locale := s.organiserLocale(ctx, owner)
 	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_cancelled",
 		Data: map[string]any{
 			"RecipientName": displayName(*owner),
 			"PageTitle":     page.Title,
-			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone),
+			"When":          bookingWhenText(locale, booking.StartAt, &booking.EndAt, page.Timezone),
 			"CancelledBy":   organiserCancelledBy,
 			"VisitorName":   booking.VisitorName,
 			"ViewURL":       bookingDashboardURL(appURL, page.ID),
-			"Locale":        "en",
+			"Locale":        locale,
 		},
 	}, nil
 }
@@ -520,10 +535,11 @@ func (s *Service) composeBookingRescheduled(ctx context.Context, appURL, recipie
 	attachments := s.bookingICSAttachment(appURL, booking, page)
 
 	if recipient == mailRecipientVisitor {
-		visitorWhen := bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone)
-		previousVisitorWhen := visitorWhen
+		locale := orDefaultLocale(booking.VisitorLocale)
+		when := bookingWhenText(locale, booking.StartAt, &booking.EndAt, booking.VisitorTimezone)
+		previousWhen := when
 		if previousStartAt != nil {
-			previousVisitorWhen = bookingWhenText(*previousStartAt, nil, booking.VisitorTimezone)
+			previousWhen = bookingWhenText(locale, *previousStartAt, nil, booking.VisitorTimezone)
 		}
 		return &mailer.Message{
 			To:       booking.VisitorEmail,
@@ -532,11 +548,11 @@ func (s *Service) composeBookingRescheduled(ctx context.Context, appURL, recipie
 				"VisitorName":   booking.VisitorName,
 				"PageTitle":     page.Title,
 				"OrganiserName": organiserName,
-				"PreviousWhen":  previousVisitorWhen,
-				"When":          visitorWhen,
+				"PreviousWhen":  previousWhen,
+				"When":          when,
 				"Location":      location,
 				"ManageURL":     manageURL,
-				"Locale":        orDefaultLocale(booking.VisitorLocale),
+				"Locale":        locale,
 			},
 			Attachments: attachments,
 		}, nil
@@ -544,10 +560,11 @@ func (s *Service) composeBookingRescheduled(ctx context.Context, appURL, recipie
 	if owner == nil {
 		return nil, nil //nolint:nilnil // no organiser to notify
 	}
-	organiserWhen := bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone)
-	previousOrganiserWhen := organiserWhen
+	locale := s.organiserLocale(ctx, owner)
+	when := bookingWhenText(locale, booking.StartAt, &booking.EndAt, page.Timezone)
+	previousWhen := when
 	if previousStartAt != nil {
-		previousOrganiserWhen = bookingWhenText(*previousStartAt, nil, page.Timezone)
+		previousWhen = bookingWhenText(locale, *previousStartAt, nil, page.Timezone)
 	}
 	return &mailer.Message{
 		To:       owner.Email,
@@ -555,11 +572,11 @@ func (s *Service) composeBookingRescheduled(ctx context.Context, appURL, recipie
 		Data: map[string]any{
 			"PageTitle":    page.Title,
 			"VisitorName":  booking.VisitorName,
-			"PreviousWhen": previousOrganiserWhen,
-			"When":         organiserWhen,
+			"PreviousWhen": previousWhen,
+			"When":         when,
 			"Location":     location,
 			"ViewURL":      bookingDashboardURL(appURL, page.ID),
-			"Locale":       "en",
+			"Locale":       locale,
 		},
 		Attachments: attachments,
 	}, nil
@@ -576,32 +593,34 @@ func (s *Service) composeBookingReminder(ctx context.Context, appURL, recipient 
 	location := pageLocationText(page)
 
 	if recipient == mailRecipientVisitor {
+		locale := orDefaultLocale(booking.VisitorLocale)
 		return &mailer.Message{
 			To:       booking.VisitorEmail,
 			Template: "booking_reminder",
 			Data: map[string]any{
 				"RecipientName": booking.VisitorName,
 				"PageTitle":     page.Title,
-				"When":          bookingWhenText(booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
+				"When":          bookingWhenText(locale, booking.StartAt, &booking.EndAt, booking.VisitorTimezone),
 				"Location":      location,
 				"ViewURL":       s.bookingManageURL(appURL, booking.ID),
-				"Locale":        orDefaultLocale(booking.VisitorLocale),
+				"Locale":        locale,
 			},
 		}, nil
 	}
 	if owner == nil {
 		return nil, nil //nolint:nilnil // no organiser to remind
 	}
+	locale := s.organiserLocale(ctx, owner)
 	return &mailer.Message{
 		To:       owner.Email,
 		Template: "booking_reminder",
 		Data: map[string]any{
 			"RecipientName": displayName(*owner),
 			"PageTitle":     page.Title,
-			"When":          bookingWhenText(booking.StartAt, &booking.EndAt, page.Timezone),
+			"When":          bookingWhenText(locale, booking.StartAt, &booking.EndAt, page.Timezone),
 			"Location":      location,
 			"ViewURL":       bookingDashboardURL(appURL, page.ID),
-			"Locale":        "en",
+			"Locale":        locale,
 		},
 	}, nil
 }

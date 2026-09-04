@@ -156,9 +156,11 @@ func serve() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	// Plan C: user recipients' mail locale (user_preferences via auth.Service.LocaleFor). Wired
-	// before worker.Run so the first mail:poll job the worker claims already sees it.
+	// Plan C/D: user recipients' mail locale (user_preferences via auth.Service.LocaleFor), for
+	// both poll and booking mail. Wired before worker.Run so the first mail:poll/mail:booking job
+	// the worker claims already sees it.
 	pollsSvc.SetLocaleSource(authSvc)
+	bookingsSvc.SetLocaleResolver(authSvc.LocaleFor)
 
 	if err := jobs.EnsureScheduled(ctx, sqlDB); err != nil {
 		fmt.Fprintln(os.Stderr, err)
