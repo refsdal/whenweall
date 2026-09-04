@@ -8,6 +8,8 @@ todos.json
 test-results
 playwright-report
 blob-report
+# Written by e2e/run-server.sh for the run that started containers; removed by global-teardown.ts.
+e2e/.run-server-marker.json
 docs/screenshots/*.png
 
 !.env.example
