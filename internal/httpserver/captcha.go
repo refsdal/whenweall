@@ -2,8 +2,8 @@ package httpserver
 
 import (
 	"net/http"
-	"path"
-	"strings"
+
+	"github.com/refsdal/whenweall/internal/routekey"
 )
 
 // authCaptchaRoutes are the three unauthenticated, bot-attractive Limen routes that must carry a
@@ -28,8 +28,7 @@ func (s *Server) authCaptchaMiddleware(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cleaned := path.Clean(strings.TrimSuffix(r.URL.Path, "/"))
-		if _, ok := authCaptchaRoutes[r.Method+" "+cleaned]; !ok {
+		if _, ok := authCaptchaRoutes[routekey.Of(r)]; !ok {
 			next.ServeHTTP(w, r)
 			return
 		}

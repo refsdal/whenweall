@@ -5,9 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path"
-	"strings"
 
+	"github.com/refsdal/whenweall/internal/routekey"
 	"github.com/thecodearcher/limen/plugins/organization"
 )
 
@@ -226,8 +225,7 @@ var authMountUnverifiedAllowed = map[string]struct{}{
 // "couldn't tell, so let it through" — see migrations/00007_admin_locks.sql for the full picture.
 func (s *Service) AuthMountGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cleaned := path.Clean(strings.TrimSuffix(r.URL.Path, "/"))
-		route := r.Method + " " + cleaned
+		route := routekey.Of(r)
 		if route == authMountSignoutMethodAndPath {
 			next.ServeHTTP(w, r)
 			return

@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
+	"github.com/refsdal/whenweall/internal/routekey"
 )
 
 // Server holds the pieces needed to build and run the application's HTTP handler.
@@ -82,8 +82,7 @@ func (s *Server) authRateLimitMiddleware(authHandler http.Handler) http.Handler 
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cleaned := path.Clean(strings.TrimSuffix(r.URL.Path, "/"))
-		if h, ok := limited[r.Method+" "+cleaned]; ok {
+		if h, ok := limited[routekey.Of(r)]; ok {
 			h.ServeHTTP(w, r)
 			return
 		}
