@@ -29,6 +29,14 @@ check "User"                "65532:65532"   "$(docker inspect -f '{{.Config.User
 check "Health"              "healthy"       "$(docker inspect -f '{{.State.Health.Status}}' "$app")"
 check "ENABLE_TEST_ROUTES"  "true"          "$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$app" | sed -n 's/^ENABLE_TEST_ROUTES=//p')"
 
+# The container-level "User" check above inspects the RUNNING container, which compose.e2e.yaml's
+# own `user: '65532:65532'` sets belt-and-braces (so the app never actually runs as root even if
+# the image regresses) — meaning it would keep reporting 65532:65532 even if the Dockerfile's own
+# `USER 65532:65532` were dropped. This second check reads the built IMAGE's own config instead,
+# bypassing that override, so a dropped Dockerfile USER still fails this script even though the
+# running container stayed safe.
+check "Image USER"         "65532:65532"   "$(docker image inspect -f '{{.Config.User}}' whenweall:e2e)"
+
 # And the seed route the suite depends on is actually reachable through the published port.
 status="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
   -H 'Origin: http://localhost:3100' -d '{}' http://localhost:3100/api/test/seed)"

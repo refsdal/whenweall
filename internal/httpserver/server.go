@@ -119,7 +119,8 @@ func (s *Server) routes() {
 
 	// Captcha sits between the rate limit and the guard: cheapest check first (a counter), then
 	// the network round trip to Turnstile, then Limen. Not skipped under EnableTestRoutes — the
-	// e2e suite configures Cloudflare's always-pass test keys and exercises the real header.
+	// e2e suite covers the documented captcha-off default (no site/secret keys configured) rather
+	// than exercising Turnstile itself; see authCaptchaMiddleware's own doc comment.
 	captchaAuthHandler := s.authCaptchaMiddleware(guardedAuthHandler)
 
 	// The whole mount goes through one middleware that applies the hot, unauthenticated auth

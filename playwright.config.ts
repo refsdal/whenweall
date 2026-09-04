@@ -64,6 +64,13 @@ export default defineConfig({
   // A fixed browser locale keeps Paraglide's `preferredLanguage` strategy deterministic: without
   // it the suite resolves whatever `Accept-Language` the host machine happens to send, and the
   // English assertions in `i18n.spec.ts` pass or fail depending on the developer's OS settings.
+  // Most assertions inherit this rather than setting their own: 30s is reserved for mail
+  // (waitForMail's own default) and 10s for realtime (live.spec.ts), but everything else — one
+  // shared Go process and its DATABASE_POOL_SIZE=10 connection pool, serving whatever `workers`
+  // browsers CI or a laptop runs concurrently, alongside Postgres and Mailpit on the same
+  // machine — would otherwise fall back to Playwright's 5s default. Neither CI job has run on a
+  // real runner yet; this is cheap insurance against load-dependent flake there.
+  expect: { timeout: 10_000 },
   use: { baseURL: APP_URL, locale: 'en-US', trace: 'on-first-retry' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   globalTeardown: './e2e/global-teardown.ts',

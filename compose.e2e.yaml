@@ -11,8 +11,11 @@
 # Everything security-relevant (read_only, cap_drop ALL, no-new-privileges, the scratch image's
 # USER) is inherited from compose.yaml on purpose: this file must never weaken it, only add the
 # test-only pieces — the seed route, a Mailpit sink, the prebuilt local image, and an explicit
-# `user` so a Dockerfile regression that drops USER would still be caught by assert-hardening.sh
-# rather than silently running as root. Ports/credentials come from e2e/compose.e2e.env.
+# `user` as belt-and-braces so the app never runs as root even if the image regresses. That
+# override means assert-hardening.sh's container-level User check would keep reporting
+# 65532:65532 even if the Dockerfile's own USER were dropped — it now ALSO inspects the built
+# image's own Config.User directly, bypassing this override, so a dropped Dockerfile USER still
+# fails the script. Ports/credentials come from e2e/compose.e2e.env.
 services:
   db:
     # Nothing to override: a throwaway database per run — `down -v` removes the volume.
