@@ -58,25 +58,31 @@ import (
 // file's own `?t=` query parameter (see manageTokenFromQuery) rather than through the Auth seam.
 type Auth = httpserver.Auth
 
+// Public rate-limit budgets, per client IP per minute (httpserver.PublicRateLimit's fixed window).
+// The old TS 'book' bucket (20/min) metered one request per month view — page + slots came back
+// in one payload. This REST split costs two GETs per month view (page, availability), a second
+// pair after the timezone-correction navigation, and a pair on every page.changed refetch, so
+// reads get their own, roomier bucket; the 20/min budget stays exactly where abuse actually
+// hurts — creating, cancelling and rescheduling bookings. Exported so handlers_test.go loops over
+// the same numbers Register mounts.
+const (
+	PublicBookRateLimit = 20
+	PublicReadRateLimit = 120
+)
+
 // Register mounts this package's whole HTTP surface on mux, following internal/polls/
-// handlers.go's Register exactly: thin handlers, a shared public rate limiter (bookLimit) for
-// every visitor-facing endpoint on this public booking-flow surface — mirroring
-// src/server/bookings/bookings.functions.ts's own SERVER_FN_MIDDLEWARE, whose every
-// visitor-facing entry point (getPublicAvailability, bookSlot, cancelBooking, rescheduleBooking)
-// shares the single 'book' rate-limit bucket — plus GetPublicPage, which the TS source has no
-// standalone route for at all (it's only ever called internally by getPublicAvailability there);
-// this Go port's own REST split gives it a dedicated endpoint, so it gets the same bookLimit
-// rather than being an unmetered slug-enumeration surface. GET .../bookings/{id}/manage
-// (handleManagedBooking) is the same shape — an anonymous, token-authenticated lookup an
-// attacker could otherwise use to brute-force a booking's 43-character manage token unmetered —
-// so it shares bookLimit too (a gap in this row's original wiring, fixed alongside the
-// google-status gate above). Captcha-if-anon (RequireCaptchaIfAnon)
-// is narrower than the rate limiter: only Book actually calls requireTurnstile in the TS source
-// (bookSlot), so only handleBook checks it here — cancelBooking/rescheduleBooking are already
-// authenticated by the manage token itself and never call requireTurnstile in the TS source
-// either, so this port doesn't add a captcha gate to handleCancel/handleReschedule.
+// handlers.go's Register: thin handlers, and two per-IP rate limiters for the visitor-facing
+// (session-less) endpoints — readLimit ("bookings.read", PublicReadRateLimit/min) on every GET
+// (public page, availability, manage lookup, .ics download — the last two are token-authenticated
+// lookups an attacker could otherwise use to brute-force a 43-character manage token unmetered),
+// bookLimit ("bookings.book", PublicBookRateLimit/min) on every mutation (book, cancel,
+// reschedule), mirroring bookings.functions.ts's own 'book' bucket. Captcha-if-anon
+// (RequireCaptchaIfAnon) is narrower than either limiter: only Book calls requireTurnstile in the
+// TS source, so only handleBook checks it here — cancel/reschedule are already authenticated by
+// the manage token (or an organiser session).
 func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
-	bookLimit := httpserver.PublicRateLimit(s.db, cfg, "bookings", "book", 20, time.Minute)
+	bookLimit := httpserver.PublicRateLimit(s.db, cfg, "bookings", "book", PublicBookRateLimit, time.Minute)
+	readLimit := httpserver.PublicRateLimit(s.db, cfg, "bookings", "read", PublicReadRateLimit, time.Minute)
 	// createLimit is the booking-page analogue of internal/polls's 'create' bucket: page creation
 	// was REQUIRE_ORG-only in the TS source too, but an account minting pages without bound is the
 	// same abuse shape as unbounded poll creation, so it gets the same 20/min per-IP budget.
@@ -93,12 +99,12 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("POST /api/v1/org/handle", httpserver.WithOrgSession(a, s.handleSetOrgSlug))
 	mux.Handle("POST /api/v1/me/google/disconnect", s.handleDisconnectGoogle(a))
 
-	mux.Handle("GET /api/v1/book/{org}/{page}", bookLimit(http.HandlerFunc(s.handleGetPublicPage)))
-	mux.Handle("GET /api/v1/book/{org}/{page}/availability", bookLimit(http.HandlerFunc(s.handlePublicAvailability)))
+	mux.Handle("GET /api/v1/book/{org}/{page}", readLimit(http.HandlerFunc(s.handleGetPublicPage)))
+	mux.Handle("GET /api/v1/book/{org}/{page}/availability", readLimit(http.HandlerFunc(s.handlePublicAvailability)))
 	mux.Handle("POST /api/v1/book/{org}/{page}/bookings", bookLimit(http.HandlerFunc(s.handleBook(a, cfg))))
 
-	mux.Handle("GET /api/v1/bookings/{id}/manage", bookLimit(http.HandlerFunc(s.handleManagedBooking(a))))
-	mux.Handle("GET /api/v1/bookings/{id}/calendar.ics", bookLimit(http.HandlerFunc(s.handleBookingICS(cfg))))
+	mux.Handle("GET /api/v1/bookings/{id}/manage", readLimit(http.HandlerFunc(s.handleManagedBooking(a))))
+	mux.Handle("GET /api/v1/bookings/{id}/calendar.ics", readLimit(http.HandlerFunc(s.handleBookingICS(cfg))))
 	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a))))
 	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule(a))))
 }

@@ -655,23 +655,53 @@ func TestHandlerGetPublicPage(t *testing.T) {
 		}
 	})
 
-	// Review fix: this endpoint didn't exist as a standalone route in the TS source at all (it
-	// only ever called getPublicPage internally, from getPublicAvailability) — the REST split
-	// introduced it as its own unmetered slug-enumeration surface. It now shares the same
-	// bookLimit bucket as every other visitor-facing endpoint (see Register's own doc comment),
-	// so it 429s past the shared limit (20/minute) exactly like Book/PublicAvailability/Cancel/
-	// Reschedule do.
-	t.Run("the shared 'book' rate limiter applies", func(t *testing.T) {
+	// Reads (page, availability, manage, .ics) have their own, roomier bucket: the SPA fetches
+	// page + availability per month view, again after the timezone correction, and again on every
+	// page.changed — a visitor flipping through months must never hit the 20/min budget that
+	// exists to slow down booking/cancel/reschedule abuse.
+	t.Run("read bucket: PublicReadRateLimit per minute, separate from the mutating bucket", func(t *testing.T) {
 		p2 := setupHandlerPage(t, testConfig(t))
 		var last *httptest.ResponseRecorder
-		for i := 0; i < 21; i++ {
+		for i := 0; i < bookings.PublicReadRateLimit; i++ {
 			last = doRequest(t, p2.h, "GET", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug, nil, nil)
+			if last.Code != http.StatusOK {
+				t.Fatalf("read %d: status = %d, want 200; body=%s", i+1, last.Code, last.Body)
+			}
 		}
+		last = doRequest(t, p2.h, "GET", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug, nil, nil)
 		if last.Code != http.StatusTooManyRequests {
-			t.Fatalf("21st request: status = %d, want 429; body=%s", last.Code, last.Body)
+			t.Fatalf("read %d: status = %d, want 429; body=%s", bookings.PublicReadRateLimit+1, last.Code, last.Body)
 		}
 		if errCode(t, last) != "rate_limited" {
 			t.Errorf("code = %q, want rate_limited", errCode(t, last))
+		}
+
+		// Exhausting the read bucket leaves the mutating bucket untouched: a booking still lands.
+		rec := doRequest(t, p2.h, "POST", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug+"/bookings", bookBody(futureUTCSlot(3, 9, 0)), nil)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("Book after read-bucket exhaustion: status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("mutating bucket: PublicBookRateLimit per minute, and exhausting it leaves reads alone", func(t *testing.T) {
+		p2 := setupHandlerPage(t, testConfig(t))
+		var last *httptest.ResponseRecorder
+		for i := 0; i < bookings.PublicBookRateLimit; i++ {
+			// A cancel against an unknown id is a cheap, always-404 mutating request that still
+			// counts against the bucket (the limiter runs before the handler).
+			last = doRequest(t, p2.h, "POST", "/api/v1/bookings/missing/cancel?t=x", nil, nil)
+			if last.Code != http.StatusNotFound {
+				t.Fatalf("cancel %d: status = %d, want 404; body=%s", i+1, last.Code, last.Body)
+			}
+		}
+		last = doRequest(t, p2.h, "POST", "/api/v1/bookings/missing/cancel?t=x", nil, nil)
+		if last.Code != http.StatusTooManyRequests {
+			t.Fatalf("cancel %d: status = %d, want 429; body=%s", bookings.PublicBookRateLimit+1, last.Code, last.Body)
+		}
+
+		rec := doRequest(t, p2.h, "GET", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug, nil, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET page after book-bucket exhaustion: status = %d, want 200; body=%s", rec.Code, rec.Body)
 		}
 	})
 }
@@ -864,10 +894,10 @@ func TestHandlerManagedBooking(t *testing.T) {
 	})
 
 	// M1: this endpoint was unmetered — an anonymous caller could brute-force a booking's
-	// 43-character manage token with no rate limit at all. It now shares the same bookLimit
-	// bucket as every other visitor-facing endpoint (Register's own doc comment), so it 429s
-	// past the shared limit (20/minute) too.
-	t.Run("M1: the shared 'book' rate limiter applies", func(t *testing.T) {
+	// 43-character manage token with no rate limit at all. It sits in the read bucket
+	// (PublicReadRateLimit/min, Register's own doc comment), separate from the Book call that
+	// created the booking, so exactly PublicReadRateLimit lookups succeed and the next one 429s.
+	t.Run("M1: the read rate limiter applies", func(t *testing.T) {
 		p2 := setupHandlerPage(t, testConfig(t))
 		start2 := futureUTCSlot(3, 9, 0)
 		bookRec2 := doRequest(t, p2.h, "POST", "/api/v1/book/"+p2.orgSlug+"/"+p2.slug+"/bookings", bookBody(start2), nil)
@@ -877,13 +907,15 @@ func TestHandlerManagedBooking(t *testing.T) {
 		}](t, bookRec2)
 
 		var last *httptest.ResponseRecorder
-		// The Book call above already consumed one slot in the shared bucket; 20 more manage
-		// lookups is the 21st request overall.
-		for i := 0; i < 20; i++ {
+		for i := 0; i < bookings.PublicReadRateLimit; i++ {
 			last = doRequest(t, p2.h, "GET", "/api/v1/bookings/"+booked2.Booking.ID+"/manage?t="+booked2.ManageToken, nil, nil)
+			if last.Code != http.StatusOK {
+				t.Fatalf("lookup %d: status = %d, want 200; body=%s", i+1, last.Code, last.Body)
+			}
 		}
+		last = doRequest(t, p2.h, "GET", "/api/v1/bookings/"+booked2.Booking.ID+"/manage?t="+booked2.ManageToken, nil, nil)
 		if last.Code != http.StatusTooManyRequests {
-			t.Fatalf("21st request: status = %d, want 429; body=%s", last.Code, last.Body)
+			t.Fatalf("lookup %d: status = %d, want 429; body=%s", bookings.PublicReadRateLimit+1, last.Code, last.Body)
 		}
 		if errCode(t, last) != "rate_limited" {
 			t.Errorf("code = %q, want rate_limited", errCode(t, last))
