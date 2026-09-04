@@ -142,6 +142,15 @@ func armDeadline(ctx context.Context, tx db.DBTX, pollID string, deadlineAt *tim
 // event must be one of the digest-batched events (isDigestEvent) — an immediate event has no
 // debounce window and must go through its own dedicated path instead (e.g. Finalize/Claim's
 // direct enqueueMailPoll calls, or the "poll.deadline" handler's "closed" mail).
+//
+// Interplay with the running handler (the mid-run race): jobs.Schedule's upsert swaps in a NEW id
+// on conflict, so an enqueue that lands while a worker holds this row makes the worker's
+// Complete(oldID) a no-op and the replacement row due again — before takeDigestItems existed that
+// re-sent the whole old batch. Now the handler first empties the row's items under this same
+// advisory lock (keyed by the id it claimed); an enqueue that wins the lock first merges the old
+// batch into a replacement row (and the handler, finding its id gone, sends nothing — the
+// replacement carries everything); an enqueue that comes second finds an empty accumulator and
+// starts a fresh window (above). Either way every item is sent exactly once.
 func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item DigestItem) error {
 	if !isDigestEvent(item.Event) {
 		return fmt.Errorf("polls: %q is not a digest-batched event", item.Event)
@@ -183,6 +192,13 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 		}
 	}
 
+	// A row whose items were just taken by the running handler (takeDigestItems empties them in
+	// place; the row itself survives until Complete) is not a batch to join: start a fresh
+	// debounce window rather than inheriting the taken batch's run_at, which is already in the
+	// past and would send this lone item immediately.
+	if scanErr == nil && len(payload.Items) == 0 {
+		runAt = time.Now().Add(digestDelay)
+	}
 	payload.PollID = pollID
 	payload.Items = append(payload.Items, item)
 
@@ -195,6 +211,40 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 		return err
 	}
 	return tx.Commit()
+}
+
+// takeDigestItems is the "poll.digest" handler's ownership step — see EnqueueDigestItem's doc
+// comment for the race it closes. Under the same poll-scoped advisory lock, empty the item list
+// of the row the worker claimed, addressed by that exact job id. Returns false when no row has
+// that id anymore: EnqueueDigestItem has already merged this batch into a replacement row (the
+// upsert swaps ids), which the next poll processes in full — so the caller must send nothing.
+// After true, the batch the caller was handed is exclusively its own; any later enqueue sees an
+// empty accumulator and starts a fresh window instead of re-queuing these items.
+func (s *Service) takeDigestItems(ctx context.Context, jobID, pollID string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('poll.digest:' || $1))`, pollID); err != nil {
+		return false, err
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE scheduled_jobs SET payload = jsonb_build_object('pollId', $2::text, 'items', '[]'::jsonb) WHERE id = $1 AND kind = $3`,
+		jobID, pollID, jobKindDigest,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // MailSender is the narrow seam this package's send paths need from *mailer.Mailer — the
@@ -235,6 +285,13 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m MailSender) {
 		var p digestPayload
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("polls: decode poll.digest payload: %w", err)
+		}
+		owned, err := s.takeDigestItems(ctx, job.ID, p.PollID)
+		if err != nil {
+			return err
+		}
+		if !owned {
+			return nil // merged into a replacement row by a concurrent enqueue; that row sends it
 		}
 		return s.handleDigestJob(ctx, p)
 	})

@@ -87,6 +87,14 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	return len(claimed), nil
 }
 
+// ProcessClaimed runs one job ClaimDue already handed out through its handler and reconciles the
+// outcome (Complete on success, fail otherwise) — RunOnce's per-job body. Exported purely as a
+// test seam: a test can hold a claimed job "mid-run" (claim it, let something else happen, then
+// process it) deterministically. Production code only ever reaches process via RunOnce.
+func (w *Worker) ProcessClaimed(ctx context.Context, job Job) {
+	w.process(ctx, job)
+}
+
 // process runs one claimed job's handler and reconciles the outcome against the table. A
 // handler error (including a recovered panic, or an unknown kind) fails the job; the dead-letter
 // moment — willRetry == false — is logged at ERROR because that's when a human needs to look.

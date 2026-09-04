@@ -1433,3 +1433,130 @@ func TestClaimConfirmationAttachesMultiEventICS(t *testing.T) {
 		}
 	})
 }
+
+// TestDigestItemEnqueuedMidRunIsNotResent reproduces the race deterministically by driving the
+// worker's two steps by hand: ClaimDue (the row is now "mid-run") -> EnqueueDigestItem lands
+// -> the claimed job's handler runs (ProcessClaimed) -> the next poll runs. Before the fix, the
+// handler fanned out its stale batch AND the merged replacement row was processed again, so the
+// owner received Ada twice. PollRoom.ts's #clearDigest-after-send made this impossible by
+// construction; takeDigestItems is that guarantee's Postgres form.
+func TestDigestItemEnqueuedMidRunIsNotResent(t *testing.T) {
+	ctx := context.Background()
+
+	enqueue := func(t *testing.T, s *polls.Service, pollID, name string) {
+		t.Helper()
+		if err := s.EnqueueDigestItem(ctx, pollID, polls.DigestItem{Event: polls.EventResponseCreated, Name: name}); err != nil {
+			t.Fatalf("EnqueueDigestItem(%s): %v", name, err)
+		}
+	}
+	claimOne := func(t *testing.T, d *sql.DB) jobs.Job {
+		t.Helper()
+		claimed, err := jobs.ClaimDue(ctx, d, "test-replica", 20)
+		if err != nil {
+			t.Fatalf("ClaimDue: %v", err)
+		}
+		if len(claimed) != 1 || claimed[0].Kind != "poll.digest" {
+			t.Fatalf("claimed = %+v, want exactly one poll.digest job", claimed)
+		}
+		return claimed[0]
+	}
+	digestRow := func(t *testing.T, d *sql.DB, pollID string) (runAt time.Time, names []string) {
+		t.Helper()
+		var raw []byte
+		err := d.QueryRowContext(ctx,
+			`SELECT run_at, payload FROM scheduled_jobs WHERE kind = 'poll.digest' AND room_key = $1`, "poll:"+pollID,
+		).Scan(&runAt, &raw)
+		if err != nil {
+			t.Fatalf("digest row: %v", err)
+		}
+		var p struct {
+			Items []polls.DigestItem `json:"items"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			t.Fatalf("decode digest payload %s: %v", raw, err)
+		}
+		for _, it := range p.Items {
+			names = append(names, it.Name)
+		}
+		return runAt, names
+	}
+
+	t.Run("item landing between claim and handler: one digest, each item exactly once", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "member")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+
+		enqueue(t, s, created.ID, "Ada")
+		forceDue(t, d, "poll.digest")
+		stale := claimOne(t, d) // the worker holds [Ada] "mid-run"
+		enqueue(t, s, created.ID, "Bob")
+		w.ProcessClaimed(ctx, stale) // the held job's handler finally runs
+		if n := len(rec.byTemplate("digest")) + countJobs(t, d, "mail:poll"); n != 0 {
+			t.Fatalf("the superseded job sent/queued %d digest mails, want 0 (its batch now lives in the replacement row)", n)
+		}
+
+		forceDue(t, d, "poll.digest")
+		drainJobs(t, ctx, w)
+
+		digests := rec.byTemplate("digest")
+		if len(digests) != 1 {
+			t.Fatalf("digest mails = %d, want exactly 1: %+v", len(digests), digests)
+		}
+		lines, _ := digests[0].Data["Lines"].([]mailer.DigestLine)
+		if len(lines) != 1 || lines[0].Event != "response.created" || lines[0].Count != 2 ||
+			len(lines[0].Names) != 2 || lines[0].Names[0] != "Ada" || lines[0].Names[1] != "Bob" {
+			t.Errorf("digest lines = %+v, want one response.created line, count 2, names [Ada Bob]", lines)
+		}
+		if n := countJobs(t, d, "poll.digest"); n != 0 {
+			t.Errorf("poll.digest rows left = %d, want 0", n)
+		}
+	})
+
+	t.Run("item landing after the handler took the batch starts a fresh window", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "member")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+
+		enqueue(t, s, created.ID, "Ada")
+		forceDue(t, d, "poll.digest")
+		held := claimOne(t, d)
+		// Exactly what takeDigestItems does at the top of the handler (the handler's fan-out is
+		// simulated as already done): the accumulator is emptied in place, id unchanged.
+		if _, err := d.ExecContext(ctx,
+			`UPDATE scheduled_jobs SET payload = jsonb_build_object('pollId', $1::text, 'items', '[]'::jsonb) WHERE id = $2`,
+			created.ID, held.ID,
+		); err != nil {
+			t.Fatalf("simulate takeDigestItems: %v", err)
+		}
+
+		before := time.Now()
+		enqueue(t, s, created.ID, "Bob")
+
+		runAt, names := digestRow(t, d, created.ID)
+		if len(names) != 1 || names[0] != "Bob" {
+			t.Errorf("items = %v, want [Bob] only", names)
+		}
+		if runAt.Before(before.Add(9 * time.Minute)) {
+			t.Errorf("run_at = %s, want a fresh ~10 minute window (not the taken batch's past run_at)", runAt)
+		}
+
+		// The held job finishing now must send nothing — its id is gone.
+		w.ProcessClaimed(ctx, held)
+		if n := len(rec.byTemplate("digest")) + countJobs(t, d, "mail:poll"); n != 0 {
+			t.Errorf("superseded job produced %d digest mails, want 0", n)
+		}
+		if _, names := digestRow(t, d, created.ID); len(names) != 1 || names[0] != "Bob" {
+			t.Errorf("Bob's fresh window was disturbed: items = %v", names)
+		}
+	})
+}
