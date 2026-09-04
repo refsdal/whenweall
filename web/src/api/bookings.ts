@@ -1,5 +1,5 @@
 import * as z from 'zod'
-import { api } from '#/api/client'
+import { api, ApiError } from '#/api/client'
 import { getLocale } from '#/lib/i18n'
 import type {
   Availability,
@@ -195,31 +195,58 @@ export async function disconnectGoogleCalendar(): Promise<void> {
 
 // ---- public booking flow -------------------------------------------------------------------
 
-export function getPublicPage(handle: string, slug: string): Promise<PublicPageView | null> {
-  return api<PublicPageView | null>('GET', `/api/v1/book/${handle}/${slug}`)
+/** `null` for an unknown handle/slug — the old TS `getPublicPage` returned `null` and the route's
+ * `notFoundComponent` (`routes/book/$handle/$slug.tsx`) depends on that; `api()` itself throws
+ * `ApiError('not_found')` on the Go 404, so it's translated back here. Any other failure (rate
+ * limit, 5xx, network) still throws, so the generic error card keeps its retry button for those. */
+export async function getPublicPage(handle: string, slug: string): Promise<PublicPageView | null> {
+  try {
+    return await api<PublicPageView>('GET', `/api/v1/book/${handle}/${slug}`)
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'not_found') return null
+    throw err
+  }
 }
 
-/** `{start, end}` pairs — the Go endpoint's own response is just a flat list of start times
- * (`{"slots": [iso, ...]}`, internal/bookings/handlers.go's handlePublicAvailability), unlike the
- * old TS `getPublicAvailability`, which already returned `Interval[]`; `end` is computed here from
- * `page.slotDurationMin`, the same width every slot on a page has. */
+/** Slot start times only — the Go endpoint's own response shape (`{"slots": [iso, ...]}`,
+ * internal/bookings/handlers.go's handlePublicAvailability). `null` on `not_found`, same as
+ * `getPublicPage`, so `getPublicAvailability` can resolve `null` without `Promise.all` rejecting
+ * on the availability half of the pair. */
+async function fetchPublicSlots(input: {
+  handle: string
+  slug: string
+  from: string
+  to: string
+}): Promise<string[] | null> {
+  try {
+    const result = await api<{ slots: string[] }>(
+      'GET',
+      `/api/v1/book/${input.handle}/${input.slug}/availability`,
+      undefined,
+      { query: { from: input.from, to: input.to } },
+    )
+    return result.slots
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'not_found') return null
+    throw err
+  }
+}
+
+/** `{start, end}` pairs — `end` is computed here from `page.slotDurationMin`, the same width every
+ * slot on a page has, since the Go endpoint only returns start times (unlike the old TS
+ * `getPublicAvailability`, which already returned `Interval[]`). `null` when the page is unknown. */
 export async function getPublicAvailability(input: {
   handle: string
   slug: string
   from: string
   to: string
 }): Promise<{ page: PublicPageView; slots: { start: string; end: string }[] } | null> {
-  const [page, slotsResult] = await Promise.all([
+  const [page, starts] = await Promise.all([
     getPublicPage(input.handle, input.slug),
-    api<{ slots: string[] }>(
-      'GET',
-      `/api/v1/book/${input.handle}/${input.slug}/availability`,
-      undefined,
-      { query: { from: input.from, to: input.to } },
-    ),
+    fetchPublicSlots(input),
   ])
-  if (!page) return null
-  const slots = slotsResult.slots.map((start) => ({
+  if (!page || starts === null) return null
+  const slots = starts.map((start) => ({
     start,
     end: new Date(new Date(start).getTime() + page.slotDurationMin * 60_000).toISOString(),
   }))
