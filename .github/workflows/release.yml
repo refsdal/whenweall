@@ -37,7 +37,7 @@ jobs:
       # Image tags: a version tag push (v1.2.3) publishes semver tags (1.2.3, 1.2); a push to
       # main additionally (and only then) publishes `latest`, so `latest` always tracks main, not
       # whatever the most recent release tag happened to be.
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ghcr.io/refsdal/whenweall
@@ -51,13 +51,13 @@ jobs:
       # is architecture-independent) and the Go compiler cross-compiles the arm64 binary, so
       # nothing below ever runs under QEMU. There is deliberately no setup-qemu-action here — if
       # one reappears, something has started compiling inside the image again.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
       - uses: oven-sh/setup-bun@v2
         with: { bun-version-file: web/.bun-version }
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           {
             path: ~/.bun/install/cache,
@@ -70,16 +70,16 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.value }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Seconds of file copying: the Dockerfile COPYs one already-built binary per platform.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
