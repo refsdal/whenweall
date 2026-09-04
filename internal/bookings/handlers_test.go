@@ -954,6 +954,9 @@ func TestHandlerBookingICS(t *testing.T) {
 	if !strings.Contains(body, "UID:"+booked.Booking.ID+"@whenweall") {
 		t.Errorf("body missing booking UID: %q", body)
 	}
+	if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="whenweall-booking-`+booked.Booking.ID+`.ics"` {
+		t.Errorf("Content-Disposition = %q, want the whenweall-booking-{id}.ics attachment filename", cd)
+	}
 
 	t.Run("a wrong token is 403 invalid_token", func(t *testing.T) {
 		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics?t=wrong-token", nil, nil)
@@ -965,13 +968,51 @@ func TestHandlerBookingICS(t *testing.T) {
 		}
 	})
 
-	t.Run("a missing token is 403 invalid_token", func(t *testing.T) {
+	t.Run("no token and no session is 401 unauthenticated", func(t *testing.T) {
 		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics", nil, nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body)
+		}
+		if errCode(t, rec) != "unauthenticated" {
+			t.Errorf("code = %q, want unauthenticated", errCode(t, rec))
+		}
+	})
+
+	t.Run("an organiser session downloads without a token (the dashboard's own 'Add to calendar')", func(t *testing.T) {
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics", nil, sessHeader(p.ownerID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "text/calendar; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/calendar; charset=utf-8", ct)
+		}
+		if !strings.Contains(rec.Body.String(), "UID:"+booked.Booking.ID+"@whenweall") {
+			t.Errorf("body missing booking UID: %q", rec.Body.String())
+		}
+	})
+
+	t.Run("a same-org plain member (not creator, no managing role) is 403 forbidden", func(t *testing.T) {
+		memberID := seedUser(t, p.d)
+		addOrgMember(t, p.d, p.orgID, memberID, "member")
+		p.a.login(&auth.Session{UserID: memberID, ActiveOrgID: p.orgID})
+
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics", nil, sessHeader(memberID))
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
 		}
-		if errCode(t, rec) != "invalid_token" {
-			t.Errorf("code = %q, want invalid_token", errCode(t, rec))
+		if errCode(t, rec) != "forbidden" {
+			t.Errorf("code = %q, want forbidden", errCode(t, rec))
+		}
+	})
+
+	t.Run("a session from another org is 404 (no cross-org existence leak)", func(t *testing.T) {
+		otherOrgID, otherUserID := seedOrgAndUser(t, p.d)
+		addOrgMember(t, p.d, otherOrgID, otherUserID, "owner")
+		p.a.login(&auth.Session{UserID: otherUserID, ActiveOrgID: otherOrgID})
+
+		rec := doRequest(t, p.h, "GET", "/api/v1/bookings/"+booked.Booking.ID+"/calendar.ics", nil, sessHeader(otherUserID))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body)
 		}
 	})
 

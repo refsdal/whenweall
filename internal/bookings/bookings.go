@@ -697,15 +697,14 @@ func (s *Service) ManagedBooking(ctx context.Context, bookingID, manageToken str
 
 // BookingICS builds bookingID's own .ics download — the same visitor-facing calendar file
 // sendBookingConfirmedMail/sendBookingRescheduledMail attach to their mails (BuildBookingICS,
-// ics.go), now also reachable as a standalone GET so a visitor who deleted that mail (or whose
-// mail client dropped the attachment) can still re-download the invite from the manage link. Token
-// verification only — no organiser-session fallback the way ManagedBooking/Cancel/Reschedule each
-// have (I6): this is a plain restatement of a mail attachment the visitor's own manage token
-// already unlocks, not a new owner-facing surface, so it stays exactly as narrow as the brief
-// asks. A wrong or missing token is ErrInvalidToken (403 invalid_token, the same mapping every
-// other manage-token consumer in this package uses) rather than ErrNotFound, matching
-// verifyManageToken's own "empty token never verifies" rule.
-func (s *Service) BookingICS(ctx context.Context, bookingID, manageToken, appURL string) ([]byte, error) {
+// ics.go), reachable as a standalone GET so a visitor who lost that mail can re-download the
+// invite from the manage page, and so the organiser's own dashboard/manage view can offer the
+// same button. Auth mirrors ManagedBooking exactly (the old TS route, main:src/routes/booking/
+// $id/calendar[.]ics.ts, accepted either credential too): a manage token (byOrganiser: false) is
+// verified against the booking — wrong or empty is ErrInvalidToken; byOrganiser: true skips the
+// token check and is only ever set by the HTTP layer after RequireManageableBooking (authz.go)
+// has established the caller manages the booking's page.
+func (s *Service) BookingICS(ctx context.Context, bookingID, manageToken string, byOrganiser bool, appURL string) ([]byte, error) {
 	booking, err := s.q.GetBooking(ctx, bookingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -713,7 +712,7 @@ func (s *Service) BookingICS(ctx context.Context, bookingID, manageToken, appURL
 	if err != nil {
 		return nil, err
 	}
-	if !s.verifyManageToken(bookingID, manageToken) {
+	if !byOrganiser && !s.verifyManageToken(bookingID, manageToken) {
 		return nil, ErrInvalidToken
 	}
 

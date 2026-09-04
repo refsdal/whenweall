@@ -104,7 +104,7 @@ func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
 	mux.Handle("POST /api/v1/book/{org}/{page}/bookings", bookLimit(http.HandlerFunc(s.handleBook(a, cfg))))
 
 	mux.Handle("GET /api/v1/bookings/{id}/manage", readLimit(http.HandlerFunc(s.handleManagedBooking(a))))
-	mux.Handle("GET /api/v1/bookings/{id}/calendar.ics", readLimit(http.HandlerFunc(s.handleBookingICS(cfg))))
+	mux.Handle("GET /api/v1/bookings/{id}/calendar.ics", readLimit(http.HandlerFunc(s.handleBookingICS(a, cfg))))
 	mux.Handle("POST /api/v1/bookings/{id}/cancel", bookLimit(http.HandlerFunc(s.handleCancel(a))))
 	mux.Handle("POST /api/v1/bookings/{id}/reschedule", bookLimit(http.HandlerFunc(s.handleReschedule(a))))
 }
@@ -588,24 +588,39 @@ func (s *Service) handleManagedBooking(a Auth) http.HandlerFunc {
 	}
 }
 
-// handleBookingICS serves bookingID's own .ics download over ?t=<manage token> — the standalone
-// re-download surface BookingICS (bookings.go) backs; see that method's own doc comment for why
-// this route has no organiser-session fallback the way handleManagedBooking/handleCancel/
-// handleReschedule each do. Content-Disposition is deliberately omitted: this response is meant to
-// be opened by the browser's own calendar-import flow (the same reason the mailed attachment's own
-// filename, "calendar.ics", is enough context on its own), not saved to disk under a
-// server-chosen name.
-func (s *Service) handleBookingICS(cfg *config.Config) http.HandlerFunc {
+// handleBookingICS serves bookingID's .ics download. Credential resolution is the same as
+// handleManagedBooking's: a `?t=` manage token, or — without one — a signed-in caller who manages
+// the booking's page (requireOwnerSession → RequireManageableBooking → BookingICS(byOrganiser:
+// true)), so the organiser's own "Add to calendar" button on the dashboard/manage page works with
+// no token in hand (the token lives in the visitor's mail, not the dashboard). Content-Disposition
+// names the file whenweall-booking-{id}.ics exactly as the old TS route did — browsers save the
+// download under a recognisable name instead of "calendar.ics" or the URL's last segment.
+func (s *Service) handleBookingICS(a Auth, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bookingID := r.PathValue("id")
-		token := manageTokenFromQuery(r)
 
-		ics, err := s.BookingICS(r.Context(), bookingID, token, cfg.AppURL)
+		var ics []byte
+		var err error
+		if token := manageTokenFromQuery(r); token != "" {
+			ics, err = s.BookingICS(r.Context(), bookingID, token, false, cfg.AppURL)
+		} else {
+			sess, ok := requireOwnerSession(w, r, a)
+			if !ok {
+				return
+			}
+			if err := s.RequireManageableBooking(r.Context(), bookingID, sess.ActiveOrgID, sess.UserID); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			ics, err = s.BookingICS(r.Context(), bookingID, "", true, cfg.AppURL)
+		}
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
+
 		w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="whenweall-booking-`+bookingID+`.ics"`)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(ics)
 	}
