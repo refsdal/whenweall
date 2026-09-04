@@ -19,6 +19,7 @@ import (
 	"github.com/refsdal/whenweall/internal/bookings/queries"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
+	"github.com/refsdal/whenweall/internal/rooms"
 )
 
 // Service is the booking-page domain service; every exported method below is a behavioral port of
@@ -226,13 +227,24 @@ func (s *Service) CreatePage(ctx context.Context, orgID, userID string, in PageI
 
 // UpdatePage ports updatePage. Unlike the TS source's partial update, this replaces every editable
 // field with in's value (see PageInput's doc comment) — id/organizationId/createdBy/memberUserId/
-// createdAt are carried over from the existing row untouched.
+// createdAt are carried over from the existing row untouched. The write and its "page.changed"
+// broadcast share ONE transaction (rooms.Emit must run inside the same tx as the write it
+// announces — internal/rooms's package doc), mirroring Book/Cancel/Reschedule: a visitor sitting on
+// the public page (useLivePage) refetches the moment an organiser pauses the page, changes its
+// availability or renames it — pages.functions.ts's own notifyPageChanged after updatePage.
 func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageInput) (*PageView, error) {
 	if err := in.Validate(); err != nil {
 		return nil, err
 	}
 
-	existing, err := requireOrgPage(ctx, s.q, pageID, orgID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	existing, err := requireOrgPage(ctx, q, pageID, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +264,7 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 	}
 	now := time.Now().UTC()
 
-	if err := s.q.UpdateBookingPage(ctx, queries.UpdateBookingPageParams{
+	if err := q.UpdateBookingPage(ctx, queries.UpdateBookingPageParams{
 		ID:              pageID,
 		Slug:            in.Slug,
 		Title:           strings.TrimSpace(in.Title),
@@ -277,6 +289,13 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 		return nil, err
 	}
 
+	if err := rooms.Emit(ctx, tx, "booking:"+pageID, "page.changed", nil); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	existing.Slug = in.Slug
 	existing.Title = strings.TrimSpace(in.Title)
 	existing.Description = optionalTrimmedString(in.Description)
@@ -297,17 +316,31 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 	return toPageView(existing)
 }
 
-// DeletePage ports deletePage: a soft delete (deleted_at set). Freeing the page's slug for reuse
+// DeletePage ports deletePage: a soft delete (deleted_at set) plus notifyPageChanged's
+// "page.changed" broadcast, in one transaction (see UpdatePage). Freeing the page's slug for reuse
 // happens implicitly — booking_pages_org_slug_uidx only covers live (deleted_at IS NULL) rows.
 func (s *Service) DeletePage(ctx context.Context, pageID, orgID string) error {
-	if _, err := requireOrgPage(ctx, s.q, pageID, orgID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := queries.New(tx)
+
+	if _, err := requireOrgPage(ctx, q, pageID, orgID); err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	return s.q.SoftDeleteBookingPage(ctx, queries.SoftDeleteBookingPageParams{
+	if err := q.SoftDeleteBookingPage(ctx, queries.SoftDeleteBookingPageParams{
 		ID:        pageID,
 		DeletedAt: sql.NullTime{Time: now, Valid: true},
-	})
+	}); err != nil {
+		return err
+	}
+	if err := rooms.Emit(ctx, tx, "booking:"+pageID, "page.changed", nil); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListMyPages ports listMyPages.

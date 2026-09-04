@@ -475,3 +475,79 @@ func makeBooking(t *testing.T, d *sql.DB, pageID string, startAt time.Time, stat
 		t.Fatalf("seeding booking: %v", err)
 	}
 }
+
+// pageChangedEvents counts the "page.changed" room_events rows in pageID's own room — the
+// broadcast a visitor sitting on the public page (web/src/lib/use-live-page.ts) refetches on.
+func pageChangedEvents(t *testing.T, d *sql.DB, pageID string) int {
+	t.Helper()
+	var n int
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM room_events WHERE room_key = $1 AND event->>'type' = 'page.changed'`,
+		"booking:"+pageID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count room_events for %s: %v", pageID, err)
+	}
+	return n
+}
+
+// TestUpdatePageEmitsPageChanged ports pages.functions.ts's notifyPageChanged after updatePage:
+// an organiser pausing/editing a page must wake every open public page.
+func TestUpdatePageEmitsPageChanged(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := bookings.NewService(testConfig(t), d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+
+	page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
+	if err != nil {
+		t.Fatalf("CreatePage: %v", err)
+	}
+	if n := pageChangedEvents(t, d, page.ID); n != 0 {
+		t.Fatalf("events before update = %d, want 0", n)
+	}
+
+	if _, err := s.UpdatePage(ctx, page.ID, orgID, baseInput(func(in *bookings.PageInput) {
+		in.Status = "paused"
+	})); err != nil {
+		t.Fatalf("UpdatePage: %v", err)
+	}
+	if n := pageChangedEvents(t, d, page.ID); n != 1 {
+		t.Errorf("events after update = %d, want 1", n)
+	}
+
+	t.Run("a rejected update emits nothing (write and emit share one transaction)", func(t *testing.T) {
+		if _, err := s.CreatePage(ctx, orgID, ownerID, baseInput(func(in *bookings.PageInput) {
+			in.Slug = "taken-slug"
+		})); err != nil {
+			t.Fatalf("CreatePage(taken-slug): %v", err)
+		}
+		if _, err := s.UpdatePage(ctx, page.ID, orgID, baseInput(func(in *bookings.PageInput) {
+			in.Slug = "taken-slug"
+		})); !errors.Is(err, bookings.ErrSlugTaken) {
+			t.Fatalf("UpdatePage(slug collision) error = %v, want ErrSlugTaken", err)
+		}
+		if n := pageChangedEvents(t, d, page.ID); n != 1 {
+			t.Errorf("events after rejected update = %d, want still 1", n)
+		}
+	})
+}
+
+// TestDeletePageEmitsPageChanged ports notifyPageChanged after deletePage: an open public page
+// refetches, gets the 404, and shows "not found" instead of a live-looking grid for a dead page.
+func TestDeletePageEmitsPageChanged(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.New(t)
+	s := bookings.NewService(testConfig(t), d)
+	orgID, ownerID := seedOrgAndUser(t, d)
+
+	page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
+	if err != nil {
+		t.Fatalf("CreatePage: %v", err)
+	}
+	if err := s.DeletePage(ctx, page.ID, orgID); err != nil {
+		t.Fatalf("DeletePage: %v", err)
+	}
+	if n := pageChangedEvents(t, d, page.ID); n != 1 {
+		t.Errorf("events after delete = %d, want 1", n)
+	}
+}
