@@ -1,4 +1,5 @@
 import { expect, signIn, test, waitForHydration } from './fixtures'
+import { waitForMail } from './mailpit'
 
 type Me = { user: { name: string; locale: string } }
 
@@ -8,10 +9,17 @@ async function me(page: import('@playwright/test').Page): Promise<Me['user']> {
   return ((await response.json()) as Me).user
 }
 
-test('renaming shows in the header, the locale is stored on the profile, and deleting the account (password re-check) signs it out for good', async ({
+/** `YYYY-MM-DD`, the exact shape handlePublicAvailability's `from`/`to` query params want
+ * (parseQueryDate, internal/bookings/handlers.go). */
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+test('renaming shows in the header, the locale is stored on the profile, a user-addressed mail actually renders in it, and deleting the account (password re-check) signs it out for good', async ({
   page,
   browser,
-  user,
+  request,
+  userWithBookingPage: user,
 }) => {
   await signIn(page, user)
   await page.goto('/settings')
@@ -48,6 +56,38 @@ test('renaming shows in the header, the locale is stored on the profile, and del
   } finally {
     await fresh.close()
   }
+
+  // --- that stored locale actually reaches a mail, not just the API/UI the assertions above read ---
+  // bookingsSvc.SetLocaleResolver(authSvc.LocaleFor) (cmd/whenweall/main.go) is what makes the
+  // organiser notification for a new booking (internal/bookings/emails.go) render in the
+  // recipient's own locale rather than always English (internal/polls/locale.go's doc comment on
+  // a nil source). Nothing else in the suite proves that wiring is live end to end —
+  // booking-create.spec.ts's identical organiser-mail assertion only ever runs in English. Booking
+  // a slot on this fixture's already-seeded page straight through the public API (no visitor
+  // browser needed; the booking UI itself is covered by booking-create.spec.ts) is the cheapest
+  // way to trigger a user-addressed mail from this already-signed-in-as-nb session.
+  const from = new Date()
+  from.setUTCDate(from.getUTCDate() + 1)
+  const to = new Date(from)
+  to.setUTCDate(to.getUTCDate() + 14)
+  const availability = await request.get(`/api/v1/book/${user.handle}/${user.slug}/availability`, {
+    params: { from: isoDate(from), to: isoDate(to) },
+  })
+  expect(availability.ok(), 'GET availability').toBeTruthy()
+  const { slots } = (await availability.json()) as { slots: string[] }
+  expect(slots.length, 'the seeded page has open slots in the next two weeks').toBeGreaterThan(0)
+
+  const bookingResponse = await request.post(
+    `/api/v1/book/${user.handle}/${user.slug}/bookings`,
+    { data: { startAt: slots[0], name: 'Locale Prober', email: `booker-${Date.now()}@example.com`, timezone: 'Europe/Oslo' } },
+  )
+  expect(bookingResponse.ok(), 'POST booking').toBeTruthy()
+
+  // "Ny booking: Intro call" (email_booking_organiser_subject, nb) — unmistakably distinct from
+  // the English "New booking: Intro call" this same mail would carry were the locale resolver not
+  // wired in, so this assertion cannot pass on an English mail.
+  const organiserMail = await waitForMail(request, user.email, { subject: /^Ny booking: / })
+  expect(organiserMail.Subject).toBe('Ny booking: Intro call')
 
   // Back to English so the danger-zone labels below match the en.json copy this spec asserts on.
   await page.getByRole('main').getByRole('group', { name: 'Språk' }).getByRole('button', { name: 'EN' }).click()
