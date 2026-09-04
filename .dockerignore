@@ -1,18 +1,9 @@
-# Operator secrets and local state must never enter a build context: the Go stage COPYs source
-# into an intermediate layer that lives on in the build host's cache and `docker history`.
-.env
-.env.*
-*.pem
-
-# Toolchain output and dependencies each stage installs or builds for itself.
-node_modules
-web/node_modules
-dist
-web/dist
-test-results
-playwright-report
-
-# Not needed to build the binary.
-.git
-e2e
-docs
+# The Dockerfile compiles nothing — it COPYs one prebuilt binary out of dist/server (see
+# scripts/build-artifacts.sh). So the build context is exactly that directory and nothing else.
+#
+# Excluding everything by default is the security property that matters here: no .env, no *.pem, no
+# .git, no source tree can be swept into a layer that lives on in the build host's cache and in
+# `docker history`. Adding a COPY to this Dockerfile means adding its source to the allow-list
+# below, deliberately.
+*
+!dist/server

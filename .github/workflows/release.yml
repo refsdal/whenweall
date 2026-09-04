@@ -18,11 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # cmd/whenweall's own `version` subcommand and the Docker image label both want a real
-      # version string: the pushed tag for a release, a "main-<short sha>" marker for a rolling
-      # main build. Kept as a plain shell step rather than leaning on docker/metadata-action's own
-      # `version` output, which is resolved from tag-priority rules not obviously the same thing.
-      - name: Resolve the VERSION build-arg
+      # cmd/whenweall's own `version` subcommand wants a real version string: the pushed tag for a
+      # release, a "main-<short sha>" marker for a rolling main build. It reaches the binary as an
+      # env var read by scripts/build-artifacts.sh, which passes it to `-ldflags -X main.version`;
+      # there is no Docker build-arg any more, because the Dockerfile no longer compiles anything.
+      # (Image LABELs are metadata-action's job, above, and always were.) Kept as a plain shell
+      # step rather than leaning on metadata-action's own `version` output, which is resolved from
+      # tag-priority rules not obviously the same thing.
+      - name: Resolve the version string
         id: version
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
@@ -43,7 +46,30 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - uses: docker/setup-qemu-action@v3
+      # Both toolchains run NATIVELY on the amd64 runner. This is the whole point of the split
+      # between scripts/build-artifacts.sh and the Dockerfile: the SPA is compiled once (its output
+      # is architecture-independent) and the Go compiler cross-compiles the arm64 binary, so
+      # nothing below ever runs under QEMU. There is deliberately no setup-qemu-action here — if
+      # one reappears, something has started compiling inside the image again.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: web/.bun-version }
+      - uses: actions/cache@v4
+        with:
+          {
+            path: ~/.bun/install/cache,
+            key: "bun-release-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}",
+            restore-keys: 'bun-release-${{ runner.os }}-',
+          }
+
+      - name: Build the per-platform binaries natively
+        run: bash scripts/build-artifacts.sh linux/amd64 linux/arm64
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -52,6 +78,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Seconds of file copying: the Dockerfile COPYs one already-built binary per platform.
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -59,7 +86,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
           sbom: true
           provenance: true

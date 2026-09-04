@@ -28,7 +28,8 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
-  # Dockerfile base images (golang, oven/bun).
+  # The Dockerfile's one base image (distroless static), pinned by digest — Dependabot bumps the
+  # digest. There are no toolchain images left to track: nothing compiles inside the image.
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }

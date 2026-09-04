@@ -44,7 +44,8 @@ if [ "$MODE" = "image" ]; then
     sleep 1
   done
   echo "run-server.sh: ${HEALTHZ} not healthy after 120s. Start the image stack first:" >&2
-  echo "  docker build -t whenweall:e2e . && e2e/compose-e2e.sh up -d --wait" >&2
+  echo "  bash scripts/build-artifacts.sh host && docker build -t whenweall:e2e . \\" >&2
+  echo "    && e2e/compose-e2e.sh up -d --wait" >&2
   exit 1
 fi
 

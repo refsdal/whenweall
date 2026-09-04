@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Proves the compose hardening claims are LIVE on the running app container, not just written in
 # compose.yaml: read-only root filesystem, every capability dropped, no-new-privileges, the
-# unprivileged user, and a passing Docker HEALTHCHECK (`/whenweall healthcheck` — the scratch image
-# has no shell, so this exercises the binary's own subcommand). Run after `compose-e2e.sh up -d
-# --wait`; exits non-zero on the first claim that does not hold.
+# unprivileged user, and a passing Docker HEALTHCHECK (`/whenweall healthcheck` — the distroless
+# image has no shell, so this exercises the binary's own subcommand). Run after `compose-e2e.sh up
+# -d --wait`; exits non-zero on the first claim that does not hold.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 

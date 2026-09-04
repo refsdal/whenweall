@@ -1,6 +1,7 @@
 # Overlay for running the Playwright suite against the BUILT image with compose's hardening flags —
 # what CI's `e2e-image` job does, and what `E2E_SERVER=image bunx playwright test` expects locally:
 #
+#   bash scripts/build-artifacts.sh host          # nothing compiles inside the image
 #   docker build -t whenweall:e2e .
 #   e2e/compose-e2e.sh up -d --wait          # = docker compose --env-file e2e/compose.e2e.env \
 #                                            #     -f compose.yaml -f compose.e2e.yaml up -d --wait
@@ -8,7 +9,7 @@
 #   E2E_SERVER=image bunx playwright test
 #   e2e/compose-e2e.sh down -v
 #
-# Everything security-relevant (read_only, cap_drop ALL, no-new-privileges, the scratch image's
+# Everything security-relevant (read_only, cap_drop ALL, no-new-privileges, the image's own
 # USER) is inherited from compose.yaml on purpose: this file must never weaken it, only add the
 # test-only pieces — the seed route, a Mailpit sink, the prebuilt local image, and an explicit
 # `user` as belt-and-braces so the app never runs as root even if the image regresses. That
