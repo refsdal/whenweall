@@ -1,6 +1,6 @@
 // Command whenweall is the application binary: it serves the HTTP API and SPA, runs database
 // migrations, and answers the Docker HEALTHCHECK (which has no shell to work with inside the
-// scratch image, so the healthcheck is a subcommand of this same binary).
+// distroless image, so the healthcheck is a subcommand of this same binary).
 package main
 
 import (
@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "time/tzdata" // scratch has no /usr/share/zoneinfo; scheduling needs real tz data.
+	_ "time/tzdata" // Zone data compiled in, so the binary never depends on the image having it.
 
 	"github.com/refsdal/whenweall/internal/admin"
 	"github.com/refsdal/whenweall/internal/auth"
@@ -273,7 +273,7 @@ func createStaffUserCmd(args []string) int {
 	return 0
 }
 
-// healthcheck is the Docker HEALTHCHECK entry point: the scratch image has no shell, so `CMD
+// healthcheck is the Docker HEALTHCHECK entry point: the distroless image has no shell, so `CMD
 // ["/whenweall", "healthcheck"]` invokes this instead of curl/wget.
 func healthcheck() int {
 	port := os.Getenv("PORT")

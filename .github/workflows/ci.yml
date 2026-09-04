@@ -57,14 +57,31 @@ jobs:
       - run: cd web && bun run lint
       - run: cd web && bunx vitest run
 
-  # A plain, unpushed build of the exact image release.yml publishes — catches a broken
-  # Dockerfile (a missing build-arg, a stage that no longer compiles) on every PR, not just at
-  # release time.
+  # An unpushed build of the exact multi-arch image release.yml publishes, by exactly the route
+  # release.yml takes: binaries cross-compiled natively here, then a COPY-only Dockerfile. Because
+  # nothing compiles inside the image any more, building BOTH platforms costs a couple of seconds,
+  # so this job proves the arm64 leg on every PR rather than leaving it to be discovered at
+  # release time. No setup-qemu-action, by design — see release.yml.
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: docker build .
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: web/.bun-version }
+      - uses: actions/cache@v4
+        with:
+          {
+            path: ~/.bun/install/cache,
+            key: "bun-docker-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}",
+            restore-keys: 'bun-docker-${{ runner.os }}-',
+          }
+      - run: bash scripts/build-artifacts.sh linux/amd64 linux/arm64
+      - uses: docker/setup-buildx-action@v3
+      - run: docker buildx build --platform linux/amd64,linux/arm64 --output type=cacheonly .
 
   # Playwright is the oracle for the whole rewrite: it drives the real, built SPA served by the
   # real Go binary (e2e/run-server.sh, this job's own webServer command) against two throwaway
@@ -115,21 +132,26 @@ jobs:
   # hardening flags (read_only, cap_drop ALL, no-new-privileges, USER 65532, the binary's own
   # HEALTHCHECK) — spec §9's "runs in CI against the real built Docker image + Postgres — proves
   # the port and keeps the hardening claims honest". `e2e` above keeps covering the fast `go run`
-  # path; this job proves the FROM-scratch image (tzdata, CA bundle, no shell) is what passes.
+  # path; this job proves the distroless image (tzdata, CA bundle, no shell) is what passes.
   e2e-image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
       - uses: oven-sh/setup-bun@v2
         with: { bun-version-file: web/.bun-version }
       - uses: actions/cache@v4
         with:
           {
             path: ~/.bun/install/cache,
-            key: "bun-e2e-image-${{ runner.os }}-${{ hashFiles('bun.lock') }}",
+            key: "bun-e2e-image-${{ runner.os }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}",
             restore-keys: 'bun-e2e-image-${{ runner.os }}-',
           }
-      # Only the root package (Playwright) — the SPA is built inside the Docker image below.
+      # The root package is Playwright's; scripts/build-artifacts.sh installs web/'s own deps
+      # itself, because it is the thing that builds the SPA.
       - run: bun install --frozen-lockfile
       - id: pw
         run: echo "version=$(bun pm ls | grep -o '@playwright/test@[^ ]*' | head -1)" >> "$GITHUB_OUTPUT"
@@ -144,6 +166,10 @@ jobs:
         run: bunx playwright install-deps chromium
       - if: steps.pw-cache.outputs.cache-hit != 'true'
         run: bunx playwright install --with-deps chromium
+      # Only this runner's architecture: the image under test runs here, and the arm64 leg is
+      # already proven by the `docker` job above.
+      - name: Cross-compile the binary and build the SPA into it
+        run: bash scripts/build-artifacts.sh linux/amd64
       - name: Build the release image
         run: docker build -t whenweall:e2e .
       - name: Start Postgres + Mailpit + the image with the hardening flags
