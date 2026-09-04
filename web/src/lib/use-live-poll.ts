@@ -26,7 +26,10 @@ function isEntity(value: unknown): value is PollChangedEntity {
  * to hold onto (the route's REST loader already owns that state), so it forwards a synthetic
  * `poll.changed` to `onEvent` for it — same "go re-fetch" effect the DO version got for free from
  * `connected` flipping true, now covering `resync` too (PROTOCOL.md's own rule: resync means
- * "re-snapshot," not "trust `?since=`").
+ * "re-snapshot," not "trust `?since=`"). The connection carries no identity and asks for no
+ * `?since=` backfill: the snapshot is ground truth and the route refetches over REST (with the
+ * guest token in a header) on every snapshot, so a token on the URL — which proxies log — and
+ * per-frame backfill refetches would both be pure cost (PROTOCOL.md).
  *
  * `onEvent` is held in a ref so a caller can pass an inline arrow function without tearing down the
  * socket on every render. No-ops during SSR.
@@ -34,7 +37,6 @@ function isEntity(value: unknown): value is PollChangedEntity {
 export function useLivePoll(
   pollId: string,
   onEvent: (event: PollEvent) => void,
-  guestToken?: string,
 ): { connected: boolean; presence: number } {
   const [connected, setConnected] = useState(false)
   const [presence, setPresence] = useState(0)
@@ -47,7 +49,7 @@ export function useLivePoll(
   useEffect(() => {
     const room = connectRoom({
       path: `/api/v1/polls/${pollId}/ws`,
-      guestToken,
+      backfill: false,
       onSnapshot: () => {
         setConnected(true)
         onEventRef.current({ type: 'poll.changed', entity: 'poll' })
@@ -70,7 +72,7 @@ export function useLivePoll(
       setConnected(false)
       room.close()
     }
-  }, [pollId, guestToken])
+  }, [pollId])
 
   return { connected, presence }
 }

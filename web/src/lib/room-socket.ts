@@ -26,10 +26,12 @@ function omitTypeAndSeq(frame: Record<string, unknown>): unknown {
 export type ConnectRoomOptions = {
   /** e.g. `/api/v1/polls/${id}/ws`. */
   path: string
-  /** The poll route's guest identity. Sent as `?token=` — the ONLY way a browser `WebSocket`
-   * client can supply it (the constructor has no API for request headers). Omit for routes with
-   * no guest concept (booking, stats). */
-  guestToken?: string
+  /** Whether a reconnect requests `?since=<max seq observed>` backfill (PROTOCOL.md "Recovery").
+   * Default `true`. A consumer that already treats every snapshot as ground truth and refetches
+   * its full state on it (`useLivePoll`, `useLivePage`) passes `false`: for it, each replayed
+   * frame would only trigger one more redundant refetch — N loader round trips after a brief
+   * outage — for no correctness gain. */
+  backfill?: boolean
   /** Called once per connection (first connect AND every reconnect) with the snapshot's own
    * `data` (route-specific, may be `null`) and its `seq` (the room's `max(room_events.id)` at
    * that moment — the cursor a caller may remember, though `connectRoom` already tracks this
@@ -81,8 +83,7 @@ export function connectRoom(opts: ConnectRoomOptions): RoomSocket {
   const buildUrl = (): string => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const url = new URL(`${protocol}://${window.location.host}${opts.path}`)
-    if (opts.guestToken) url.searchParams.set('token', opts.guestToken)
-    if (cursor !== undefined) url.searchParams.set('since', String(cursor))
+    if (opts.backfill !== false && cursor !== undefined) url.searchParams.set('since', String(cursor))
     return url.toString()
   }
 

@@ -16,7 +16,9 @@ export type BookingRoomEvent = { type: 'page.changed' }
  * the caller usually answers it by invalidating the route. A fresh snapshot (first connect, every
  * reconnect, and every `resync`) forwards the same synthetic `page.changed` — the room's own
  * `PROTOCOL.md` rule that resync means "re-snapshot," not "trust `?since=`", applies here exactly
- * as it does for polls.
+ * as it does for polls. The connection asks for no `?since=` backfill either: the snapshot is
+ * ground truth and this hook refetches its full state on every one, so a per-frame backfill
+ * refetch would be pure cost (PROTOCOL.md).
  *
  * `onEvent` is held in a ref so an inline arrow doesn't tear down the socket. No-ops during SSR.
  */
@@ -34,6 +36,7 @@ export function useLivePage(
   useEffect(() => {
     const room = connectRoom({
       path: `/api/v1/booking-pages/${pageId}/ws`,
+      backfill: false,
       onSnapshot: () => {
         setConnected(true)
         onEventRef.current({ type: 'page.changed' })

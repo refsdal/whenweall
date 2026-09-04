@@ -5,7 +5,6 @@ import { appConfig } from '#/app.config'
 import { NotFoundCard } from '#/components/layout/NotFoundCard'
 import { PollPage } from '#/components/poll/PollPage'
 import { m } from '#/lib/i18n'
-import { useEditToken } from '#/lib/edit-tokens'
 import { type PollEvent, useLivePoll } from '#/lib/use-live-poll'
 import { getPoll } from '#/api/polls'
 
@@ -38,7 +37,6 @@ function PollRoute() {
   const navigate = Route.useNavigate()
   const { session } = Route.useRouteContext()
   const router = useRouter()
-  const editToken = useEditToken(poll.id)
 
   // Every change to the poll — a vote, a comment, a finalize, the deadline alarm closing it —
   // arrives here as one event; re-running the loader is the simplest correct response.
@@ -54,7 +52,7 @@ function PollRoute() {
     },
     [router],
   )
-  const { presence } = useLivePoll(poll.id, onEvent, editToken?.token)
+  const { presence } = useLivePoll(poll.id, onEvent)
 
   const onChanged = useCallback(() => router.invalidate(), [router])
 

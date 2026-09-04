@@ -69,16 +69,24 @@ describe('connectRoom', () => {
     expect(onSnapshot.mock.invocationCallOrder[0]).toBeLessThan(onEvent.mock.invocationCallOrder[0])
   })
 
-  it('appends the guest edit token as ?token= (the only way a browser WebSocket can send it)', () => {
-    connectRoom({
-      path: PATH,
-      guestToken: 'tok123',
-      onSnapshot: vi.fn(),
-      onEvent: vi.fn(),
-      onResync: vi.fn(),
-    })
+  it('never puts anything but the path on the URL on a first connect', () => {
+    connectRoom({ path: PATH, onSnapshot: vi.fn(), onEvent: vi.fn(), onResync: vi.fn() })
 
-    expect(FakeSocket.last.url).toContain('token=tok123')
+    expect(FakeSocket.last.url).toBe(`ws://${window.location.host}${PATH}`)
+  })
+
+  it('omits ?since= on reconnect when backfill is false (snapshot-as-ground-truth consumers)', () => {
+    vi.useFakeTimers()
+    connectRoom({ path: PATH, backfill: false, onSnapshot: vi.fn(), onEvent: vi.fn(), onResync: vi.fn() })
+    FakeSocket.last.open()
+    FakeSocket.last.send({ type: 'snapshot', seq: 5, data: null })
+    FakeSocket.last.send({ type: 'poll.changed', seq: 12, entity: 'vote' })
+    FakeSocket.last.onclose?.()
+
+    vi.advanceTimersByTime(1000)
+
+    expect(FakeSocket.instances).toHaveLength(2)
+    expect(FakeSocket.last.url).not.toContain('since=')
   })
 
   it('flattens a live frame into (type, data-without-type-or-seq, seq)', () => {

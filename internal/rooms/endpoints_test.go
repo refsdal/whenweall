@@ -37,8 +37,9 @@ import (
 // returns — TestPollWS_SnapshotObservesChangeDuringAuthorize uses it to simulate a write landing
 // exactly in the authorize-window C1 closes: between Authorize returning and Subscribe running.
 type fakePollService struct {
-	byID     map[string]any
-	onExists func(pollID string)
+	byID       map[string]any
+	onExists   func(pollID string)
+	lastViewer rooms.PollViewer // what PollSnapshot was last asked to scope to
 }
 
 func (f *fakePollService) PollExists(_ context.Context, pollID string) (bool, error) {
@@ -49,7 +50,8 @@ func (f *fakePollService) PollExists(_ context.Context, pollID string) (bool, er
 	return ok && view != nil, nil
 }
 
-func (f *fakePollService) PollSnapshot(_ context.Context, pollID string, _ rooms.PollViewer) (any, error) {
+func (f *fakePollService) PollSnapshot(_ context.Context, pollID string, viewer rooms.PollViewer) (any, error) {
+	f.lastViewer = viewer
 	return f.byID[pollID], nil
 }
 
@@ -225,6 +227,28 @@ func TestPollWS_SignedInAndGuestTokenAlsoConnect(t *testing.T) {
 	guestHeader := http.Header{"X-Guest-Token": {"guest-token-for-participant-1"}}
 	conn2 := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws", guestHeader)
 	_ = conn2.CloseNow()
+}
+
+// TestPollWS_SnapshotIsAnonymousRegardlessOfCredentials: the poll route's snapshot is always the
+// anonymous PollView. The SPA never read the viewer-scoped snapshot (useLivePoll refetches over
+// REST on it), so the only effect of resolving identity here was to require the guest edit token
+// on the WS URL — where reverse proxies log it. Nothing on this route reads a token or a session
+// for the snapshot anymore.
+func TestPollWS_SnapshotIsAnonymousRegardlessOfCredentials(t *testing.T) {
+	server, a, polls, _ := newTestMux(t)
+	polls.byID["p1"] = map[string]any{"id": "p1"}
+	userID := a.login(&auth.Session{UserID: "u1", ActiveOrgID: "org-1"})
+
+	conn := dialWSExpectSuccess(t, server, "/api/v1/polls/p1/ws?token=guest-token-for-participant-1",
+		http.Header{"X-Test-Session": {userID}, "X-Guest-Token": {"guest-token-for-participant-1"}})
+	defer func() { _ = conn.CloseNow() }()
+	if frame := readWSFrame(t, conn, 5*time.Second); frame["type"] != "snapshot" {
+		t.Fatalf("frame type = %v, want snapshot", frame["type"])
+	}
+
+	if polls.lastViewer != (rooms.PollViewer{}) {
+		t.Errorf("PollSnapshot viewer = %+v, want the zero (anonymous) viewer", polls.lastViewer)
+	}
 }
 
 // TestBookingWS_AnonymousConnectsToPublicPage is the review-fix regression test (endpoints.go's

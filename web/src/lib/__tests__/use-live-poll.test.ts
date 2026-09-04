@@ -7,7 +7,7 @@ const POLL_ID = 'abcdefghijkl'
 /** Mock WS server standing in for `internal/rooms`'s hub — see `room-socket.test.ts` for the
  * protocol-level coverage of `connectRoom` itself; this file only checks `useLivePoll`'s own
  * wiring on top of it (presence tracking, the synthetic `poll.changed` a snapshot/resync forward,
- * the guest token query param). */
+ * the absence of any token/since query params). */
 class FakeSocket {
   static instances: FakeSocket[] = []
 
@@ -61,10 +61,20 @@ describe('useLivePoll', () => {
     expect(FakeSocket.last.url).toBe(`ws://${window.location.host}/api/v1/polls/${POLL_ID}/ws`)
   })
 
-  it('appends the guest edit token as ?token=', () => {
-    renderHook(() => useLivePoll(POLL_ID, vi.fn(), 'my-token'))
+  it('never puts a token on the URL and reconnects without ?since= (the snapshot is ground truth)', () => {
+    vi.useFakeTimers()
+    renderHook(() => useLivePoll(POLL_ID, vi.fn()))
 
-    expect(FakeSocket.last.url).toContain('token=my-token')
+    act(() => {
+      FakeSocket.last.open()
+      FakeSocket.last.send({ type: 'snapshot', seq: 7, data: null })
+      FakeSocket.last.send({ type: 'poll.changed', seq: 9, entity: 'vote' })
+      FakeSocket.last.onclose?.()
+    })
+    act(() => vi.advanceTimersByTime(1000))
+
+    expect(FakeSocket.instances).toHaveLength(2)
+    expect(FakeSocket.last.url).toBe(`ws://${window.location.host}/api/v1/polls/${POLL_ID}/ws`)
   })
 
   it('reports connected once the snapshot frame arrives', () => {

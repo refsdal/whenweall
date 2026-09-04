@@ -11,7 +11,7 @@ the code itself is what's wrong.
 
 | Route | Auth | Room key | Presence |
 | --- | --- | --- | --- |
-| `GET /api/v1/polls/{id}/ws` | public | `poll:{id}` | on |
+| `GET /api/v1/polls/{id}/ws` | public (snapshot always anonymous) | `poll:{id}` | on |
 | `GET /api/v1/booking-pages/{pageId}/ws` | public (Snapshot data withheld unless the caller manages the page) | `booking:{pageId}` | off |
 | `GET /api/v1/stats/ws` | public, no gate at all | `stats:global` | off |
 
@@ -71,13 +71,11 @@ never trips it.
   ordinary first connect — that is NOT the same as `?since=0` ("replay everything"), which is a
   real, different request. See "Recovery: snapshot is primary, `?since=` is belt-and-braces" below
   for why this is never the only thing a reconnecting client should rely on.
-- `?token=<guest-edit-token>` — the poll route's guest identity. This is the ONLY way a browser's
-  native `WebSocket` client can supply it: the browser `WebSocket` constructor has no API for
-  setting request headers on the handshake, unlike an ordinary `fetch`, so the `X-Guest-Token`
-  header this codebase's REST endpoints also accept (kept for parity, and usable by non-browser
-  callers) is simply unreachable from a real browser WS client. A frontend holding a guest token
-  from a prior REST response MUST append it as `?token=` when opening the poll WS connection, or it
-  connects as a fully anonymous viewer instead of its own participant identity.
+- There is **no identity parameter**. The poll route's snapshot is always the anonymous `PollView`
+  (what `GET /api/v1/polls/{id}` returns to a caller with no session and no token); a client that
+  needs its own viewer-scoped view fetches that REST endpoint, where the guest token travels in
+  the `X-Guest-Token` header. A client MUST NOT put a guest edit token on the WS URL — query
+  strings land in reverse-proxy access logs, and nothing server-side reads it there anymore.
 
 ## Server → client frames
 
@@ -94,10 +92,12 @@ Every frame is a single JSON text message. There are exactly five shapes.
   should remember.
 - `data` is nested (unlike every other frame below, which flattens) because a snapshot is not a
   `room_events` row at all — there is no envelope to unwrap. Per route:
-  - polls: the same `*PollView` JSON `GET /api/v1/polls/{id}` returns, scoped to the connecting
-    viewer, or `null` if PollExists's own Authorize gate already ruled out a missing poll (in
-    practice `data` is never null for polls, since Authorize would have 404'd first — see PollService's own
-    doc comment for why Snapshot is queried completely fresh rather than reusing anything Authorize saw).
+  - polls: the same `*PollView` JSON `GET /api/v1/polls/{id}` returns to a fully anonymous caller
+    (no session, no token), or `null` if PollExists's own Authorize gate already ruled out a
+    missing poll (in practice `data` is never null for polls, since Authorize would have 404'd
+    first — see PollService's own doc comment for why Snapshot is queried completely fresh rather
+    than reusing anything Authorize saw). A client that needs its own viewer-scoped view fetches
+    the REST endpoint directly, with its guest token in the `X-Guest-Token` header.
   - booking-pages: an array of booking views across the page's own visible horizon (now through
     `MaxDaysAhead`).
   - stats: the full `UsageStats` object — `{"pollsCreated": 12, "pollsFinalized": 3, "responsesYes":
@@ -231,3 +231,8 @@ showing. It is NEVER the primary correctness mechanism, for two reasons:
 A client that always takes the snapshot as ground truth, treats `?since=`'s backfill (when
 requested) as a pure smoothing optimization, and always re-snapshots on resync, is correct under
 every one of these hazards without needing to reason about any of them individually.
+
+Corollary for a consumer that answers every snapshot by refetching its full state over REST (the
+SPA's `useLivePoll` and `useLivePage` both do): omit `?since=` entirely. Each backfilled frame
+would only trigger one more redundant refetch — N loader round trips after a brief outage — for
+no correctness gain, since the snapshot that precedes the backfill is already complete.

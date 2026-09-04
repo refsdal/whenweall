@@ -92,9 +92,10 @@ type BookingService interface {
 
 // Register mounts this package's three realtime WS routes on mux:
 //
-//   - GET /api/v1/polls/{id}/ws — public (a session, a guest participant token, or a fully
-//     anonymous caller may all connect); 404 for a missing/soft-deleted poll. roomKey "poll:"+id.
-//     Presence on. Connect-rate-limited (wsConnectLimit/wsConnectWindow, I5).
+//   - GET /api/v1/polls/{id}/ws — public (a session, a guest token, or a fully anonymous caller
+//     may all connect — none of them changes the snapshot, which is always the anonymous view);
+//     404 for a missing/soft-deleted poll. roomKey "poll:"+id. Presence on. Connect-rate-limited
+//     (wsConnectLimit/wsConnectWindow, I5).
 //   - GET /api/v1/booking-pages/{pageId}/ws — public (existence/soft-delete check only, mirroring
 //     the poll room's own gate — and src/routes/api/bookings/$pageId/ws.ts's identical pre-rewrite
 //     behavior: an existence check, nothing more). roomKey "booking:"+pageId. Presence OFF (M4):
@@ -139,7 +140,7 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 	// namespace/name pair, so the two never share a budget) — see statsReadLimit's own doc comment.
 	statsRead := httpserver.PublicRateLimit(h.sqlDB, cfg, "rooms", "stats_read", statsReadLimit, statsReadWindow)
 
-	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
+	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, polls)))
 	mux.Handle("GET /api/v1/booking-pages/{pageId}/ws", connectLimit(bookingWSHandler(h, a, bookings)))
 	mux.Handle("GET /api/v1/stats/ws", connectLimit(statsWSHandler(h, stats)))
 
@@ -151,25 +152,18 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 	mux.Handle("GET /api/v1/stats", statsRead(statsSnapshotHandler(stats)))
 }
 
-// pollWSHandler builds one poll WS connection's handler per request (rather than a single
-// Hub.ServeWS built once at Register time): the Authorize/Snapshot closures below need per-
-// request data (the path's poll id, the caller's resolved viewer identity), which WSOptions has
-// nowhere else to carry.
+// pollWSHandler builds one poll WS connection's handler per request (the Authorize/Snapshot
+// closures need the path's poll id). The snapshot is ALWAYS the anonymous PollView: this route
+// resolves no session and no guest token. The SPA's useLivePoll never reads the snapshot's data
+// (it answers every snapshot with a REST refetch that carries identity in a header), so scoping
+// it bought nothing and cost a guest edit token on the URL query string — which reverse proxies
+// log by default. Anything that wants a viewer-scoped view fetches GET /api/v1/polls/{id}.
 //
-// Authorize and Snapshot deliberately do NOT share a memoized result (an earlier version of this
-// handler did, via a `load` cache) — see PollService's own doc comment for why that was a bug, not
-// an optimization: Snapshot must run its own fresh PollSnapshot query, since ws.go's ServeWS only
-// calls it after Subscribe has already registered this connection's listener, which is what
-// closes the authorize-window gap. Authorize's PollExists call and Snapshot's PollSnapshot call
-// are two genuinely separate queries as a result — the same trade-off bookingWSHandler already
-// makes below for the same reason (its own doc comment).
-func pollWSHandler(h *Hub, a httpserver.Auth, svc PollService) http.HandlerFunc {
+// Authorize and Snapshot deliberately do NOT share a memoized result — see PollService's own doc
+// comment for why Snapshot must run its own fresh query after Subscribe.
+func pollWSHandler(h *Hub, svc PollService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pollID := r.PathValue("id")
-		viewer := PollViewer{GuestParticipantID: httpserver.GuestParticipantID(a, r)}
-		if sess, ok := a.FromContext(r.Context()); ok {
-			viewer.UserID = sess.UserID
-		}
 
 		h.ServeWS(WSOptions{
 			Authorize: func(rq *http.Request) (string, error) {
@@ -183,7 +177,7 @@ func pollWSHandler(h *Hub, a httpserver.Auth, svc PollService) http.HandlerFunc 
 				return "poll:" + pollID, nil
 			},
 			Snapshot: func(ctx context.Context, _ string) (any, error) {
-				return svc.PollSnapshot(ctx, pollID, viewer)
+				return svc.PollSnapshot(ctx, pollID, PollViewer{})
 			},
 			Presence: true,
 		})(w, r)
