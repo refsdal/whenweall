@@ -209,10 +209,10 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 		}
 	}
 
-	// A row whose items were just taken by the running handler (takeDigestItems empties them in
-	// place; the row itself survives until Complete) is not a batch to join: start a fresh
-	// debounce window rather than inheriting the taken batch's run_at, which is already in the
-	// past and would send this lone item immediately.
+	// A row whose items were just taken by the running handler (processDigestJob empties them in
+	// place, in the same transaction that fans them out; the row itself survives until Complete)
+	// is not a batch to join: start a fresh debounce window rather than inheriting the taken
+	// batch's run_at, which is already in the past and would send this lone item immediately.
 	if scanErr == nil && len(payload.Items) == 0 {
 		runAt = time.Now().Add(digestDelay)
 	}

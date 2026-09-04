@@ -27,9 +27,12 @@ function isEntity(value: unknown): value is PollChangedEntity {
  * `poll.changed` to `onEvent` for it — same "go re-fetch" effect the DO version got for free from
  * `connected` flipping true, now covering `resync` too (PROTOCOL.md's own rule: resync means
  * "re-snapshot," not "trust `?since=`"). The connection carries no identity and asks for no
- * `?since=` backfill: the snapshot is ground truth and the route refetches over REST (with the
- * guest token in a header) on every snapshot, so a token on the URL — which proxies log — and
- * per-frame backfill refetches would both be pure cost (PROTOCOL.md).
+ * `?since=` backfill: the snapshot is ground truth and the route's loader re-runs `getPoll` (no
+ * guest token — the poll GET endpoint never reads one; see PROTOCOL.md's query-parameters section)
+ * on every snapshot, so a token on the URL — which proxies log — and per-frame backfill refetches
+ * would both be pure cost. Guest identity (which participant is "you") is resolved separately,
+ * entirely client-side, by matching that anonymous `PollView`'s participant ids against whatever
+ * edit token is already sitting in `localStorage` (`#/lib/edit-tokens`).
  *
  * `onEvent` is held in a ref so a caller can pass an inline arrow function without tearing down the
  * socket on every render. No-ops during SSR.

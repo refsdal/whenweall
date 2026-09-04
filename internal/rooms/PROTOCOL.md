@@ -72,10 +72,13 @@ never trips it.
   real, different request. See "Recovery: snapshot is primary, `?since=` is belt-and-braces" below
   for why this is never the only thing a reconnecting client should rely on.
 - There is **no identity parameter**. The poll route's snapshot is always the anonymous `PollView`
-  (what `GET /api/v1/polls/{id}` returns to a caller with no session and no token); a client that
-  needs its own viewer-scoped view fetches that REST endpoint, where the guest token travels in
-  the `X-Guest-Token` header. A client MUST NOT put a guest edit token on the WS URL — query
-  strings land in reverse-proxy access logs, and nothing server-side reads it there anymore.
+  (what `GET /api/v1/polls/{id}` returns to a caller with no session and no token); `GetView` never
+  reads a guest edit token at all (`polls.Service.GetView` is called with only `viewer.UserID` —
+  `Viewer.GuestParticipantID` is read by the participant-mutating endpoints, Claim/Unclaim/
+  AddParticipant/..., never by this one), so there is no header a guest could send to get anything
+  other than the same anonymous view every other caller gets. A client MUST NOT put a guest edit
+  token on the WS URL regardless — query strings land in reverse-proxy access logs, and nothing
+  server-side would read it there either.
 
 ## Server → client frames
 
@@ -96,8 +99,10 @@ Every frame is a single JSON text message. There are exactly five shapes.
     (no session, no token), or `null` if PollExists's own Authorize gate already ruled out a
     missing poll (in practice `data` is never null for polls, since Authorize would have 404'd
     first — see PollService's own doc comment for why Snapshot is queried completely fresh rather
-    than reusing anything Authorize saw). A client that needs its own viewer-scoped view fetches
-    the REST endpoint directly, with its guest token in the `X-Guest-Token` header.
+    than reusing anything Authorize saw). A guest's own claim/participant identity never comes back
+    from this endpoint by token (see the query-parameters section above) — the SPA resolves it
+    entirely client-side, by matching the participant ids in this same anonymous `PollView` against
+    whatever edit tokens it already holds in `localStorage` (`web/src/lib/edit-tokens.ts`).
   - booking-pages: an array of booking views across the page's own visible horizon (now through
     `MaxDaysAhead`).
   - stats: the full `UsageStats` object — `{"pollsCreated": 12, "pollsFinalized": 3, "responsesYes":
