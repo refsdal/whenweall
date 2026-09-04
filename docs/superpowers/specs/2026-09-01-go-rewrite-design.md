@@ -256,20 +256,35 @@ supersedes the earlier text it names; the completion plans
   rate limiter wraps sign-in, sign-up and password-reset requests only. Migration
   `00010_drop_two_factor.sql` removes the plugin's leftover schema (`two_factors`,
   `users.two_factor_enabled`).
-- **Email verification gates the app** (§3 bullet 1 implied it; the first cut lost it). An
-  unverified credential account can sign in, but every API route except `GET /api/v1/auth/me`,
-  `POST .../signout`, `POST .../verify-email`, `POST .../email-verifications` and
-  `GET /api/v1/config` answers 403 `email_unverified`; the SPA shows the "verify your address"
-  card with a resend button. OAuth-created users count as verified.
+- **Email verification gates the app** (§3 bullet 1 implied it; the first cut lost it), but the
+  gate has more shape than "every route 403s" — three exceptions, all deliberate
+  (`internal/auth/session.go`, `internal/httpserver/domainauth.go`). Under the `/api/v1/auth/`
+  mount, `AuthMountGuard` lets an unverified session through to `GET /api/v1/auth/me`,
+  `POST .../verify-email`, `POST .../email-verifications`, `POST .../signout`, and the four
+  session-less credential routes (`signin/credential`, `signup/credential`,
+  `passwords/request-reset`, `passwords/reset`) — everything else under the mount
+  (organizations, invitations, OAuth linking, password change) answers 403 `email_unverified`.
+  Outside the mount, this application's own `RequireSession`/`RequireStaff` apply the same gate,
+  except `PATCH`/`DELETE /api/v1/me` (`RequireSessionAllowUnverified`), which an unverified
+  account must be able to reach to update its profile or delete itself. And the public poll/
+  sign-up/booking routes don't 403 an unverified session at all: `viewerFromRequest` and
+  `RequireCaptchaIfAnon` treat it exactly like no session, attributing a vote, claim, comment or
+  booking to an anonymous guest rather than the unverified account. `GET /api/v1/config` needs no
+  session in the first place — it is a public route, not a verification exemption. The SPA shows
+  the "verify your address" card with a resend button. OAuth-created users count as verified.
 - **Per-user locale is persisted** in `user_preferences(user_id, locale, updated_at)`
   (migration `00009_user_profile.sql`); guest forms send `locale`; mail renders in `en` or `nb`
   with locale-aware dates (§5 "Email localization keeps parity with today" — this is how).
 - **Google Calendar sync is disabled for now** (decisions table, "Kept features"). The Go sync
   code (`internal/bookings/google.go`) stays, but Limen's OAuth link route cannot request the
-  incremental calendar scopes, so the UI is hidden behind the capability flag, status always
-  reports "not connected", and the README says the feature is not yet available. Re-enabling
-  means a second Limen Google provider configured with the calendar scopes and
-  `access_type=offline` — not a custom consent flow.
+  incremental calendar scopes, so the page editor's Google card was removed outright (commit
+  `ea4a4c0`, not hidden behind a capability flag), and a page request asking for
+  `googleSync: true` is refused up front with 400 `google_sync_unavailable`
+  (`internal/bookings/handlers.go`'s `rejectGoogleSync`) before it ever reaches the service
+  layer. `GET /api/v1/booking-pages/{id}/google-status` is hard-coded to
+  `{"connected":false,"syncEnabled":false}` regardless of any linked account, and the README
+  says the feature is not yet available. Re-enabling means a second Limen Google provider
+  configured with the calendar scopes and `access_type=offline` — not a custom consent flow.
 - **Playwright runs twice in CI** (§9): against `go run` (the existing fast job) and against the
   built Docker image started with compose's hardening flags (`read_only`, `cap_drop: [ALL]`,
   `no-new-privileges`) — the run that "keeps the hardening claims honest".

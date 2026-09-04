@@ -67,18 +67,26 @@ see below). Five minutes, start to finish:
 git clone https://github.com/refsdal/whenweall.git whenweall
 cd whenweall
 cp .env.example .env
+echo "POSTGRES_PASSWORD=$(openssl rand -base64 24)" >> .env
+echo "AUTH_SECRET=$(openssl rand -base64 32)" >> .env
 ```
 
-Edit `.env` and set the handful of values that have no safe default:
+That generates the two secrets `.env.example` leaves blank and appends them —
+compose reads `.env` as plain `KEY=value` lines and does not run the `$(...)` inside
+one for you, so the generating has to happen in your shell, not in the file (a later
+line for the same key wins, so appending overrides the blank one `cp` just copied in).
+Now open `.env` and set the handful of remaining values that have no safe default —
+your SMTP relay's credentials:
 
 ```bash
 # .env
-POSTGRES_PASSWORD=$(openssl rand -base64 24)   # or paste one in directly
-AUTH_SECRET=$(openssl rand -base64 32)
 SMTP_HOST=smtp.your-provider.example
 SMTP_USER=...
 SMTP_PASSWORD=...
 ```
+
+(No relay handy? Skip ahead to [Mailpit](#trying-it-with-mailpit) for a trial with no
+external account needed, then come back here.)
 
 Then bring it up:
 
@@ -195,9 +203,13 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
   half-configured credentials are treated as off, with a warning at boot rather than a
   broken button in the UI — see [Configuration](#configuration).
 - **Every sign-up gets a personal organization** — polls, sign-up sheets and booking
-  pages all belong to an organization, not to a user directly, so inviting teammates into
-  existing content is a membership change, not a data migration. A booking URL's
-  `<handle>` segment is that organization's slug.
+  pages all belong to an organization, not to a user directly, so adding a teammate to
+  existing content is a membership change, not a data migration: a member is invited by
+  e-mail through the auth API (there is no invite-sending screen in the SPA yet — see
+  [What's next](#whats-next)), and accepts from a link in that mail, which switches
+  their active organization to the one they just joined and adds it to the account
+  menu's organization switcher alongside their personal org. A booking URL's `<handle>`
+  segment is the active organization's slug.
 - **A staff-only support console** at `/admin` for the person self-hosting this: user
   lookup, lock/unlock, delete, and an append-only audit log — see
   [`docs/admin-console.md`](./docs/admin-console.md). There is no impersonation and no
@@ -600,6 +612,10 @@ No date attached yet — ideas under consideration:
   event a booking creates, instead of a plain text location.
 - **Waitlists** — let a visitor join a full or past-notice slot and get offered it if
   it opens back up.
+- **Invite-sending UI** — a screen in the product to send an organization invitation.
+  Today an invitation can only be created by calling the auth API directly; accepting
+  one (the mailed link, the accept page, the organization switcher) is fully built —
+  see [Under the hood](#under-the-hood).
 
 ### Non-goals
 
