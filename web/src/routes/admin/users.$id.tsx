@@ -1,7 +1,9 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { fetchAdminUserDetail, fetchAuditLog } from '#/api/admin'
+import { UserActions } from '#/components/admin/UserActions'
 import { Badge } from '#/components/ui/badge'
 import { m } from '#/lib/i18n'
+import { useSession } from '#/lib/use-session'
 
 export const Route = createFileRoute('/admin/users/$id')({
   loader: async ({ params }) => {
@@ -28,6 +30,9 @@ function Field({ label, value }: { label: string; value: string | number }) {
 
 function AdminUserDetailPage() {
   const { detail, recentActions } = Route.useLoaderData()
+  const router = useRouter()
+  const navigate = Route.useNavigate()
+  const session = useSession()
 
   if (!detail) {
     return <p className="text-sm text-muted-foreground">{m.admin_user_not_found()}</p>
@@ -50,6 +55,18 @@ function AdminUserDetailPage() {
           />
           {detail.lockReason && <Field label={m.admin_badge_locked()} value={detail.lockReason} />}
         </div>
+      </section>
+
+      {/* Lock/unlock refetch this page's loader (the row changes); delete leaves for the list,
+          since there is no row left to reload — see UserActions' own doc comment. */}
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-semibold">{m.admin_actions_title()}</h3>
+        <UserActions
+          user={detail}
+          isSelf={session?.user.id === detail.id}
+          onChanged={() => router.invalidate()}
+          onDeleted={() => navigate({ to: '/admin/users' })}
+        />
       </section>
 
       <section className="flex flex-col gap-2">
