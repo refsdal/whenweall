@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,8 +38,14 @@ import (
 // returns — TestPollWS_SnapshotObservesChangeDuringAuthorize uses it to simulate a write landing
 // exactly in the authorize-window C1 closes: between Authorize returning and Subscribe running.
 type fakePollService struct {
-	byID       map[string]any
-	onExists   func(pollID string)
+	byID     map[string]any
+	onExists func(pollID string)
+
+	// Every connection runs PollSnapshot on its own goroutine, and a test that opens several
+	// (TestPollWS_ConnectRateLimited) has them overlap — CloseNow returns without waiting for the
+	// server side to finish. So this field is written concurrently and must be locked, as must the
+	// assertion that reads it back (see viewerSeen).
+	mu         sync.Mutex
 	lastViewer rooms.PollViewer // what PollSnapshot was last asked to scope to
 }
 
@@ -51,8 +58,18 @@ func (f *fakePollService) PollExists(_ context.Context, pollID string) (bool, er
 }
 
 func (f *fakePollService) PollSnapshot(_ context.Context, pollID string, viewer rooms.PollViewer) (any, error) {
+	f.mu.Lock()
 	f.lastViewer = viewer
+	f.mu.Unlock()
 	return f.byID[pollID], nil
+}
+
+// viewerSeen reports the viewer PollSnapshot was last scoped to, under the same lock the write
+// takes.
+func (f *fakePollService) viewerSeen() rooms.PollViewer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastViewer
 }
 
 // fakeBookingService is a minimal rooms.BookingService: PageExists returns false only for
@@ -246,8 +263,8 @@ func TestPollWS_SnapshotIsAnonymousRegardlessOfCredentials(t *testing.T) {
 		t.Fatalf("frame type = %v, want snapshot", frame["type"])
 	}
 
-	if polls.lastViewer != (rooms.PollViewer{}) {
-		t.Errorf("PollSnapshot viewer = %+v, want the zero (anonymous) viewer", polls.lastViewer)
+	if seen := polls.viewerSeen(); seen != (rooms.PollViewer{}) {
+		t.Errorf("PollSnapshot viewer = %+v, want the zero (anonymous) viewer", seen)
 	}
 }
 
