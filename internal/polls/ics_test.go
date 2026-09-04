@@ -14,8 +14,10 @@ package polls_test
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/refsdal/whenweall/internal/polls"
 	"github.com/refsdal/whenweall/internal/polls/queries"
@@ -177,6 +179,66 @@ func TestBuildPollICS(t *testing.T) {
 		}
 		if !strings.Contains(body, "URL:"+pollURL+"\r\n") {
 			t.Errorf("body missing absolute URL: %q", body)
+		}
+	})
+}
+
+// TestBuildClaimICS ports buildIcsMulti as used by sendClaimConfirmation
+// (main:src/server/notifications/claim-emails.ts:63-92 and its test's "ics attachment for
+// date/datetime slots only" case): one VEVENT per claimed dated slot, uid {pollId}-{optionId}@whenweall,
+// none at all for text-only slots. A pure function — no database.
+func TestBuildClaimICS(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	poll := queries.Poll{
+		ID: "poll1234abcd", Title: "Shifts", Timezone: "Europe/Oslo",
+		Description: sql.NullString{String: "Bring gloves", Valid: true},
+		Location:    sql.NullString{String: "Depot", Valid: true},
+	}
+	dateOpt := queries.PollOption{ID: "optDate", Kind: "date", StartAt: sql.NullTime{Time: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Valid: true}}
+	timedOpt := queries.PollOption{
+		ID: "optTimed", Kind: "datetime",
+		StartAt: sql.NullTime{Time: time.Date(2026, 9, 1, 16, 30, 0, 0, time.UTC), Valid: true},
+		EndAt:   sql.NullTime{Time: time.Date(2026, 9, 1, 17, 30, 0, 0, time.UTC), Valid: true},
+	}
+	textOpt := queries.PollOption{ID: "optText", Kind: "text", Label: sql.NullString{String: "Bake a cake", Valid: true}}
+	pollURL := "https://whenweall.example/p/" + poll.ID
+
+	t.Run("one VEVENT per dated slot, text slots skipped", func(t *testing.T) {
+		body := string(polls.BuildClaimICS(poll, []queries.PollOption{dateOpt, textOpt, timedOpt}, pollURL, now))
+		if got := strings.Count(body, "BEGIN:VEVENT\r\n"); got != 2 {
+			t.Fatalf("BEGIN:VEVENT count = %d, want 2: %q", got, body)
+		}
+		if strings.Count(body, "BEGIN:VCALENDAR\r\n") != 1 || !strings.HasSuffix(body, "END:VCALENDAR\r\n") {
+			t.Errorf("not a single VCALENDAR: %q", body)
+		}
+		for _, want := range []string{
+			"UID:poll1234abcd-optDate@whenweall\r\n",
+			"UID:poll1234abcd-optTimed@whenweall\r\n",
+			"DTSTART;VALUE=DATE:20260901\r\n",
+			"DTEND;VALUE=DATE:20260902\r\n",
+			"DTSTART:20260901T163000Z\r\n",
+			"DTEND:20260901T173000Z\r\n",
+			"DTSTAMP:20260903T120000Z\r\n",
+			"SUMMARY:Shifts\r\n",
+			"DESCRIPTION:Bring gloves\r\n",
+			"LOCATION:Depot\r\n",
+			"URL:" + pollURL + "\r\n",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("body missing %q: %q", want, body)
+			}
+		}
+		if strings.Contains(body, "Bake a cake") {
+			t.Errorf("text slot leaked into the calendar: %q", body)
+		}
+	})
+
+	t.Run("nil when no claimed slot has calendar meaning", func(t *testing.T) {
+		if got := polls.BuildClaimICS(poll, []queries.PollOption{textOpt}, pollURL, now); got != nil {
+			t.Errorf("BuildClaimICS = %q, want nil", got)
+		}
+		if got := polls.BuildClaimICS(poll, nil, pollURL, now); got != nil {
+			t.Errorf("BuildClaimICS(no options) = %q, want nil", got)
 		}
 	})
 }

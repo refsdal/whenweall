@@ -159,3 +159,37 @@ func BuildPollICS(ctx context.Context, q *queries.Queries, pollID, pollURL strin
 
 	return "calendar.ics", ics.BuildCalendar(buildVeventLines(event, time.Now())), nil
 }
+
+// BuildClaimICS ports buildIcsMulti as sendClaimConfirmation used it (claim-emails.ts): one
+// VCALENDAR holding one VEVENT per claimed option that has calendar meaning (icsStartFromOption —
+// text slots contribute nothing), so a participant holding several shifts adds all of them from
+// one attachment. UID is "<pollID>-<optionID>@whenweall" (distinct from BuildPollICS's
+// "<pollID>@whenweall" for the finalized option, so the two never collide in a calendar). Returns
+// nil when no claimed option has calendar meaning — the caller then attaches nothing. claimed
+// should already be the participant's own claimed options in position order.
+func BuildClaimICS(poll queries.Poll, claimed []queries.PollOption, pollURL string, now time.Time) []byte {
+	var lines []string
+	for _, o := range claimed {
+		start, ok := icsStartFromOption(o)
+		if !ok {
+			continue
+		}
+		event := icsEvent{
+			uid:   poll.ID + "-" + o.ID + "@whenweall",
+			title: poll.Title,
+			url:   pollURL,
+			start: start,
+		}
+		if poll.Description.Valid {
+			event.description = poll.Description.String
+		}
+		if poll.Location.Valid {
+			event.location = poll.Location.String
+		}
+		lines = append(lines, buildVeventLines(event, now)...)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return ics.BuildCalendar(lines)
+}

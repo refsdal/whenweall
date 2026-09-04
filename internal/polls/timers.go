@@ -580,11 +580,8 @@ func (s *Service) sendDigestMail(ctx context.Context, m MailSender, poll queries
 // reflects whatever their claims are by the time this actually sends — and is a no-op for every
 // "nothing to send" case: participant gone, no email on file, or no claims left.
 //
-// Still without an .ics attachment: TS's sendClaimConfirmation attaches one VEVENT per claimed
-// slot via buildIcsMulti (claim-emails.ts) — a poll need not be finalized for a claim to happen,
-// so this can't reuse BuildPollICS (internal/polls/ics.go), which only ever builds the single
-// finalized-option event. Left as a follow-up task (a BuildPollICSMulti or equivalent) rather than
-// task 5's scope, which produced BuildPollICS for the finalized-mail path only.
+// Attaches BuildClaimICS's multi-VEVENT calendar.ics whenever any claimed slot has calendar
+// meaning (claim-emails.ts's buildIcsMulti).
 func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if payload.ParticipantID == "" {
 		return nil
@@ -620,10 +617,17 @@ func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, p
 		return err
 	}
 	slots := make([]string, 0, len(claimed))
+	claimedOptions := make([]queries.PollOption, 0, len(claimed))
 	for _, o := range options {
 		if claimed[o.ID] {
 			slots = append(slots, optionLabelText(o, locale, poll.Timezone))
+			claimedOptions = append(claimedOptions, o)
 		}
+	}
+
+	var attachments []mailer.Attachment
+	if cal := BuildClaimICS(poll, claimedOptions, pollURL, time.Now()); cal != nil {
+		attachments = []mailer.Attachment{{Filename: "calendar.ics", ContentType: "text/calendar", Content: cal}}
 	}
 
 	return m.Send(ctx, mailer.Message{
@@ -636,6 +640,7 @@ func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, p
 			"Slots":     slots,
 			"Locale":    locale,
 		},
+		Attachments: attachments,
 	})
 }
 

@@ -1355,3 +1355,81 @@ func TestOptionLabelsFollowRecipientLocale(t *testing.T) {
 		}
 	})
 }
+
+// TestClaimConfirmationAttachesMultiEventICS: the sent claim_confirmation mail carries
+// calendar.ics with one VEVENT per claimed dated slot (claim-emails.ts), and no attachment at all
+// for a text-only sheet.
+func TestClaimConfirmationAttachesMultiEventICS(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("dated slots: one attachment, one VEVENT per claim", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		created, err := s.Create(ctx, orgID, ownerID, polls.CreatePollInput{
+			Type: polls.PollTypeSignup, Title: "Shifts", Timezone: "Europe/Oslo",
+			Options: []polls.OptionInput{
+				withCapacity(datetimeOption(fixtureStart, fixtureEnd), nil),
+				withCapacity(datetimeOption("2026-09-02T16:30:00.000Z"), nil),
+			},
+			SignupMaxClaims: intPtr(2),
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		first, err := s.Claim(ctx, created.ID, created.Options[0].ID, polls.ClaimInput{Name: "Ada", Email: strPtr("ada@example.com")}, polls.Viewer{})
+		if err != nil {
+			t.Fatalf("Claim 1: %v", err)
+		}
+		if _, err := s.Claim(ctx, created.ID, created.Options[1].ID, polls.ClaimInput{ParticipantID: first.ParticipantID}, polls.Viewer{GuestParticipantID: first.ParticipantID}); err != nil {
+			t.Fatalf("Claim 2: %v", err)
+		}
+
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+		drainJobs(t, ctx, w)
+
+		mails := rec.byTemplate("claim_confirmation")
+		if len(mails) == 0 {
+			t.Fatal("no claim_confirmation mail sent")
+		}
+		last := mails[len(mails)-1] // re-reads current claims at send time: both slots by now
+		if len(last.Attachments) != 1 {
+			t.Fatalf("attachments = %d, want 1", len(last.Attachments))
+		}
+		att := last.Attachments[0]
+		if att.Filename != "calendar.ics" || att.ContentType != "text/calendar" {
+			t.Errorf("attachment = %q/%q, want calendar.ics/text/calendar", att.Filename, att.ContentType)
+		}
+		body := string(att.Content)
+		if got := strings.Count(body, "BEGIN:VEVENT\r\n"); got != 2 {
+			t.Errorf("BEGIN:VEVENT count = %d, want 2: %q", got, body)
+		}
+		for _, o := range created.Options {
+			if !strings.Contains(body, "UID:"+created.ID+"-"+o.ID+"@whenweall\r\n") {
+				t.Errorf("body missing UID for option %s: %q", o.ID, body)
+			}
+		}
+	})
+
+	t.Run("text-only slots: no attachment", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		created := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 0)
+		if _, err := s.Claim(ctx, created.ID, created.Options[0].ID, polls.ClaimInput{Name: "Bob", Email: strPtr("bob@example.com")}, polls.Viewer{}); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+		drainJobs(t, ctx, w)
+
+		mails := rec.byTemplate("claim_confirmation")
+		if len(mails) != 1 || len(mails[0].Attachments) != 0 {
+			t.Errorf("mails = %+v, want exactly one with no attachments", mails)
+		}
+	})
+}
