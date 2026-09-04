@@ -13,8 +13,21 @@ INSERT INTO booking_pages (
 -- name: GetBookingPage :one
 SELECT * FROM booking_pages WHERE id = $1 AND deleted_at IS NULL;
 
--- name: ListBookingPagesByOrg :many
-SELECT * FROM booking_pages WHERE organization_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC;
+-- name: ListBookingPageSummariesByOrg :many
+-- ListMyPages' one-query list (pages.go): each live page with its count of confirmed bookings
+-- starting at/after start_at, via a LATERAL aggregate — count(*) always yields exactly one row,
+-- so a plain (CROSS) JOIN LATERAL is equivalent to the LEFT JOIN LATERAL + COALESCE form and
+-- keeps the generated column a non-null bigint. Replaces the former per-page
+-- CountUpcomingConfirmedBookings round trip (N+1).
+SELECT bp.id, bp.slug, bp.title, bp.status, bp.created_at, bp.updated_at, c.upcoming_count
+FROM booking_pages bp
+CROSS JOIN LATERAL (
+  SELECT count(*) AS upcoming_count
+  FROM bookings b
+  WHERE b.page_id = bp.id AND b.status = 'confirmed' AND b.start_at >= sqlc.arg(start_at)
+) c
+WHERE bp.organization_id = sqlc.arg(organization_id) AND bp.deleted_at IS NULL
+ORDER BY bp.created_at DESC;
 
 -- name: UpdateBookingPage :exec
 UPDATE booking_pages SET
@@ -38,9 +51,6 @@ WHERE id = $1;
 
 -- name: SoftDeleteBookingPage :exec
 UPDATE booking_pages SET deleted_at = $2, updated_at = $2 WHERE id = $1;
-
--- name: CountUpcomingConfirmedBookings :one
-SELECT count(*) FROM bookings WHERE page_id = $1 AND status = 'confirmed' AND start_at >= $2;
 
 -- name: GetOrganizationBySlug :one
 SELECT * FROM organizations WHERE slug = $1;

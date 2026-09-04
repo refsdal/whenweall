@@ -345,33 +345,31 @@ func (s *Service) DeletePage(ctx context.Context, pageID, orgID string) error {
 	return tx.Commit()
 }
 
-// ListMyPages ports listMyPages.
+// ListMyPages ports listMyPages as ONE query (queries.ListBookingPageSummariesByOrg, a LATERAL
+// count per page) — the same single relational query the TS source's Drizzle `with: bookings`
+// made — rather than one CountUpcomingConfirmedBookings round trip per page. This backs the
+// /bookings route loader, so every dashboard load used to pay N+1 round trips.
 func (s *Service) ListMyPages(ctx context.Context, orgID string) ([]PageSummary, error) {
 	orgIDInt, err := strconv.ParseInt(orgID, 10, 64)
 	if err != nil {
 		return nil, ErrNotFound
 	}
 
-	rows, err := s.q.ListBookingPagesByOrg(ctx, orgIDInt)
+	rows, err := s.q.ListBookingPageSummariesByOrg(ctx, queries.ListBookingPageSummariesByOrgParams{
+		StartAt: time.Now().UTC(), OrganizationID: orgIDInt,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
 	out := make([]PageSummary, 0, len(rows))
 	for _, p := range rows {
-		count, err := s.q.CountUpcomingConfirmedBookings(ctx, queries.CountUpcomingConfirmedBookingsParams{
-			PageID: p.ID, StartAt: now,
-		})
-		if err != nil {
-			return nil, err
-		}
 		out = append(out, PageSummary{
 			ID:            p.ID,
 			Slug:          p.Slug,
 			Title:         p.Title,
 			Status:        p.Status,
-			UpcomingCount: int(count),
+			UpcomingCount: int(p.UpcomingCount),
 			CreatedAt:     formatISO(p.CreatedAt),
 			UpdatedAt:     formatISO(p.UpdatedAt),
 		})

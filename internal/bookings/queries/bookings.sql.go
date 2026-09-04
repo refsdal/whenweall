@@ -14,22 +14,6 @@ import (
 	"github.com/sqlc-dev/pqtype"
 )
 
-const countUpcomingConfirmedBookings = `-- name: CountUpcomingConfirmedBookings :one
-SELECT count(*) FROM bookings WHERE page_id = $1 AND status = 'confirmed' AND start_at >= $2
-`
-
-type CountUpcomingConfirmedBookingsParams struct {
-	PageID  string
-	StartAt time.Time
-}
-
-func (q *Queries) CountUpcomingConfirmedBookings(ctx context.Context, arg CountUpcomingConfirmedBookingsParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUpcomingConfirmedBookings, arg.PageID, arg.StartAt)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const disableGoogleSyncForMember = `-- name: DisableGoogleSyncForMember :exec
 UPDATE booking_pages SET google_sync = false, updated_at = $2 WHERE member_user_id = $1
 `
@@ -481,42 +465,55 @@ func (q *Queries) IsOrgMember(ctx context.Context, arg IsOrgMemberParams) (bool,
 	return is_member, err
 }
 
-const listBookingPagesByOrg = `-- name: ListBookingPagesByOrg :many
-SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE organization_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC
+const listBookingPageSummariesByOrg = `-- name: ListBookingPageSummariesByOrg :many
+SELECT bp.id, bp.slug, bp.title, bp.status, bp.created_at, bp.updated_at, c.upcoming_count
+FROM booking_pages bp
+CROSS JOIN LATERAL (
+  SELECT count(*) AS upcoming_count
+  FROM bookings b
+  WHERE b.page_id = bp.id AND b.status = 'confirmed' AND b.start_at >= $1
+) c
+WHERE bp.organization_id = $2 AND bp.deleted_at IS NULL
+ORDER BY bp.created_at DESC
 `
 
-func (q *Queries) ListBookingPagesByOrg(ctx context.Context, organizationID int64) ([]BookingPage, error) {
-	rows, err := q.db.QueryContext(ctx, listBookingPagesByOrg, organizationID)
+type ListBookingPageSummariesByOrgParams struct {
+	StartAt        time.Time
+	OrganizationID int64
+}
+
+type ListBookingPageSummariesByOrgRow struct {
+	ID            string
+	Slug          string
+	Title         string
+	Status        string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	UpcomingCount int64
+}
+
+// ListMyPages' one-query list (pages.go): each live page with its count of confirmed bookings
+// starting at/after start_at, via a LATERAL aggregate — count(*) always yields exactly one row,
+// so a plain (CROSS) JOIN LATERAL is equivalent to the LEFT JOIN LATERAL + COALESCE form and
+// keeps the generated column a non-null bigint. Replaces the former per-page
+// CountUpcomingConfirmedBookings round trip (N+1).
+func (q *Queries) ListBookingPageSummariesByOrg(ctx context.Context, arg ListBookingPageSummariesByOrgParams) ([]ListBookingPageSummariesByOrgRow, error) {
+	rows, err := q.db.QueryContext(ctx, listBookingPageSummariesByOrg, arg.StartAt, arg.OrganizationID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BookingPage
+	var items []ListBookingPageSummariesByOrgRow
 	for rows.Next() {
-		var i BookingPage
+		var i ListBookingPageSummariesByOrgRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.OrganizationID,
-			&i.CreatedBy,
-			&i.MemberUserID,
 			&i.Slug,
 			&i.Title,
-			&i.Description,
-			&i.Location,
-			&i.Timezone,
-			&i.SlotDurationMin,
-			&i.BufferBeforeMin,
-			&i.BufferAfterMin,
-			&i.MinNoticeMin,
-			&i.MaxDaysAhead,
-			&i.Availability,
-			&i.DateOverrides,
-			&i.GoogleSync,
-			&i.Reminders,
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.DeletedAt,
+			&i.UpcomingCount,
 		); err != nil {
 			return nil, err
 		}

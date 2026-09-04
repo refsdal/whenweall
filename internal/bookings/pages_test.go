@@ -337,6 +337,52 @@ func TestListMyPages(t *testing.T) {
 			t.Errorf("UpcomingCount = %d, want 1", list[0].UpcomingCount)
 		}
 	})
+
+	t.Run("many pages: per-page counts, zero for a page with none, newest first", func(t *testing.T) {
+		d := testdb.New(t)
+		s := bookings.NewService(testConfig(t), d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+
+		var ids []string
+		for i, slug := range []string{"first-page", "second-page", "third-page"} {
+			page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(func(in *bookings.PageInput) { in.Slug = slug }))
+			if err != nil {
+				t.Fatalf("CreatePage(%s): %v", slug, err)
+			}
+			// created_at is set from time.Now() in CreatePage; nudge it so the ORDER BY is
+			// deterministic even on a coarse clock.
+			if _, err := d.ExecContext(ctx, `UPDATE booking_pages SET created_at = now() + ($2 || ' seconds')::interval WHERE id = $1`,
+				page.ID, fmt.Sprint(i)); err != nil {
+				t.Fatalf("nudge created_at: %v", err)
+			}
+			ids = append(ids, page.ID)
+		}
+		// first-page: 2 upcoming (+1 past, +1 cancelled ignored); second-page: none; third-page: 1.
+		makeBooking(t, d, ids[0], time.Now().Add(24*time.Hour), "confirmed")
+		makeBooking(t, d, ids[0], time.Now().Add(48*time.Hour), "confirmed")
+		makeBooking(t, d, ids[0], time.Now().Add(-24*time.Hour), "confirmed")
+		makeBooking(t, d, ids[0], time.Now().Add(72*time.Hour), "cancelled")
+		makeBooking(t, d, ids[2], time.Now().Add(24*time.Hour), "confirmed")
+
+		list, err := s.ListMyPages(ctx, orgID)
+		if err != nil {
+			t.Fatalf("ListMyPages: %v", err)
+		}
+		if len(list) != 3 {
+			t.Fatalf("len(list) = %d, want 3", len(list))
+		}
+		// Newest first: third, second, first.
+		wantOrder := []string{ids[2], ids[1], ids[0]}
+		wantCounts := []int{1, 0, 2}
+		for i, summary := range list {
+			if summary.ID != wantOrder[i] {
+				t.Errorf("list[%d].ID = %q, want %q (newest first)", i, summary.ID, wantOrder[i])
+			}
+			if summary.UpcomingCount != wantCounts[i] {
+				t.Errorf("list[%d].UpcomingCount = %d, want %d", i, summary.UpcomingCount, wantCounts[i])
+			}
+		}
+	})
 }
 
 func TestGetPublicPage(t *testing.T) {

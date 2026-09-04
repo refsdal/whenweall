@@ -9,7 +9,6 @@ import (
 )
 
 type Querier interface {
-	CountUpcomingConfirmedBookings(ctx context.Context, arg CountUpcomingConfirmedBookingsParams) (int64, error)
 	// Ports disconnectGoogleSync (pages.ts): turns googleSync off on every booking page whose
 	// member_user_id is userId — the account row itself (accounts, Limen's) is left untouched; only
 	// this user's own pages stop trying to sync against it.
@@ -50,7 +49,12 @@ type Querier interface {
 	// see internal/polls/queries's identical query for the sibling rationale): does userId belong to
 	// organizationId at all, regardless of role?
 	IsOrgMember(ctx context.Context, arg IsOrgMemberParams) (bool, error)
-	ListBookingPagesByOrg(ctx context.Context, organizationID int64) ([]BookingPage, error)
+	// ListMyPages' one-query list (pages.go): each live page with its count of confirmed bookings
+	// starting at/after start_at, via a LATERAL aggregate — count(*) always yields exactly one row,
+	// so a plain (CROSS) JOIN LATERAL is equivalent to the LEFT JOIN LATERAL + COALESCE form and
+	// keeps the generated column a non-null bigint. Replaces the former per-page
+	// CountUpcomingConfirmedBookings round trip (N+1).
+	ListBookingPageSummariesByOrg(ctx context.Context, arg ListBookingPageSummariesByOrgParams) ([]ListBookingPageSummariesByOrgRow, error)
 	// Every booking (any status) on a page overlapping [range_from, range_to) — ListPageBookings'
 	// own query, unfiltered by status (matching listBookings, bookings.ts).
 	ListBookingsInRange(ctx context.Context, arg ListBookingsInRangeParams) ([]Booking, error)
