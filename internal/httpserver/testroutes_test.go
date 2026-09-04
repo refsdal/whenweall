@@ -130,6 +130,42 @@ func TestSeed_DefaultsToAVerifiedSignInableUser(t *testing.T) {
 	}
 }
 
+// TestSeed_SendsNameToSignup is the reviewer's finding 3: seedSignUp used to POST only
+// email/password to Limen's own signup route, so internal/auth's signup hook
+// (signup_hook.go's signupProfileFromRequest) never saw a "name" in the body and fell back to the
+// email's local part as the stored display name — even though the seed response's own Name field
+// (seedResult) claimed whatever the caller asked for (or "Test User" by default). e2e/fixtures.ts
+// always sends a name and expects GET /me to echo it back; this proves the two now agree.
+func TestSeed_SendsNameToSignup(t *testing.T) {
+	srv, _, _, _ := seedTestServer(t)
+
+	seeded := postSeed(t, srv, map[string]any{"name": "E2E User"})
+	email := stringField(t, seeded, "email")
+	password := stringField(t, seeded, "password")
+	if got, _ := seeded["name"].(string); got != "E2E User" {
+		t.Fatalf("seed response name = %q, want E2E User", got)
+	}
+
+	cookies := signIn(t, srv, email, password)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /me: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode /me: %v", err)
+	}
+	user, _ := body["user"].(map[string]any)
+	if got, _ := user["name"].(string); got != "E2E User" {
+		t.Errorf("stored name = %q, want %q (the seed response's own claim)", got, "E2E User")
+	}
+}
+
 // TestSeed_ManySeedsAgainstOneServerNeverRateLimit is the regression test for the rate-limiter
 // finding: Limen's own credential-password plugin caps /signup/credential and /signin/credential
 // at 5 requests/10s each, keyed per (IP, path) — and httptest.NewRequest's fixed default

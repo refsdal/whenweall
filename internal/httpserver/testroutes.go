@@ -132,7 +132,7 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 			password = seedDefaultPassword
 		}
 
-		if err := seedSignUp(authSvc, email, password); err != nil {
+		if err := seedSignUp(authSvc, email, password, name); err != nil {
 			Err(w, http.StatusInternalServerError, "internal", "seed: signup failed: "+err.Error(), nil)
 			return
 		}
@@ -226,8 +226,20 @@ func nextSeedRemoteAddr() string {
 // Limen itself produces — nothing here reaches into Limen's own tables directly. Signup mints no
 // session (auto-sign-in is off — see internal/auth.buildLimenConfig), so this returns nothing
 // but an error; seedSignIn below is what yields cookies.
-func seedSignUp(authSvc *auth.Service, email, password string) error {
-	_, err := seedAuthPost(authSvc, "/api/v1/auth/signup/credential", map[string]string{"email": email, "password": password})
+//
+// name rides along in the body exactly like a real signup's does, for internal/auth's signup hook
+// (signup_hook.go's signupProfileFromRequest) to persist onto the account — mirroring the old TS
+// seed.ts route (git show main:src/routes/api/test/seed.ts), which passed both name and
+// locale: 'en' here. Without it, the hook falls back to the email's local part, and the seed
+// response's own Name field (seedResult, below) would be a claim the stored account never
+// actually matched — see this file's own handleSeed doc comment history / the reviewer's finding.
+// locale is fixed at "en" (not the caller-visible seed `name`/`Role` fields, which vary): no e2e
+// fixture ever asks this route for a non-English seed, and the SPA's own per-user locale switch
+// (PATCH /api/v1/me) is exactly what a spec that needs Norwegian would call afterward instead.
+func seedSignUp(authSvc *auth.Service, email, password, name string) error {
+	_, err := seedAuthPost(authSvc, "/api/v1/auth/signup/credential", map[string]string{
+		"email": email, "password": password, "name": name, "locale": "en",
+	})
 	return err
 }
 
