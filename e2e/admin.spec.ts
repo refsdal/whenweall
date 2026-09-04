@@ -154,7 +154,11 @@ test.describe('admin console', () => {
       // --- audit log ---
       // Scoped to `userId` (this spec's own seeded subject) *and* the typed reason, not merely the
       // action name, since /admin/audit is a single global, 100-row-capped table shared with every
-      // other worker's admin actions across the whole suite.
+      // other worker's admin actions across the whole suite. Both the action and the target id are
+      // matched via their cells' `data-action`/`data-target` attributes (exact matches), not
+      // `hasText` substring matching: "unlock-user" contains "lock-user", and users.id is a small
+      // BIGSERIAL, so a substring like "20" can match another row's timestamp (e.g. "…2026…") or a
+      // longer id under concurrent load — either would let a `hasText` filter alone false-positive.
       await page.goto('/admin/audit')
       await waitForHydration(page)
       for (const [action, reason] of [
@@ -165,8 +169,8 @@ test.describe('admin console', () => {
         await expect(
           page
             .getByRole('row')
-            .filter({ hasText: action })
-            .filter({ hasText: userId })
+            .filter({ has: page.locator(`[data-action="${action}"]`) })
+            .filter({ has: page.locator(`[data-target="${userId}"]`) })
             .filter({ hasText: reason }),
         ).toHaveCount(1)
       }

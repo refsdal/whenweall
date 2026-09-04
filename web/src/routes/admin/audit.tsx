@@ -33,8 +33,13 @@ function AdminAudit() {
                 {new Date(entry.createdAt).toLocaleString()}
               </td>
               <td className="p-3">{entry.actorEmail}</td>
-              <td className="p-3 font-mono text-xs">{entry.action}</td>
-              <td className="p-3 font-mono text-xs text-muted-foreground">
+              <td className="p-3 font-mono text-xs" data-action={entry.action}>
+                {entry.action}
+              </td>
+              <td
+                className="p-3 font-mono text-xs text-muted-foreground"
+                data-target={entry.targetId ?? undefined}
+              >
                 {entry.targetId ?? '—'}
               </td>
               <td className="p-3">
