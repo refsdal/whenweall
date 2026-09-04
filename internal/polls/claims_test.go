@@ -577,10 +577,8 @@ func TestUnclaim(t *testing.T) {
 // winning insert commits — see claims.go's package doc comment) must let exactly one of them
 // through; every other goroutine must observe ErrCapacityFull, never a second successful claim.
 //
-// This environment has no cgo, so `go test -race` cannot run (the race detector requires cgo);
-// per the task brief, this is compensated for with `-count=5` repetition instead (see the task
-// report) — run the same 16-way race five times over rather than relying on -race to catch a
-// hypothetical missed lock.
+// CI runs this under `go test -race` (ci.yml's polls/bookings/auth/jobs race pass); locally,
+// `-count=5` is a cheap way to widen the window further.
 func TestClaimLastSlotExactlyOneWinner(t *testing.T) {
 	ctx := context.Background()
 	d := testdb.New(t)
@@ -640,10 +638,10 @@ func raceName(i int) string {
 // racers doesn't reliably expose the race in this environment — the vulnerable window between
 // the read and the insert is narrow enough that two (or even several) goroutines on a fast local
 // Postgres usually just don't overlap, the same ceiling TestClaimLastSlotExactlyOneWinner's own
-// option-lock race hits without artificially widening its window. This environment has no cgo, so
-// `go test -race` cannot run (the race detector requires cgo) — compensated for with `-count=5`
-// repetition instead, same as that test.
-func TestClaimSharedParticipantMaxClaimsAcrossOptions(t *testing.T) {
+// option-lock race hits without artificially widening its window. "Race" is in the name on
+// purpose: ci.yml's -race pass selects tests by `-run 'Race|Concurrent|Winner|LateCommitter|Slow'`,
+// and this — the pinning test for the max-claims race fixed in c1dd78f — used to match none of them.
+func TestClaimSharedParticipantMaxClaimsRaceAcrossOptions(t *testing.T) {
 	ctx := context.Background()
 	d := testdb.New(t)
 	s := polls.NewService(d)

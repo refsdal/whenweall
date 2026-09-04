@@ -19,7 +19,7 @@ package polls
 //  2. The claiming participant's own row, for an EXISTING participant only (queries.
 //     GetParticipantForUpdate): protects their signupMaxClaims cap the same way, across the
 //     *different* options the same participant might claim concurrently — see
-//     TestClaimSharedParticipantMaxClaimsAcrossOptions (claims_test.go) for the proof.
+//     TestClaimSharedParticipantMaxClaimsRaceAcrossOptions (claims_test.go) for the proof.
 
 import (
 	"context"

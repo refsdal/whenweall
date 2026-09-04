@@ -747,9 +747,8 @@ func TestListPageBookings(t *testing.T) {
 // TestBookRacingClaimsExactlyOneWinner is spec §9's double-book proof, this package's analog of
 // internal/polls/claims_test.go's TestClaimLastSlotExactlyOneWinner: 16 goroutines all try to Book
 // the exact same slot on the same page concurrently. The page-row FOR UPDATE lock (see bookings.go's
-// package doc comment) must serialize them so exactly one wins and the rest see ErrSlotTaken — run
-// with `-count=5` (no `-race`: this environment has CGO_ENABLED=0 and no cgo toolchain, and -race
-// requires cgo).
+// package doc comment) must serialize them so exactly one wins and the rest see ErrSlotTaken. CI
+// runs this under `go test -race`; `-count=5` locally widens the window further.
 func TestBookRacingClaimsExactlyOneWinner(t *testing.T) {
 	ctx := context.Background()
 	p := setupBookablePage(t, nil)

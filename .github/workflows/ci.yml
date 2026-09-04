@@ -29,12 +29,13 @@ jobs:
       - run: go test ./...
       # internal/rooms runs UNFILTERED: this whole package IS the concurrency-sensitive surface
       # (the hub's watermark/dispatch state, presence counting, the keepalive goroutine racing
-      # read/write pumps, ...), not just the handful of tests a name filter would happen to catch.
-      # internal/polls and internal/bookings stay scoped by name to keep the job fast: only their
-      # own concurrent-writer tests (claim races, digest batching, double-booking, ...) actually
-      # benefit from -race, not their whole suite.
+      # read/write pumps, shutdown draining, ...), not just the handful of tests a name filter
+      # would happen to catch. polls/bookings/auth/jobs/db stay scoped by name to keep the job
+      # fast: their concurrent-writer tests (claim races, double-booking, personal-org creation,
+      # job claiming, the sync.Once-guarded concurrent migrate) all carry one of these tokens in
+      # their name — keep that true when adding one.
       - run: go test -race ./internal/rooms/...
-      - run: go test -race -run 'Race|Concurrent|Winner|LateCommitter|Slow' ./internal/polls/... ./internal/bookings/...
+      - run: go test -race -run 'Race|Concurrent|Winner|LateCommitter|Slow' ./internal/polls/... ./internal/bookings/... ./internal/auth/... ./internal/jobs/... ./internal/db/...
 
   # Frontend: the SPA under web/ has its own toolchain (bun) entirely separate from the root
   # package.json, which exists only for Playwright's e2e suite below.

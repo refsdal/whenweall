@@ -3,7 +3,9 @@ package jobs_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -60,11 +62,16 @@ func TestClaimSkipsFutureJobs(t *testing.T) {
 	}
 }
 
-func TestTwoWorkersGetDisjointSets(t *testing.T) {
+// TestConcurrentClaimersGetDisjointCompleteSets contends ClaimDue's FOR UPDATE SKIP LOCKED for
+// real: eight goroutines claim in batches from the same due set until it is empty. Every job must
+// be claimed exactly once, by exactly one worker. (Its sequential predecessor called ClaimDue
+// twice in a row, which a bare `UPDATE ... WHERE locked_by IS NULL` would also have passed.)
+func TestConcurrentClaimersGetDisjointCompleteSets(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()
 
-	for i := 0; i < 4; i++ {
+	const total = 40
+	for i := 0; i < total; i++ {
 		if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
 			Kind:  "mail:send",
 			RunAt: time.Now().Add(-time.Second),
@@ -73,30 +80,43 @@ func TestTwoWorkersGetDisjointSets(t *testing.T) {
 		}
 	}
 
-	w1, err := jobs.ClaimDue(ctx, d, "w1", 2)
-	if err != nil {
-		t.Fatalf("ClaimDue(w1): %v", err)
+	const workers = 8
+	var (
+		mu        sync.Mutex
+		claimedBy = make(map[string]string, total)
+	)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(replica string) {
+			defer wg.Done()
+			<-start
+			for {
+				batch, err := jobs.ClaimDue(ctx, d, replica, 3)
+				if err != nil {
+					t.Errorf("%s: ClaimDue: %v", replica, err)
+					return
+				}
+				if len(batch) == 0 {
+					return
+				}
+				mu.Lock()
+				for _, j := range batch {
+					if prev, dup := claimedBy[j.ID]; dup {
+						t.Errorf("job %s claimed by both %s and %s", j.ID, prev, replica)
+					}
+					claimedBy[j.ID] = replica
+				}
+				mu.Unlock()
+			}
+		}(fmt.Sprintf("w%d", w))
 	}
-	w2, err := jobs.ClaimDue(ctx, d, "w2", 10)
-	if err != nil {
-		t.Fatalf("ClaimDue(w2): %v", err)
-	}
+	close(start)
+	wg.Wait()
 
-	if len(w1) != 2 {
-		t.Errorf("len(w1) = %d, want 2", len(w1))
-	}
-	if len(w2) != 2 {
-		t.Errorf("len(w2) = %d, want 2", len(w2))
-	}
-
-	seen := make(map[string]bool, len(w1))
-	for _, j := range w1 {
-		seen[j.ID] = true
-	}
-	for _, j := range w2 {
-		if seen[j.ID] {
-			t.Errorf("job %s claimed by both workers", j.ID)
-		}
+	if len(claimedBy) != total {
+		t.Fatalf("claimed %d distinct jobs, want %d (every due job claimed exactly once)", len(claimedBy), total)
 	}
 }
 
