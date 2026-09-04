@@ -668,3 +668,61 @@ func TestEventFrame_NullData(t *testing.T) {
 		t.Errorf("frame = %v, want exactly {type, seq}", got)
 	}
 }
+
+// TestListenerIdleTimeoutPingsWithoutReconnecting pins the liveness check's SHAPE: an idle LISTEN
+// session is interrupted every ListenIdleTimeout and pinged — it is NOT torn down and redialed.
+// Observable from outside as (a) the backend pid behind the listener staying the same across
+// several idle windows, (b) no resync frame reaching a subscriber (a reconnect would send one —
+// see Run), and (c) delivery still working afterwards. A genuinely half-open TCP session cannot
+// be simulated against a local container, so the ping's failure branch is covered by the ordinary
+// connection-loss tests (TestReconnectSendsResyncAndResumesDelivery): a failed ping returns an
+// error from listenLoop and takes exactly that path.
+func TestListenerIdleTimeoutPingsWithoutReconnecting(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+
+	appName := "rooms_hub_test_" + db.NewID()
+	listenURL := url
+	if strings.Contains(listenURL, "?") {
+		listenURL += "&application_name=" + appName
+	} else {
+		listenURL += "?application_name=" + appName
+	}
+
+	hub := rooms.NewHub(listenURL, sqlDB, nil)
+	hub.ListenIdleTimeout = 100 * time.Millisecond
+	hub.ListenPingTimeout = 2 * time.Second
+	runHub(t, hub)
+	awaitListening(t, hub, sqlDB)
+
+	pidOf := func() int {
+		t.Helper()
+		var pid int
+		if err := sqlDB.QueryRowContext(context.Background(),
+			`SELECT pid FROM pg_stat_activity WHERE application_name = $1`, appName,
+		).Scan(&pid); err != nil {
+			t.Fatalf("finding listener backend pid: %v", err)
+		}
+		return pid
+	}
+	before := pidOf()
+
+	const roomKey = "poll:idle-ping"
+	frames, unsubscribe := hub.Subscribe(roomKey)
+	defer unsubscribe()
+
+	// Seven idle windows with nothing to deliver: each must end in a ping, never a reconnect.
+	select {
+	case frame := <-frames:
+		t.Fatalf("unexpected frame during an idle stretch (a resync means the listener reconnected instead of pinging): %s", frame)
+	case <-time.After(700 * time.Millisecond):
+	}
+	if after := pidOf(); after != before {
+		t.Fatalf("listener backend pid changed %d -> %d: the idle timeout reconnected instead of pinging", before, after)
+	}
+
+	emitCommitted(t, sqlDB, roomKey, "poll.changed", nil)
+	got := mustReceiveFrame(t, frames, 5*time.Second)
+	if got["type"] != "poll.changed" {
+		t.Fatalf("frame after idle pings = %v, want poll.changed", got)
+	}
+}

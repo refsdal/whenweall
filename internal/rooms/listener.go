@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // initialBackoff and maxBackoff bound Run's reconnect delay: it starts short (a dropped
@@ -27,6 +28,13 @@ const (
 	// rejecting the connection) never errors out and never retries — Run's own ctx lives for the
 	// whole process, so nothing else would ever time this out on its behalf.
 	dialTimeout = 10 * time.Second
+
+	// defaultListenIdleTimeout/defaultListenPingTimeout are Hub.ListenIdleTimeout/
+	// Hub.ListenPingTimeout's production defaults — see those fields. 60s is well inside every
+	// common NAT/LB idle cutoff (typically 5–15 minutes) while costing one trivial `-- ping`
+	// round trip per minute per replica on a quiet deployment.
+	defaultListenIdleTimeout = 60 * time.Second
+	defaultListenPingTimeout = 10 * time.Second
 )
 
 // Run owns the hub's LISTEN connection for as long as ctx is alive. It dials its own dedicated
@@ -142,13 +150,35 @@ func (h *Hub) Run(ctx context.Context) error {
 }
 
 // listenLoop reads notifications from an established LISTEN session until it errors (connection
-// lost, or ctx done) — the one thing it never does is return successfully, since there's no
-// "end" to a LISTEN session short of losing it.
+// lost, a failed liveness ping, or ctx done) — the one thing it never does is return
+// successfully, since there's no "end" to a LISTEN session short of losing it.
+//
+// Each WaitForNotification is bounded by h.ListenIdleTimeout. A timeout is not an error here: pgx
+// leaves the connection usable after a context deadline (its context watcher resets the net
+// deadline on unwatch, and a timed-out read does not close the session), so the loop pings the
+// server (h.ListenPingTimeout) to prove the TCP session is still two-way. A ping that fails is
+// what a half-open session looks like from this side — it is returned as the connection loss it
+// is, and Run's reconnect + resyncAll path takes over. A NOTIFY that lands mid-ping is buffered by
+// pgx.Conn (bufferNotifications) and returned by the next WaitForNotification, not dropped.
 func (h *Hub) listenLoop(ctx context.Context, conn *pgx.Conn) error {
 	for {
-		notification, err := conn.WaitForNotification(ctx)
+		waitCtx, cancelWait := context.WithTimeout(ctx, h.ListenIdleTimeout)
+		notification, err := conn.WaitForNotification(waitCtx)
+		cancelWait()
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !pgconn.Timeout(err) {
+				return err
+			}
+			pingCtx, cancelPing := context.WithTimeout(ctx, h.ListenPingTimeout)
+			pingErr := conn.Ping(pingCtx)
+			cancelPing()
+			if pingErr != nil {
+				return fmt.Errorf("rooms: listener liveness ping failed after %s idle: %w", h.ListenIdleTimeout, pingErr)
+			}
+			continue
 		}
 
 		roomKey, id, err := parseNotifyPayload(notification.Payload)

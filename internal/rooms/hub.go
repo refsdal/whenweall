@@ -129,6 +129,17 @@ type Hub struct {
 	KeepaliveInterval time.Duration
 	PingTimeout       time.Duration
 
+	// ListenIdleTimeout/ListenPingTimeout bound Run's LISTEN session's liveness check
+	// (listener.go's listenLoop): a WaitForNotification that has heard nothing for
+	// ListenIdleTimeout is interrupted and the connection pinged, bounded by ListenPingTimeout;
+	// a failed ping is treated as a lost connection so the ordinary reconnect + resyncAll path
+	// fires. Without this a half-open TCP session (NAT timeout, DB failover behind a load
+	// balancer) stalled every client on this replica silently for as long as OS keepalives take
+	// to notice — ten minutes or more on Linux defaults. Exported for the same reason as
+	// KeepaliveInterval: so a test can shrink them.
+	ListenIdleTimeout time.Duration
+	ListenPingTimeout time.Duration
+
 	// OriginPatterns (M8) is ws.go's ServeWS's own extra allow-list for the WS handshake's Origin
 	// check (websocket.AcceptOptions.OriginPatterns) — ADDITIONAL to coder/websocket's own default
 	// (a request's Origin must match ITS OWN Host header, when an Origin header is present at
@@ -165,6 +176,8 @@ func NewHub(listenURL string, sqlDB *sql.DB, log *slog.Logger) *Hub {
 		replicaID:         db.NewID(),
 		KeepaliveInterval: defaultKeepaliveInterval,
 		PingTimeout:       defaultPingTimeout,
+		ListenIdleTimeout: defaultListenIdleTimeout,
+		ListenPingTimeout: defaultListenPingTimeout,
 	}
 }
 
