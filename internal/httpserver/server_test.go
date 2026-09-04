@@ -49,6 +49,14 @@ func TestHealthzOK(t *testing.T) {
 	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("nosniff header = %q", got)
 	}
+	// An uptime monitor behind a caching proxy must never be handed a stale 200 during a DB
+	// outage, and a search engine has no business indexing this — the old /api/health set both.
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := rec.Header().Get("X-Robots-Tag"); got != "noindex" {
+		t.Errorf("X-Robots-Tag = %q, want noindex", got)
+	}
 }
 
 // TestAPIOnlySkipsSessionResolutionOutsideAPI is I9's regression test: a request to a path
@@ -249,5 +257,8 @@ func TestHealthzDegradedWhenDBDown(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 503 {
 		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control on the degraded path = %q, want no-store", got)
 	}
 }

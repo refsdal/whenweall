@@ -169,6 +169,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	w.Header().Set("Content-Type", "application/json")
+	// no-store: a caching proxy/CDN in front of the app must never answer a monitor's probe with
+	// a remembered 200 while the database is actually down. noindex: this URL is operational, not
+	// content (the old /api/health set both — main:src/routes/api/health.ts).
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex")
 	if err := s.db.PingContext(ctx); err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"status":"degraded"}`))
