@@ -86,7 +86,8 @@ Then bring it up:
 docker compose up -d
 ```
 
-That pulls Postgres, builds (or pulls) the app image, runs migrations on boot, and starts
+That pulls Postgres and the published app image (`ghcr.io/refsdal/whenweall:latest`; add
+`--build` to build it from your checkout instead), runs migrations on boot, and starts
 listening on `:3000`. Check it's alive:
 
 ```bash
@@ -375,6 +376,9 @@ boot (`MIGRATE_ON_BOOT=true`, the default):
 docker compose pull app
 docker compose up -d app
 ```
+
+Running from a source checkout instead of the published image? `docker compose up -d --build app`
+rebuilds and restarts in one step; migrations still run themselves on boot.
 
 Prefer to control exactly when migrations run (e.g. running several replicas and wanting
 exactly one to migrate)? Set `MIGRATE_ON_BOOT=false` and run them yourself first:

@@ -1,6 +1,18 @@
+# Operator secrets and local state must never enter a build context: the Go stage COPYs source
+# into an intermediate layer that lives on in the build host's cache and `docker history`.
+.env
+.env.*
+*.pem
+
+# Toolchain output and dependencies each stage installs or builds for itself.
 node_modules
+web/node_modules
 dist
+web/dist
+test-results
+playwright-report
+
+# Not needed to build the binary.
 .git
 e2e
-test-results
 docs

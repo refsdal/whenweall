@@ -16,7 +16,11 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+# Only what `go build ./cmd/whenweall` needs — never `COPY . .`, which would sweep up whatever
+# else sits in the checkout (an operator's .env, editor state) into this cached layer.
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY migrations/ ./migrations/
 # The built SPA lands where spa.go's `//go:embed all:dist` expects it, before `go build` runs so
 # the embed actually picks it up.
 COPY --from=web /web/dist ./internal/httpserver/dist
