@@ -182,7 +182,7 @@ func serve() int {
 		// config.Load itself hard-fails boot on (EnableTestRoutes set alongside
 		// APP_ENV=production) — never reachable in a real deployment.
 		if cfg.EnableTestRoutes {
-			httpserver.RegisterTestRoutes(mux, cfg, authSvc, pollsSvc, bookingsSvc)
+			httpserver.RegisterTestRoutes(mux, cfg, sqlDB, authSvc, pollsSvc, bookingsSvc)
 		}
 	})
 	serveErr := srv.ListenAndServe(ctx)

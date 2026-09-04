@@ -3,6 +3,7 @@ package httpserver_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/refsdal/whenweall/internal/bookings"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/httpserver"
+	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/polls"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
@@ -39,7 +41,7 @@ func testConfigWithTestRoutes(t *testing.T) *config.Config {
 // and jobs worker, which this route never touches) — a real Postgres via testdb, a real
 // auth.Service (real Limen), and real polls/bookings Services — so RegisterTestRoutes drives its
 // signup/session/poll/booking-page calls against the genuine seams, not stand-ins.
-func seedTestServer(t *testing.T) (srv *httpserver.Server, authSvc *auth.Service, pollsSvc *polls.Service, bookingsSvc *bookings.Service) {
+func seedTestServer(t *testing.T) (srv *httpserver.Server, authSvc *auth.Service, pollsSvc *polls.Service, bookingsSvc *bookings.Service, sqlDB *sql.DB) {
 	t.Helper()
 	d := testdb.New(t)
 	cfg := testConfigWithTestRoutes(t)
@@ -55,9 +57,9 @@ func seedTestServer(t *testing.T) (srv *httpserver.Server, authSvc *auth.Service
 	srv.RegisterAPI(func(mux *http.ServeMux) {
 		pollsSvc.Register(mux, authSvc, cfg)
 		bookingsSvc.Register(mux, authSvc, cfg)
-		httpserver.RegisterTestRoutes(mux, cfg, authSvc, pollsSvc, bookingsSvc)
+		httpserver.RegisterTestRoutes(mux, cfg, d, authSvc, pollsSvc, bookingsSvc)
 	})
-	return srv, authSvc, pollsSvc, bookingsSvc
+	return srv, authSvc, pollsSvc, bookingsSvc, d
 }
 
 func postSeed(t *testing.T, srv *httpserver.Server, body map[string]any) map[string]any {
@@ -109,7 +111,7 @@ func stringField(t *testing.T, m map[string]any, key string) string {
 }
 
 func TestSeed_DefaultsToAVerifiedSignInableUser(t *testing.T) {
-	srv, _, _, _ := seedTestServer(t)
+	srv, _, _, _, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{})
 
@@ -137,7 +139,7 @@ func TestSeed_DefaultsToAVerifiedSignInableUser(t *testing.T) {
 // (seedResult) claimed whatever the caller asked for (or "Test User" by default). e2e/fixtures.ts
 // always sends a name and expects GET /me to echo it back; this proves the two now agree.
 func TestSeed_SendsNameToSignup(t *testing.T) {
-	srv, _, _, _ := seedTestServer(t)
+	srv, _, _, _, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{"name": "E2E User"})
 	email := stringField(t, seeded, "email")
@@ -177,7 +179,7 @@ func TestSeed_SendsNameToSignup(t *testing.T) {
 // Passing proves both fixes: internal/auth.httpConfigOptions disabling Limen's own rate limiter
 // under EnableTestRoutes, and this package's routes() skipping the Postgres-backed one.
 func TestSeed_ManySeedsAgainstOneServerNeverRateLimit(t *testing.T) {
-	srv, _, _, _ := seedTestServer(t)
+	srv, _, _, _, _ := seedTestServer(t)
 
 	const seedCount = 8
 	for i := 0; i < seedCount; i++ {
@@ -192,7 +194,7 @@ func TestSeed_ManySeedsAgainstOneServerNeverRateLimit(t *testing.T) {
 }
 
 func TestSeed_WithPollCreatesAPollTheUserOwns(t *testing.T) {
-	srv, _, pollsSvc, _ := seedTestServer(t)
+	srv, _, pollsSvc, _, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{"withPoll": true})
 	pollID := stringField(t, seeded, "pollId")
@@ -210,7 +212,7 @@ func TestSeed_WithPollCreatesAPollTheUserOwns(t *testing.T) {
 }
 
 func TestSeed_WithSignupCreatesASignUpSheet(t *testing.T) {
-	srv, _, pollsSvc, _ := seedTestServer(t)
+	srv, _, pollsSvc, _, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{"withSignup": true})
 	pollID := stringField(t, seeded, "pollId")
@@ -225,7 +227,7 @@ func TestSeed_WithSignupCreatesASignUpSheet(t *testing.T) {
 }
 
 func TestSeed_WithBookingPageCreatesAPublicPage(t *testing.T) {
-	srv, _, _, bookingsSvc := seedTestServer(t)
+	srv, _, _, bookingsSvc, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{"withBookingPage": true})
 	pageID := stringField(t, seeded, "pageId")
@@ -249,7 +251,7 @@ func TestSeed_WithBookingPageCreatesAPublicPage(t *testing.T) {
 // "staff" user must actually pass RequireStaff once signed in, not just carry the role in the
 // seed response.
 func TestSeed_StaffRoleForwarded(t *testing.T) {
-	srv, authSvc, _, _ := seedTestServer(t)
+	srv, authSvc, _, _, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{"role": "staff"})
 	email := stringField(t, seeded, "email")
@@ -267,7 +269,7 @@ func TestSeed_StaffRoleForwarded(t *testing.T) {
 // `role: "staff"`, the same probe must reject — proving the previous test isn't passing simply
 // because RequireStaff lets everyone through.
 func TestSeed_OrdinaryUserFailsRequireStaff(t *testing.T) {
-	srv, authSvc, _, _ := seedTestServer(t)
+	srv, authSvc, _, _, _ := seedTestServer(t)
 
 	seeded := postSeed(t, srv, map[string]any{})
 	email := stringField(t, seeded, "email")
@@ -314,5 +316,99 @@ func TestSeed_NotMountedWithoutRegisterTestRoutes(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 when the route was never registered", rec.Code)
+	}
+}
+
+// sessionFor is the test-side twin of testroutes.go's seedTriggerSession: runs a cookie-carrying
+// request through authSvc.Middleware and captures the resolved *auth.Session.
+func sessionFor(authSvc *auth.Service, cookies []*http.Cookie) *auth.Session {
+	var got *auth.Session
+	handler := authSvc.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ = auth.FromContext(r.Context())
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/probe/session", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	return got
+}
+
+// TestSeed_UserIsVerified pins the one property every Playwright fixture now depends on: plan A
+// restored the e-mail verification gate, so a seeded user that is NOT verified would 403
+// `email_unverified` on its first real request and every spec would fail at sign-in.
+func TestSeed_UserIsVerified(t *testing.T) {
+	srv, _, _, _, sqlDB := seedTestServer(t)
+
+	seeded := postSeed(t, srv, map[string]any{})
+	email := stringField(t, seeded, "email")
+
+	var verified bool
+	if err := sqlDB.QueryRowContext(context.Background(),
+		`SELECT email_verified_at IS NOT NULL FROM users WHERE email = $1`, email,
+	).Scan(&verified); err != nil {
+		t.Fatalf("query users.email_verified_at: %v", err)
+	}
+	if !verified {
+		t.Fatalf("seeded user %s has no email_verified_at; fixtures would hit the verification gate", email)
+	}
+}
+
+// TestSeed_ForwardsNameToProfile: the seed body's `name` must become the stored display name
+// (plan A's GetProfile), not just an echo in the seed response — vote-signed-in.spec.ts asserts on
+// the participant row's name and settings.spec.ts on the header.
+func TestSeed_ForwardsNameToProfile(t *testing.T) {
+	srv, authSvc, _, _, _ := seedTestServer(t)
+
+	seeded := postSeed(t, srv, map[string]any{"name": "Seeded Person"})
+	cookies := signIn(t, srv, stringField(t, seeded, "email"), stringField(t, seeded, "password"))
+
+	sess := sessionFor(authSvc, cookies)
+	if sess == nil {
+		t.Fatalf("no session resolved for the seeded user's cookies")
+	}
+	profile, err := authSvc.GetProfile(context.Background(), sess.UserID)
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if profile.Name != "Seeded Person" {
+		t.Errorf("profile.Name = %q, want %q", profile.Name, "Seeded Person")
+	}
+}
+
+func TestSeed_FailedJobInsertsADeadLetteredRow(t *testing.T) {
+	srv, _, _, _, sqlDB := seedTestServer(t)
+
+	seeded := postSeed(t, srv, map[string]any{"failedJob": true})
+	jobID := stringField(t, seeded, "failedJobId")
+
+	dead, err := jobs.Dead(context.Background(), sqlDB, 100)
+	if err != nil {
+		t.Fatalf("jobs.Dead: %v", err)
+	}
+	for _, j := range dead {
+		if j.ID != jobID {
+			continue
+		}
+		if j.Kind != "mail:send" {
+			t.Errorf("kind = %q, want mail:send", j.Kind)
+		}
+		if j.Attempts < j.MaxAttempts {
+			t.Errorf("attempts %d < max_attempts %d: row is not dead-lettered", j.Attempts, j.MaxAttempts)
+		}
+		if j.LastError == nil || !strings.Contains(*j.LastError, jobID) {
+			t.Errorf("last_error = %v, want it to contain the job id %s", j.LastError, jobID)
+		}
+		return
+	}
+	t.Fatalf("job %s not in jobs.Dead: %+v", jobID, dead)
+}
+
+func TestSeed_NoFailedJobByDefault(t *testing.T) {
+	srv, _, _, _, _ := seedTestServer(t)
+
+	seeded := postSeed(t, srv, map[string]any{})
+	if seeded["failedJobId"] != nil {
+		t.Errorf("failedJobId = %v, want null when failedJob was not requested", seeded["failedJobId"])
 	}
 }

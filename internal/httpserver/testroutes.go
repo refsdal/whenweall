@@ -10,11 +10,11 @@ package httpserver
 //   - No `plan: 'premium'` support: billing/subscriptions have no home in this rewrite (see
 //     internal/admin/stats.go's own doc comment), so there is nothing left to seed a subscription
 //     row into.
-//   - The "set email_verified" step is authSvc.MarkEmailVerified: a fresh Limen signup is
-//     unverified and mints no session (internal/auth.buildLimenConfig turns auto-sign-in off), and
-//     every gated route refuses an unverified session (internal/auth/session.go's RequireSession
-//     and AuthMountGuard) — so, like seed.ts before it, this route marks the user verified and then
-//     signs them in itself to obtain the cookies its own seeding needs.
+//   - The seeded user IS marked verified (users.email_verified_at) before any session is minted:
+//     plan A restored the e-mail verification gate (RequireSession/WithOrgSession 403
+//     `email_unverified`), so an unverified seed would be useless to every fixture. Sign-in is
+//     explicit (POST /signin/credential) rather than relying on signup's own Set-Cookie, so it
+//     keeps working whether or not autoSignInOnSignUp is enabled.
 //
 // Wiring cannot import internal/polls or internal/bookings directly: both already import this
 // package (handlers.go in each), so the reverse edge would be a compile-time cycle — the same
@@ -28,16 +28,19 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/db"
+	"github.com/thecodearcher/limen"
 )
 
 // SeedPolls is the narrow seam RegisterTestRoutes needs from *polls.Service.
@@ -68,7 +71,10 @@ type seedRequest struct {
 	WithPoll        bool   `json:"withPoll"`
 	WithSignup      bool   `json:"withSignup"`
 	WithBookingPage bool   `json:"withBookingPage"`
-	Role            string `json:"role"`
+	// FailedJob inserts one already dead-lettered scheduled_jobs row (attempts == max_attempts) so
+	// the admin console's Jobs page has something to list and retry — see seedDeadLetter.
+	FailedJob bool   `json:"failedJob"`
+	Role      string `json:"role"`
 }
 
 // seedResult mirrors seed.ts's Response.json({email, password, name, pollId, pageId, handle,
@@ -76,23 +82,26 @@ type seedRequest struct {
 // this call didn't ask for — e2e/fixtures.ts's SeededUser reads these as optional, which a JSON
 // null satisfies exactly the same as a missing key would.
 type seedResult struct {
-	Email    string  `json:"email"`
-	Password string  `json:"password"`
-	Name     string  `json:"name"`
-	PollID   *string `json:"pollId"`
-	PageID   *string `json:"pageId"`
-	Handle   *string `json:"handle"`
-	Slug     *string `json:"slug"`
+	Email       string  `json:"email"`
+	Password    string  `json:"password"`
+	Name        string  `json:"name"`
+	PollID      *string `json:"pollId"`
+	PageID      *string `json:"pageId"`
+	Handle      *string `json:"handle"`
+	Slug        *string `json:"slug"`
+	FailedJobID *string `json:"failedJobId"`
 }
 
 // RegisterTestRoutes mounts POST /api/test/seed — the caller (cmd/whenweall) must only call this
 // when cfg.EnableTestRoutes is true (config.Load already hard-fails boot if that's set alongside
-// APP_ENV=production, so there is no production code path that can reach here).
-func RegisterTestRoutes(mux *http.ServeMux, cfg *config.Config, authSvc *auth.Service, polls SeedPolls, bookings SeedBookings) {
-	mux.HandleFunc("POST /api/test/seed", handleSeed(cfg, authSvc, polls, bookings))
+// APP_ENV=production, so there is no production code path that can reach here). sqlDB is needed
+// for the two things Limen's HTTP surface can't do for us: marking the fresh user verified and
+// inserting a dead-lettered job.
+func RegisterTestRoutes(mux *http.ServeMux, cfg *config.Config, sqlDB *sql.DB, authSvc *auth.Service, polls SeedPolls, bookings SeedBookings) {
+	mux.HandleFunc("POST /api/test/seed", handleSeed(cfg, sqlDB, authSvc, polls, bookings))
 }
 
-func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, bookings SeedBookings) http.HandlerFunc {
+func handleSeed(cfg *config.Config, sqlDB *sql.DB, authSvc *auth.Service, polls SeedPolls, bookings SeedBookings) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Belt-and-braces (seed.ts's own doc comment: "Gated so it can never be reachable in
 		// production even if ENABLE_TEST_ROUTES is accidentally left set"): the real gate is
@@ -121,7 +130,12 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 
 		email := body.Email
 		if email == "" {
-			email = fmt.Sprintf("test-%s@example.com", db.NewID())
+			// Lowercased: db.NewID()'s alphabet is mixed-case, but Limen stores/looks up email
+			// normalized (limen.NormalizeEmail — lowercased, trimmed). Without this, the address
+			// this response claims would differ from users.email's actual stored value for any
+			// caller that queries by exact string instead of going through Limen's own normalized
+			// lookups (e.g. this route's own seedMarkVerified/seedDeadLetter tests below).
+			email = fmt.Sprintf("test-%s@example.com", strings.ToLower(db.NewID()))
 		}
 		name := body.Name
 		if name == "" {
@@ -136,20 +150,13 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 			Err(w, http.StatusInternalServerError, "internal", "seed: signup failed: "+err.Error(), nil)
 			return
 		}
-		if err := authSvc.MarkEmailVerified(r.Context(), email); err != nil {
+
+		// Verified BEFORE the first session is minted (a Session is built from the user row as it
+		// stands — the a442f9f lesson for the staff role applies to EmailVerified too).
+		if err := seedMarkVerified(r.Context(), sqlDB, email); err != nil {
 			Err(w, http.StatusInternalServerError, "internal", "seed: marking verified failed: "+err.Error(), nil)
 			return
 		}
-		cookies, err := seedSignIn(authSvc, email, password)
-		if err != nil {
-			Err(w, http.StatusInternalServerError, "internal", "seed: signin failed: "+err.Error(), nil)
-			return
-		}
-
-		// Set before any session is used: a session is minted from the user row as it stands at
-		// that moment, so a role granted afterwards would not apply to it (the a442f9f lesson —
-		// forward the staff role, and set it before the one call below that actually establishes
-		// this seed's own session).
 		if body.Role == "staff" {
 			if err := authSvc.MakeStaff(r.Context(), email); err != nil {
 				Err(w, http.StatusInternalServerError, "internal", "seed: MakeStaff failed: "+err.Error(), nil)
@@ -157,6 +164,11 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 			}
 		}
 
+		cookies, err := seedSignIn(authSvc, email, password)
+		if err != nil {
+			Err(w, http.StatusInternalServerError, "internal", "seed: signin failed: "+err.Error(), nil)
+			return
+		}
 		// Every signup gets a personal organization, but (unlike the old TS route's synchronous
 		// better-auth hook) this stack only creates it lazily, on the first request that passes
 		// through authSvc.Middleware (see auth.Service's ensurePersonalOrgOnce doc comment) — so
@@ -164,7 +176,7 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 		// anything in.
 		sess := seedTriggerSession(authSvc, cookies)
 		if sess == nil {
-			Err(w, http.StatusInternalServerError, "internal", "seed: no session established after signup", nil)
+			Err(w, http.StatusInternalServerError, "internal", "seed: no session established after signin", nil)
 			return
 		}
 
@@ -199,6 +211,14 @@ func handleSeed(cfg *config.Config, authSvc *auth.Service, polls SeedPolls, book
 			result.Handle = &handle
 			result.Slug = &slug
 		}
+		if body.FailedJob {
+			id, err := seedDeadLetter(r.Context(), sqlDB)
+			if err != nil {
+				Err(w, http.StatusInternalServerError, "internal", "seed: inserting dead-lettered job failed: "+err.Error(), nil)
+				return
+			}
+			result.FailedJobID = &id
+		}
 
 		JSON(w, http.StatusOK, result)
 	}
@@ -222,39 +242,16 @@ func nextSeedRemoteAddr() string {
 
 // seedSignUp drives Limen's own signup route in-process (authSvc.Handler(), the exact handler
 // internal/httpserver.Server mounts at "/api/v1/auth/") via httptest, exactly the way a browser's
-// POST to /api/v1/auth/signup/credential would, so the created user's password hash is whatever
-// Limen itself produces — nothing here reaches into Limen's own tables directly. Signup mints no
-// session (auto-sign-in is off — see internal/auth.buildLimenConfig), so this returns nothing
-// but an error; seedSignIn below is what yields cookies.
-//
-// name rides along in the body exactly like a real signup's does, for internal/auth's signup hook
-// (signup_hook.go's signupProfileFromRequest) to persist onto the account — mirroring the old TS
-// seed.ts route (git show main:src/routes/api/test/seed.ts), which passed both name and
-// locale: 'en' here. Without it, the hook falls back to the email's local part, and the seed
-// response's own Name field (seedResult, below) would be a claim the stored account never
-// actually matched — see this file's own handleSeed doc comment history / the reviewer's finding.
-// locale is fixed at "en" (not the caller-visible seed `name`/`Role` fields, which vary): no e2e
-// fixture ever asks this route for a non-English seed, and the SPA's own per-user locale switch
-// (PATCH /api/v1/me) is exactly what a spec that needs Norwegian would call afterward instead.
+// POST to /api/v1/auth/signup/credential would. `name` rides along in the body for plan A's
+// after-signup hook, which persists it as the display name (GetProfile). The response's cookies
+// are deliberately NOT used: seedSignIn mints the session after the user is marked verified.
 func seedSignUp(authSvc *auth.Service, email, password, name string) error {
-	_, err := seedAuthPost(authSvc, "/api/v1/auth/signup/credential", map[string]string{
-		"email": email, "password": password, "name": name, "locale": "en",
-	})
-	return err
-}
-
-// seedSignIn drives Limen's signin route the same way and returns the session cookies it set.
-func seedSignIn(authSvc *auth.Service, email, password string) ([]*http.Cookie, error) {
-	return seedAuthPost(authSvc, "/api/v1/auth/signin/credential", map[string]string{"credential": email, "password": password})
-}
-
-func seedAuthPost(authSvc *auth.Service, path string, body map[string]string) ([]*http.Cookie, error) {
-	payload, err := json.Marshal(body)
+	payload, err := json.Marshal(map[string]string{"email": email, "password": password, "name": name})
 	if err != nil {
-		return nil, fmt.Errorf("marshal %s body: %w", path, err)
+		return fmt.Errorf("marshal signup body: %w", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup/credential", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = nextSeedRemoteAddr()
 	rec := httptest.NewRecorder()
@@ -264,9 +261,73 @@ func seedAuthPost(authSvc *auth.Service, path string, body map[string]string) ([
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 {
 		respBody, _ := io.ReadAll(res.Body)
-		return nil, fmt.Errorf("%s: status %d: %s", path, res.StatusCode, respBody)
+		return fmt.Errorf("signup/credential: status %d: %s", res.StatusCode, respBody)
+	}
+	return nil
+}
+
+// seedSignIn is seedSignUp's counterpart for POST /signin/credential — the same route every
+// Playwright `signIn` helper submits to — returning the session cookies Limen sets.
+func seedSignIn(authSvc *auth.Service, email, password string) ([]*http.Cookie, error) {
+	payload, err := json.Marshal(map[string]string{"credential": email, "password": password})
+	if err != nil {
+		return nil, fmt.Errorf("marshal signin body: %w", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/signin/credential", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = nextSeedRemoteAddr()
+	rec := httptest.NewRecorder()
+	authSvc.Handler().ServeHTTP(rec, req)
+
+	res := rec.Result()
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode/100 != 2 {
+		respBody, _ := io.ReadAll(res.Body)
+		return nil, fmt.Errorf("signin/credential: status %d: %s", res.StatusCode, respBody)
 	}
 	return res.Cookies(), nil
+}
+
+// seedMarkVerified sets users.email_verified_at for a freshly signed-up user. COALESCE keeps an
+// already-set timestamp (e.g. if a hook marked the user verified), so this is safe to run twice.
+//
+// limen.NormalizeEmail matches the case Limen itself stores email in (lowercased, trimmed —
+// utils.go's own NormalizeEmail, the same helper auth.Service.MarkEmailVerified and GetProfile
+// use): the default seed email embeds db.NewID(), whose alphabet is mixed-case, so looking this
+// row up by the exact caller-supplied string would silently update zero rows for most seeds.
+func seedMarkVerified(ctx context.Context, sqlDB *sql.DB, email string) error {
+	res, err := sqlDB.ExecContext(ctx,
+		`UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE email = $1`,
+		limen.NormalizeEmail(email))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("expected to update 1 user row for %s, updated %d", email, n)
+	}
+	return nil
+}
+
+// seedDeadLetterKind is a real mail kind so the row reads like a genuine dead letter on the admin
+// console's Jobs page. If the console retries it, the mailer handler fails to decode the payload
+// and the worker walks it back to dead-lettered after its retry budget — harmless noise, and
+// exactly what a retry of a broken mail job does in production.
+const seedDeadLetterKind = "mail:send"
+
+// seedDeadLetter inserts one scheduled_jobs row with its attempt budget already spent (the
+// dead-letter condition internal/jobs.Dead selects on: attempts >= max_attempts). The job id is
+// embedded in last_error so an e2e spec can find exactly its own row in a shared table.
+func seedDeadLetter(ctx context.Context, sqlDB *sql.DB) (string, error) {
+	id := db.NewID()
+	_, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO scheduled_jobs (id, kind, room_key, run_at, payload, attempts, max_attempts, last_error)
+		VALUES ($1, $2, NULL, now() - interval '1 hour', '{"e2e": true}'::jsonb, 5, 5, $3)
+	`, id, seedDeadLetterKind, "e2e: seeded dead-lettered job "+id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // seedTriggerSession is this file's own version of internal/auth's triggerSessionResolution test
