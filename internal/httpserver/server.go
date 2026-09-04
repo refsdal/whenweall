@@ -108,6 +108,7 @@ func (s *Server) authRateLimitMiddleware(authHandler http.Handler) http.Handler 
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /robots.txt", handleRobotsTxt)
 
 	authHandler := s.authSvc.Handler()
 
@@ -224,6 +225,7 @@ func (s *Server) Handler() http.Handler {
 	h = APIOnly(CheckOrigin(s.cfg.AppURL))(h)
 	h = APIOnly(s.authSvc.Middleware)(h)
 	h = Recover(s.logger)(h)
+	h = Noindex(h)
 	h = RequestLogger(s.logger)(h)
 	h = SecurityHeaders(s.policy)(h)
 	return h
