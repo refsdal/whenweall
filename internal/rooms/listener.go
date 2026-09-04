@@ -197,6 +197,7 @@ func (h *Hub) listenLoop(ctx context.Context, conn *pgx.Conn) error {
 			pingCtx, cancelPing := context.WithTimeout(ctx, h.ListenPingTimeout)
 			pingErr := conn.Ping(pingCtx)
 			cancelPing()
+			h.listenPingCount.Add(1)
 			if pingErr != nil {
 				return fmt.Errorf("rooms: listener liveness ping failed after %s idle: %w", h.ListenIdleTimeout, pingErr)
 			}

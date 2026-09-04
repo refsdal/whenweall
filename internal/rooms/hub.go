@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -142,6 +143,13 @@ type Hub struct {
 	ListenIdleTimeout time.Duration
 	ListenPingTimeout time.Duration
 
+	// listenPingCount counts every liveness ping listenLoop has SENT (successful or not; a failed
+	// one is counted too, right before the connection loss it produces is returned) since this
+	// Hub was constructed. Exported via LoadListenPingCount purely so a test can observe that an
+	// idle LISTEN session actually gets pinged, rather than only inferring it from the absence of
+	// a reconnect — no production code reads it.
+	listenPingCount atomic.Int64
+
 	// OriginPatterns (M8) is ws.go's ServeWS's own extra allow-list for the WS handshake's Origin
 	// check (websocket.AcceptOptions.OriginPatterns) — ADDITIONAL to coder/websocket's own default
 	// (a request's Origin must match ITS OWN Host header, when an Origin header is present at
@@ -195,6 +203,13 @@ func NewHub(listenURL string, sqlDB *sql.DB, log *slog.Logger) *Hub {
 		ListenPingTimeout: defaultListenPingTimeout,
 		conns:             make(map[*websocket.Conn]struct{}),
 	}
+}
+
+// LoadListenPingCount reports how many liveness pings listenLoop has sent so far on this Hub's
+// LISTEN session (see listenPingCount's own doc comment) — a test-observability hook, not
+// something production code has a reason to call.
+func (h *Hub) LoadListenPingCount() int64 {
+	return h.listenPingCount.Load()
 }
 
 // Subscribe registers a local subscriber for roomKey and returns a buffered channel of

@@ -351,9 +351,23 @@ func (h *Hub) keepaliveLoop(ctx context.Context, conn *websocket.Conn, cancel co
 }
 
 // shutdownGrace bounds how long closeAllConns waits for handlers to unwind after every connection
-// has been sent its close frame. conn.Close itself waits up to 5s for the peer's answering close
-// frame before giving up, so this is "that, plus a little" — and comfortably inside compose.yaml's
-// stop_grace_period. http.Server.Shutdown's own 10s drain runs concurrently, not additively.
+// has been sent its close frame, AND (listener.go: shutdown) separately bounds the presence
+// DELETE that runs after closeAllConns returns — the two budgets are sequential, not shared, so
+// Run's own worst case is up to 2×shutdownGrace (16s) before bg.Wait (cmd/whenweall/main.go) even
+// starts waiting on the job worker. That is deliberately NOT "comfortably inside" anything by
+// itself: it requires compose.yaml's app service to set stop_grace_period: 20s (added by a later
+// task in this same plan) so Docker's SIGKILL doesn't land before this budget's own worst case
+// does — with only Docker's 10s default, the degenerate case (a wedged peer plus a slow presence
+// DELETE) can still be killed mid-cleanup, reopening the stale-row problem this exists to fix.
+//
+// Even a single conn.Close (per-connection, inside closeAllConns's first phase) can alone take up
+// to 10s — coder/websocket's writeClose and waitCloseHandshake each carry their own independent
+// 5s timeout, run sequentially, not one shared 5s budget (see coder/websocket's close.go) — so
+// shutdownGrace=8s can expire before even one sufficiently slow peer's own Close finishes. That
+// has no correctness consequence here: the shutdownGrace timeout path is a deliberate
+// give-up-and-warn (closeAllConns logs and moves on), and presenceShutdownSweep's blanket
+// DELETE-by-replica_id removes a straggling handler's presence row regardless of whether that
+// handler's own presenceLeave defer ever got to run.
 const shutdownGrace = 8 * time.Second
 
 // trackConn registers conn in the hub's live registry. Reports false — registering nothing — once

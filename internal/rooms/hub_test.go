@@ -670,13 +670,16 @@ func TestEventFrame_NullData(t *testing.T) {
 }
 
 // TestListenerIdleTimeoutPingsWithoutReconnecting pins the liveness check's SHAPE: an idle LISTEN
-// session is interrupted every ListenIdleTimeout and pinged — it is NOT torn down and redialed.
-// Observable from outside as (a) the backend pid behind the listener staying the same across
-// several idle windows, (b) no resync frame reaching a subscriber (a reconnect would send one —
-// see Run), and (c) delivery still working afterwards. A genuinely half-open TCP session cannot
-// be simulated against a local container, so the ping's failure branch is covered by the ordinary
-// connection-loss tests (TestReconnectSendsResyncAndResumesDelivery): a failed ping returns an
-// error from listenLoop and takes exactly that path.
+// session is interrupted every ListenIdleTimeout and PINGED — it is NOT torn down and redialed.
+// Observable from outside as (a) Hub.LoadListenPingCount actually increasing (fix round 1: the
+// original version of this test asserted only the ABSENCE of a reconnect, which a silent revert
+// to the unbounded `conn.WaitForNotification(ctx)` — no ping at all — would have passed just as
+// well; see this function's own doc history), (b) the backend pid behind the listener staying the
+// same across several idle windows, (c) no resync frame reaching a subscriber (a reconnect would
+// send one — see Run), and (d) delivery still working afterwards. A genuinely half-open TCP
+// session cannot be simulated against a local container, so the ping's failure branch is covered
+// by the ordinary connection-loss tests (TestReconnectSendsResyncAndResumesDelivery): a failed
+// ping returns an error from listenLoop and takes exactly that path.
 func TestListenerIdleTimeoutPingsWithoutReconnecting(t *testing.T) {
 	url, sqlDB := testdb.URL(t)
 
@@ -705,6 +708,7 @@ func TestListenerIdleTimeoutPingsWithoutReconnecting(t *testing.T) {
 		return pid
 	}
 	before := pidOf()
+	pingsBefore := hub.LoadListenPingCount()
 
 	const roomKey = "poll:idle-ping"
 	frames, unsubscribe := hub.Subscribe(roomKey)
@@ -718,6 +722,11 @@ func TestListenerIdleTimeoutPingsWithoutReconnecting(t *testing.T) {
 	}
 	if after := pidOf(); after != before {
 		t.Fatalf("listener backend pid changed %d -> %d: the idle timeout reconnected instead of pinging", before, after)
+	}
+	// The actual proof of a ping, not just the absence of a reconnect: with 100ms idle windows
+	// over a 700ms wait, at least a few pings must have gone out.
+	if pingsAfter := hub.LoadListenPingCount(); pingsAfter <= pingsBefore {
+		t.Fatalf("listen ping count = %d, want > %d: the idle timeout elapsed without ever pinging the connection", pingsAfter, pingsBefore)
 	}
 
 	emitCommitted(t, sqlDB, roomKey, "poll.changed", nil)
