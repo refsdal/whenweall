@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { fetchAdminStats } from '#/api/admin'
 import { m } from '#/lib/i18n'
 
@@ -68,6 +68,11 @@ function AdminDashboard() {
           <StatCard label={m.admin_mail_queue_depth()} value={stats.mailQueueDepth} />
           <StatCard label={m.admin_mail_failed_jobs()} value={stats.failedJobs} />
         </div>
+        {/* The count alone is a dead end — the whole point of surfacing failed jobs (spec §5) is
+            that an operator can see WHAT failed and resend it. */}
+        <Link to="/admin/jobs" className="text-sm underline underline-offset-2">
+          {m.admin_mail_view_failed()}
+        </Link>
       </section>
     </div>
   )
