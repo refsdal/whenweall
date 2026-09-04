@@ -32,10 +32,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
@@ -324,14 +327,58 @@ type addParticipantRequest struct {
 	Locale  *string           `json:"locale"`
 }
 
+// validate ports addParticipantSchema (schemas.ts): name trimmed 1..LimitName, email ''|valid
+// address ≤ LimitEmail. Answer VALUES are checked by the service (validateAnswersTx), which also
+// needs the poll's own allowIfNeedBe setting. Returns the request with name/email trimmed.
+func (req addParticipantRequest) validate() (addParticipantRequest, error) {
+	fields := map[string]string{}
+	req.Name = validateNameField("name", req.Name, fields)
+	req.Email = validateEmailField("email", req.Email, fields)
+	return req, validationErrorFrom(fields)
+}
+
 type updateParticipantRequest struct {
 	Name    *string           `json:"name"`
 	Answers map[string]string `json:"answers"`
 }
 
+// validate ports updateParticipantSchema: name is optional, but when present must be a trimmed
+// 1..LimitName string.
+func (req updateParticipantRequest) validate() (updateParticipantRequest, error) {
+	fields := map[string]string{}
+	if req.Name != nil {
+		name := validateNameField("name", *req.Name, fields)
+		req.Name = &name
+	}
+	return req, validationErrorFrom(fields)
+}
+
 type addCommentRequest struct {
 	AuthorName string `json:"authorName"`
 	Body       string `json:"body"`
+}
+
+// validate ports addCommentSchema: body trimmed 1..LimitComment; authorName trimmed 1..LimitName
+// — required only for an anonymous author, since handleAddComment replaces a signed-in author's
+// name with their account name regardless of what the client sent (resolveAuthorName).
+func (req addCommentRequest) validate(anonymous bool) (addCommentRequest, error) {
+	fields := map[string]string{}
+	if anonymous {
+		req.AuthorName = validateNameField("authorName", req.AuthorName, fields)
+	} else {
+		req.AuthorName = strings.TrimSpace(req.AuthorName)
+		if utf8.RuneCountInString(req.AuthorName) > LimitName {
+			fields["authorName"] = fmt.Sprintf("authorName must be at most %d characters", LimitName)
+		}
+	}
+	req.Body = strings.TrimSpace(req.Body)
+	switch {
+	case req.Body == "":
+		fields["body"] = "body is required"
+	case utf8.RuneCountInString(req.Body) > LimitComment:
+		fields["body"] = fmt.Sprintf("body must be at most %d characters", LimitComment)
+	}
+	return req, validationErrorFrom(fields)
 }
 
 type claimRequest struct {
@@ -342,8 +389,51 @@ type claimRequest struct {
 	Locale        *string `json:"locale"`
 }
 
+// validate ports claimSchema: name optional (the service requires it only when it actually
+// creates a participant — prepareNewParticipant) but capped at LimitName when given; email
+// ''|valid address ≤ LimitEmail.
+func (req claimRequest) validate() (claimRequest, error) {
+	fields := map[string]string{}
+	req.Name = strings.TrimSpace(req.Name)
+	if utf8.RuneCountInString(req.Name) > LimitName {
+		fields["name"] = fmt.Sprintf("name must be at most %d characters", LimitName)
+	}
+	req.Email = validateEmailField("email", req.Email, fields)
+	return req, validationErrorFrom(fields)
+}
+
 type notificationPrefsRequest struct {
-	Channels NotificationGrid `json:"channels"`
+	Channels json.RawMessage `json:"channels"`
+}
+
+// toGrid ports notificationPrefsSchema (schemas.ts) + gridSchema (src/lib/notifications.ts):
+// absent/null channels clears the per-poll override (nil grid); otherwise an object whose values
+// are {email, push} with BOTH booleans present. Unknown event keys are stripped rather than
+// rejected — a stored grid may outlive a renamed event, and a user's whole preference row must
+// not become unwritable because of it.
+func (req notificationPrefsRequest) toGrid() (NotificationGrid, error) {
+	if len(req.Channels) == 0 || string(req.Channels) == "null" {
+		return nil, nil
+	}
+	var raw map[string]struct {
+		Email *bool `json:"email"`
+		Push  *bool `json:"push"`
+	}
+	if err := json.Unmarshal(req.Channels, &raw); err != nil {
+		return nil, newValidationError("channels", "channels must be an object of {email, push} booleans")
+	}
+	grid := NotificationGrid{}
+	for key, v := range raw {
+		event := NotificationEvent(key)
+		if _, known := systemDefaults[event]; !known {
+			continue
+		}
+		if v.Email == nil || v.Push == nil {
+			return nil, newValidationError("channels."+key, "email and push must both be booleans")
+		}
+		grid[event] = ChannelPrefs{Email: *v.Email, Push: *v.Push}
+	}
+	return grid, nil
 }
 
 type followingRequest struct {
@@ -547,6 +637,11 @@ func (s *Service) handleAddParticipant(a Auth, cfg *config.Config) http.HandlerF
 		if !httpserver.DecodeJSON(w, r, &req) {
 			return
 		}
+		req, err := req.validate()
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
 		viewer := viewerFromRequest(a, r)
 		result, err := s.AddParticipant(ctx, pollID, ParticipantInput{
 			Name: req.Name, Email: req.Email, Answers: req.Answers, Locale: req.Locale,
@@ -584,13 +679,18 @@ func (s *Service) handleUpdateParticipant(a Auth) http.HandlerFunc {
 		if !httpserver.DecodeJSON(w, r, &req) {
 			return
 		}
+		req, err := req.validate()
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
 		viewer := viewerFromRequest(a, r)
 		in := ParticipantInput{Answers: req.Answers}
 		if req.Name != nil {
 			in.NameSet = true
 			in.Name = *req.Name
 		}
-		if err := s.UpdateParticipant(ctx, pollID, participantID, in, viewer); err != nil {
+		if err = s.UpdateParticipant(ctx, pollID, participantID, in, viewer); err != nil {
 			writeServiceError(w, err)
 			return
 		}
@@ -645,6 +745,11 @@ func (s *Service) handleAddComment(a Auth, cfg *config.Config) http.HandlerFunc 
 			return
 		}
 		viewer := viewerFromRequest(a, r)
+		req, err := req.validate(viewer.UserID == "")
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
 		// resolveAuthorName (participants.functions.ts): a signed-in author's display name always
 		// comes from their own account, never the client-supplied value — otherwise anyone
 		// signed in could impersonate another name in their own comments. Guests (no session)
@@ -696,6 +801,11 @@ func (s *Service) handleClaim(a Auth, cfg *config.Config) http.HandlerFunc {
 
 		var req claimRequest
 		if !httpserver.DecodeJSON(w, r, &req) {
+			return
+		}
+		req, err := req.validate()
+		if err != nil {
+			writeServiceError(w, err)
 			return
 		}
 		optionID := req.OptionID
@@ -918,7 +1028,12 @@ func (s *Service) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.R
 	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.UpdateNotificationPrefs(r.Context(), pollID, sess.ActiveOrgID, sess.UserID, req.Channels); err != nil {
+	grid, err := req.toGrid()
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if err := s.UpdateNotificationPrefs(r.Context(), pollID, sess.ActiveOrgID, sess.UserID, grid); err != nil {
 		writeServiceError(w, err)
 		return
 	}

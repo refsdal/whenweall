@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import { addParticipant, claimSlot, updateParticipant } from '#/api/polls'
+import { addParticipant, claimSlot } from '#/api/polls'
 import { bookSlot } from '#/api/bookings'
 
 const server = setupServer()
@@ -23,18 +23,6 @@ describe('guest forms send locale', () => {
       }),
     )
     await addParticipant('p1', { name: 'Ada', answers: {} })
-    expect(body.locale).toBe('en')
-  })
-
-  it('updateParticipant', async () => {
-    let body: Record<string, unknown> = {}
-    server.use(
-      http.patch('/api/v1/polls/p1/participants/pa1', async ({ request }) => {
-        body = (await request.json()) as Record<string, unknown>
-        return new HttpResponse(null, { status: 204 })
-      }),
-    )
-    await updateParticipant('p1', 'pa1', { answers: {} })
     expect(body.locale).toBe('en')
   })
 

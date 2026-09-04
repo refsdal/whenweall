@@ -229,7 +229,7 @@ export async function updateParticipant(
   await api(
     'PATCH',
     `/api/v1/polls/${pollId}/participants/${participantId}`,
-    { ...input, locale: getLocale() },
+    input,
     { guestToken: opts?.guestToken },
   )
 }

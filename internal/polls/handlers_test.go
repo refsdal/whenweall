@@ -1060,3 +1060,165 @@ func TestHandlerCreateRateLimited(t *testing.T) {
 		t.Fatalf("duplicate after the create budget is spent: status = %d, want 429; body=%s", dup.Code, dup.Body)
 	}
 }
+
+// errFields extracts the {"error":{"fields":{...}}} map from a 422 "invalid" envelope.
+func errFields(t *testing.T, rec *httptest.ResponseRecorder) map[string]string {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Fields map[string]string `json:"fields"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error envelope %s: %v", rec.Body.String(), err)
+	}
+	return body.Error.Fields
+}
+
+// TestHandlerValidatesPublicInput ports addParticipantSchema/updateParticipantSchema/
+// addCommentSchema/claimSchema/notificationPrefsSchema (main:src/server/polls/schemas.ts:170-224,
+// gridSchema in main:src/lib/notifications.ts:82-97) at the HTTP layer: every rule rejects with the
+// standard 422 "invalid" envelope naming the offending field, and the accept-side rules (empty
+// email string, trimming, unknown grid keys stripped, null grid clears) hold too.
+func TestHandlerValidatesPublicInput(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, a, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
+	// EmailVerified: true — the "comment: signed-in caller may omit authorName" subtest below
+	// exercises resolveAuthorName's session-name override (handleAddComment), which
+	// viewerFromRequest only grants a verified session (see its own doc comment).
+	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID, EmailVerified: true})
+	poll := createTestPoll(t, ctx, s, orgID, ownerID)
+	signup := createSignupPoll(t, ctx, s, orgID, ownerID, []*int{nil}, 0)
+	answers := map[string]string{poll.Options[0].ID: "yes"}
+	longName := strings.Repeat("x", polls.LimitName+1)
+	longBody := strings.Repeat("y", polls.LimitComment+1)
+	longEmail := strings.Repeat("a", polls.LimitEmail) + "@example.com"
+
+	participantsPath := "/api/v1/polls/" + poll.ID + "/participants"
+	commentsPath := "/api/v1/polls/" + poll.ID + "/comments"
+	claimsPath := "/api/v1/polls/" + signup.ID + "/claims"
+	prefsPath := "/api/v1/polls/" + poll.ID + "/notification-prefs"
+
+	// One participant the PATCH cases can target.
+	rec := doRequest(t, h, "POST", participantsPath, map[string]any{"name": "Ada", "answers": answers}, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("seed participant: status = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+	seeded := decodeBody[map[string]any](t, rec)
+	participantID, _ := seeded["participantId"].(string)
+	guestToken, _ := seeded["guestToken"].(string)
+	guest := map[string]string{"X-Guest-Token": guestToken}
+
+	rejects := []struct {
+		name, method, path string
+		body               map[string]any
+		headers            map[string]string
+		field              string
+	}{
+		{"participant: blank name", "POST", participantsPath, map[string]any{"name": "   ", "answers": answers}, nil, "name"},
+		{"participant: name over LimitName", "POST", participantsPath, map[string]any{"name": longName, "answers": answers}, nil, "name"},
+		{"participant: malformed email", "POST", participantsPath, map[string]any{"name": "Ada", "email": "not-an-email", "answers": answers}, nil, "email"},
+		{"participant: email with display name", "POST", participantsPath, map[string]any{"name": "Ada", "email": "Ada <ada@example.com>", "answers": answers}, nil, "email"},
+		{"participant: email over LimitEmail", "POST", participantsPath, map[string]any{"name": "Ada", "email": longEmail, "answers": answers}, nil, "email"},
+		{"update participant: blank name", "PATCH", participantsPath + "/" + participantID, map[string]any{"name": " ", "answers": answers}, guest, "name"},
+		{"update participant: name over LimitName", "PATCH", participantsPath + "/" + participantID, map[string]any{"name": longName, "answers": answers}, guest, "name"},
+		{"comment: blank body", "POST", commentsPath, map[string]any{"authorName": "Ada", "body": "  \n "}, nil, "body"},
+		{"comment: body over LimitComment", "POST", commentsPath, map[string]any{"authorName": "Ada", "body": longBody}, nil, "body"},
+		{"comment: anonymous blank authorName", "POST", commentsPath, map[string]any{"authorName": "", "body": "hello"}, nil, "authorName"},
+		{"comment: authorName over LimitName", "POST", commentsPath, map[string]any{"authorName": longName, "body": "hello"}, nil, "authorName"},
+		{"claim: name over LimitName", "POST", claimsPath, map[string]any{"optionId": signup.Options[0].ID, "name": longName}, nil, "name"},
+		{"claim: malformed email", "POST", claimsPath, map[string]any{"optionId": signup.Options[0].ID, "name": "Ada", "email": "nope"}, nil, "email"},
+		{"prefs: non-boolean channel value", "POST", prefsPath, map[string]any{"channels": map[string]any{"response.created": map[string]any{"email": "yes", "push": true}}}, sessHeader(ownerID), "channels"},
+		{"prefs: missing push flag", "POST", prefsPath, map[string]any{"channels": map[string]any{"response.created": map[string]any{"email": true}}}, sessHeader(ownerID), "channels.response.created"},
+	}
+	for _, tc := range rejects {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRequest(t, h, tc.method, tc.path, tc.body, tc.headers)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body)
+			}
+			if errCode(t, rec) != "invalid" {
+				t.Errorf("code = %q, want invalid", errCode(t, rec))
+			}
+			if fields := errFields(t, rec); fields[tc.field] == "" {
+				t.Errorf("fields = %v, want a message under %q", fields, tc.field)
+			}
+		})
+	}
+
+	t.Run("participant: empty-string email is accepted and stored as no address", func(t *testing.T) {
+		rec := doRequest(t, h, "POST", participantsPath, map[string]any{"name": "Bob", "email": "", "answers": answers}, nil)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		id, _ := decodeBody[map[string]any](t, rec)["participantId"].(string)
+		view, err := s.GetView(ctx, poll.ID, polls.Viewer{})
+		if err != nil {
+			t.Fatalf("GetView: %v", err)
+		}
+		if p := findParticipant(view, id); p == nil || p.HasEmail {
+			t.Errorf("participant = %+v, want HasEmail=false", p)
+		}
+	})
+
+	t.Run("participant: name and email are stored trimmed", func(t *testing.T) {
+		rec := doRequest(t, h, "POST", participantsPath, map[string]any{"name": "  Cleo  ", "email": " cleo@example.com ", "answers": answers}, nil)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		id, _ := decodeBody[map[string]any](t, rec)["participantId"].(string)
+		view, err := s.GetView(ctx, poll.ID, polls.Viewer{})
+		if err != nil {
+			t.Fatalf("GetView: %v", err)
+		}
+		if p := findParticipant(view, id); p == nil || p.Name != "Cleo" || !p.HasEmail {
+			t.Errorf("participant = %+v, want Name=Cleo HasEmail=true", p)
+		}
+	})
+
+	t.Run("comment: signed-in caller may omit authorName (account name wins)", func(t *testing.T) {
+		rec := doRequest(t, h, "POST", commentsPath, map[string]any{"authorName": "", "body": "hello"}, sessHeader(ownerID))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("prefs: unknown event keys are stripped, not rejected", func(t *testing.T) {
+		body := map[string]any{"channels": map[string]any{
+			"response.created": map[string]bool{"email": false, "push": false},
+			"bogus.event":      map[string]bool{"email": true, "push": true},
+		}}
+		rec := doRequest(t, h, "POST", prefsPath, body, sessHeader(ownerID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		view, err := s.GetView(ctx, poll.ID, polls.Viewer{UserID: ownerID})
+		if err != nil || view == nil || view.Notifications == nil {
+			t.Fatalf("GetView = %+v, %v; want a view with Notifications", view, err)
+		}
+		if _, ok := view.Notifications.Channels["bogus.event"]; ok {
+			t.Errorf("unknown key survived into the stored grid: %v", view.Notifications.Channels)
+		}
+		if _, ok := view.Notifications.Channels["response.created"]; !ok {
+			t.Errorf("known key missing from the stored grid: %v", view.Notifications.Channels)
+		}
+	})
+
+	t.Run("prefs: null channels clears the override", func(t *testing.T) {
+		rec := doRequest(t, h, "POST", prefsPath, map[string]any{"channels": nil}, sessHeader(ownerID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		view, err := s.GetView(ctx, poll.ID, polls.Viewer{UserID: ownerID})
+		if err != nil || view == nil || view.Notifications == nil {
+			t.Fatalf("GetView = %+v, %v; want a view with Notifications", view, err)
+		}
+		if len(view.Notifications.Channels) != 0 {
+			t.Errorf("Channels = %v, want empty after clearing", view.Notifications.Channels)
+		}
+	})
+}

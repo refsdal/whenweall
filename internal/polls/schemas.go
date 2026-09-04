@@ -2,8 +2,10 @@ package polls
 
 import (
 	"fmt"
+	"net/mail"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Limits ported from src/server/polls/schemas.ts's LIMITS.
@@ -17,6 +19,13 @@ const (
 	// LimitParticipants is LIMITS.participants — the per-poll participant cap enforced by
 	// AddParticipant (participants.go) and prepareNewParticipant (claims.go).
 	LimitParticipants = 500
+
+	// LimitName is LIMITS.name — a participant's name, a comment's authorName, a claimant's name.
+	LimitName = 80
+	// LimitComment is LIMITS.comment — a comment body.
+	LimitComment = 2000
+	// LimitEmail mirrors addParticipantSchema/claimSchema's z.email().max(254).
+	LimitEmail = 254
 )
 
 // PollType mirrors src/server/db/schema's PollType ('datetime' | 'options' | 'signup').
@@ -303,4 +312,61 @@ func refinePollOptions(pollType string, options []OptionInput, fields map[string
 			seenKeys[key] = true
 		}
 	}
+}
+
+// validateNameField ports `z.string().trim().min(1).max(LIMITS.name)` (schemas.ts): records a
+// message under field when the trimmed name is empty or longer than LimitName (counted in runes,
+// like zod's .max over a JS string), and returns the trimmed value the caller should store.
+func validateNameField(field, name string, fields map[string]string) string {
+	trimmed := strings.TrimSpace(name)
+	switch {
+	case trimmed == "":
+		fields[field] = field + " is required"
+	case utf8.RuneCountInString(trimmed) > LimitName:
+		fields[field] = fmt.Sprintf("%s must be at most %d characters", field, LimitName)
+	}
+	return trimmed
+}
+
+// validateEmailField ports `z.union([z.literal(''), z.email().max(254)]).optional()`: nil and ""
+// both mean "no address" and pass; anything else must be a bare address (no display name, no
+// angle brackets — mail.ParseAddress would happily accept "Ada <ada@example.com>", so the parsed
+// address has to round-trip to the input) with a dotted domain, at most LimitEmail runes. Returns
+// the trimmed value (a pointer to "" for an explicit empty string, so callers keep the
+// "provided but empty" vs "absent" distinction the TS schema also preserved).
+func validateEmailField(field string, email *string, fields map[string]string) *string {
+	if email == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*email)
+	if trimmed == "" {
+		return &trimmed
+	}
+	if utf8.RuneCountInString(trimmed) > LimitEmail {
+		fields[field] = fmt.Sprintf("%s must be at most %d characters", field, LimitEmail)
+		return &trimmed
+	}
+	if !isBareEmail(trimmed) {
+		fields[field] = field + " must be a valid email address"
+	}
+	return &trimmed
+}
+
+// isBareEmail is validateEmailField's address check — see its doc comment.
+func isBareEmail(s string) bool {
+	addr, err := mail.ParseAddress(s)
+	if err != nil || addr.Address != s {
+		return false
+	}
+	at := strings.LastIndexByte(s, '@')
+	return at > 0 && at < len(s)-1 && strings.Contains(s[at+1:], ".")
+}
+
+// validationErrorFrom turns an accumulated fields map into a *ValidationError, or nil when it is
+// empty — the tail every request-DTO validate() method ends with.
+func validationErrorFrom(fields map[string]string) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	return &ValidationError{Fields: fields}
 }
