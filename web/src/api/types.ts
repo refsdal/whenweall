@@ -243,12 +243,16 @@ export type AuditEntry = {
   createdAt: string
 }
 
+/** internal/admin/handlers.go's FailedJobView — deliberately no `payload` field (it may hold
+ * addresses/tokens). `payloadExpired` is true once the deadletter:sweep housekeeping job has
+ * purged a dead mail job's payload; the backend answers `409 payload_expired` to a retry of it. */
 export type FailedJobView = {
   id: string
   kind: string
   attempts: number
   lastError: string | null
   runAt: string
+  payloadExpired: boolean
 }
 
 // ---- config -------------------------------------------------------------------------------------

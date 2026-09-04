@@ -32,7 +32,9 @@
 //	                            doc comment), since a dead-lettered mail job's payload can carry a
 //	                            recipient address or an unsubscribe/verification token.
 //	POST jobs/{id}/retry     -> {"ok": true} (404 "not_found" for an unknown job id, 409
-//	                            "conflict" for one that exists but isn't dead-lettered yet)
+//	                            "conflict" for one that exists but isn't dead-lettered yet, 409
+//	                            "payload_expired" for a dead mail job whose payload
+//	                            deadletter:sweep has already purged — jobs.PayloadExpired)
 package admin
 
 import (
@@ -342,6 +344,11 @@ type FailedJobView struct {
 	Attempts  int     `json:"attempts"`
 	LastError *string `json:"lastError"`
 	RunAt     string  `json:"runAt"`
+	// PayloadExpired is true once deadletter:sweep (internal/jobs/housekeeping.go) has purged this
+	// mail job's payload — jobs.PayloadExpired's rule. The console hides Retry for such a row,
+	// since handleRetryJob would answer 409 "payload_expired" anyway. Derived from whether a
+	// payload is present, never from its contents — see the field-set rationale above.
+	PayloadExpired bool `json:"payloadExpired"`
 }
 
 func handleFailedJobs(sqlDB *sql.DB) http.HandlerFunc {
@@ -354,11 +361,12 @@ func handleFailedJobs(sqlDB *sql.DB) http.HandlerFunc {
 		views := make([]FailedJobView, 0, len(dead))
 		for _, j := range dead {
 			views = append(views, FailedJobView{
-				ID:        j.ID,
-				Kind:      j.Kind,
-				Attempts:  j.Attempts,
-				LastError: j.LastError,
-				RunAt:     formatISO(j.RunAt),
+				ID:             j.ID,
+				Kind:           j.Kind,
+				Attempts:       j.Attempts,
+				LastError:      j.LastError,
+				RunAt:          formatISO(j.RunAt),
+				PayloadExpired: jobs.PayloadExpired(j.Kind, j.Payload != nil),
 			})
 		}
 		httpserver.JSON(w, http.StatusOK, map[string]any{"jobs": views})
@@ -390,9 +398,11 @@ func handleRetryJob(sqlDB *sql.DB) http.HandlerFunc {
 		// route's own handleFailedJobs surfaces (attempts >= max_attempts) — resurrecting a job
 		// that's merely mid-flight is never the support console's intent.
 		var attempts, maxAttempts int
+		var kind string
+		var hasPayload bool
 		err = tx.QueryRowContext(r.Context(),
-			`SELECT attempts, max_attempts FROM scheduled_jobs WHERE id = $1 FOR UPDATE`, id,
-		).Scan(&attempts, &maxAttempts)
+			`SELECT attempts, max_attempts, kind, payload IS NOT NULL FROM scheduled_jobs WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&attempts, &maxAttempts, &kind, &hasPayload)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			httpserver.Err(w, http.StatusNotFound, "not_found", "job not found", nil)
@@ -402,6 +412,13 @@ func handleRetryJob(sqlDB *sql.DB) http.HandlerFunc {
 			return
 		case attempts < maxAttempts:
 			httpserver.Err(w, http.StatusConflict, "conflict", "job is not dead-lettered", nil)
+			return
+		case jobs.PayloadExpired(kind, hasPayload):
+			// deadletter:sweep (internal/jobs/housekeeping.go) purged this mail job's payload —
+			// the recipient address and any token it carried — once it had sat dead for 24h.
+			// Retrying would hand the mailer an empty Message, so refuse it with a code of its own
+			// (not "conflict") that the console maps to a "can't be retried" explanation.
+			httpserver.Err(w, http.StatusConflict, "payload_expired", "job payload was purged after it dead-lettered; it can no longer be retried", nil)
 			return
 		}
 

@@ -876,3 +876,88 @@ func TestReadOnlyEndpoints_AreNotAudited(t *testing.T) {
 		t.Errorf("admin_audit_log rows went from %d to %d across read-only GETs; reads must never be audited", before, after)
 	}
 }
+
+// seedExpiredDeadJob is seedDeadJob after deadletter:sweep (internal/jobs/housekeeping.go) has
+// purged its payload — simulated with the same UPDATE the sweep runs rather than by running the
+// sweep, which is that package's own test's job.
+func seedExpiredDeadJob(t *testing.T, d *sql.DB) string {
+	t.Helper()
+	id := seedDeadJob(t, d)
+	if _, err := d.ExecContext(context.Background(), `UPDATE scheduled_jobs SET payload = NULL WHERE id = $1`, id); err != nil {
+		t.Fatalf("purging payload of %s: %v", id, err)
+	}
+	return id
+}
+
+// TestHandleRetryJob_PurgedPayloadReturns409PayloadExpired: once the sweep has nulled a dead mail
+// job's payload there is nothing left to send, so Retry is refused with its own code (not the
+// generic "conflict", so the console can say why), the row stays dead and unaudited.
+func TestHandleRetryJob_PurgedPayloadReturns409PayloadExpired(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	client := staffClient(t, h, "staff-retry-expired@example.com")
+	jobID := seedExpiredDeadJob(t, d)
+	auditBefore := countAuditRows(t, d)
+
+	resp := h.requestJSON(t, client, http.MethodPost, "/api/v1/admin/jobs/"+jobID+"/retry", nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error.Code != "payload_expired" {
+		t.Errorf("error.code = %q, want payload_expired", body.Error.Code)
+	}
+
+	var stillDead bool
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT attempts >= max_attempts FROM scheduled_jobs WHERE id = $1`, jobID,
+	).Scan(&stillDead); err != nil {
+		t.Fatalf("reading job state: %v", err)
+	}
+	if !stillDead {
+		t.Error("a refused retry must leave the job dead-lettered")
+	}
+	if got := countAuditRows(t, d); got != auditBefore {
+		t.Errorf("admin_audit_log rows went from %d to %d; a refused retry must not be audited", auditBefore, got)
+	}
+}
+
+// TestHandleFailedJobs_FlagsPurgedPayload: the dead-letter list tells the console which rows can
+// still be retried, so it can hide Retry instead of letting staff discover the 409 by clicking.
+func TestHandleFailedJobs_FlagsPurgedPayload(t *testing.T) {
+	d := testdb.New(t)
+	h := newAdminHTTPHarness(t, d)
+	client := staffClient(t, h, "staff-jobs-expired@example.com")
+	expiredID := seedExpiredDeadJob(t, d)
+	retryableID := seedDeadJob(t, d)
+
+	resp := h.requestJSON(t, client, http.MethodGet, "/api/v1/admin/jobs/failed", nil)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Jobs []admin.FailedJobView `json:"jobs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	flags := map[string]bool{}
+	for _, j := range out.Jobs {
+		flags[j.ID] = j.PayloadExpired
+	}
+	if v, ok := flags[expiredID]; !ok || !v {
+		t.Errorf("payloadExpired for purged job %s = %v (present=%v), want true", expiredID, v, ok)
+	}
+	if v, ok := flags[retryableID]; !ok || v {
+		t.Errorf("payloadExpired for retryable job %s = %v (present=%v), want false", retryableID, v, ok)
+	}
+}
