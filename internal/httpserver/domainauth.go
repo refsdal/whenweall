@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -105,7 +106,9 @@ func RequireCaptchaIfAnon(cfg *config.Config, a Auth, r *http.Request) error {
 }
 
 // DecodeJSON decodes r's JSON body into dst, writing the standard "invalid" envelope and
-// returning false on any decode failure (including a missing body).
+// returning false on any decode failure (including a missing body). A body over the /api/ cap
+// (Server.Handler's http.MaxBytesHandler, maxAPIBodyBytes) surfaces here as *http.MaxBytesError
+// and is reported as 413 payload_too_large rather than a misleading "malformed JSON".
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if r.Body == nil {
 		Err(w, http.StatusBadRequest, "invalid", "request body is required", nil)
@@ -113,6 +116,11 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	}
 	defer func() { _ = r.Body.Close() }()
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			Err(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds 1 MiB", nil)
+			return false
+		}
 		Err(w, http.StatusBadRequest, "invalid", "malformed JSON body", nil)
 		return false
 	}

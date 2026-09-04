@@ -16,6 +16,18 @@ import (
 	"github.com/refsdal/whenweall/internal/routekey"
 )
 
+// maxAPIBodyBytes caps every /api/ request body. Nothing this API accepts is anywhere near it —
+// the largest legitimate body is a poll with a few dozen options, a few KiB — while an unbounded
+// r.Body lets one client push a multi-GB JSON document at json.Decoder and exhaust memory. The
+// old Workers runtime imposed a platform-wide cap for free; a self-hosted binary has to say so
+// itself. Enforced by http.MaxBytesHandler (see Handler) and reported as 413 by DecodeJSON.
+const maxAPIBodyBytes = 1 << 20
+
+// limitAPIBody is the middleware form of http.MaxBytesHandler for APIOnly.
+func limitAPIBody(next http.Handler) http.Handler {
+	return http.MaxBytesHandler(next, maxAPIBodyBytes)
+}
+
 // Server holds the pieces needed to build and run the application's HTTP handler.
 type Server struct {
 	cfg     *config.Config
@@ -202,6 +214,7 @@ func APIOnly(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler
 // matched, present or future.
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
+	h = APIOnly(limitAPIBody)(h)
 	h = APIOnly(CheckOrigin(s.cfg.AppURL))(h)
 	h = APIOnly(s.authSvc.Middleware)(h)
 	h = Recover(s.logger)(h)
@@ -217,8 +230,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		Addr:              fmt.Sprintf(":%d", s.cfg.Port),
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		// No WriteTimeout: plan 4's websockets are long-lived by design.
+		// ReadTimeout bounds the whole request read (headers + body): a client trickling a body
+		// one byte at a time cannot hold a connection open indefinitely. Safe alongside the
+		// websocket routes: net/http's Hijack (conn.hijackLocked) clears every deadline on the
+		// connection before coder/websocket takes it over, so this never fires on an upgraded
+		// connection.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
+		// No WriteTimeout: websockets are long-lived by design.
 	}
 
 	errCh := make(chan error, 1)
