@@ -1,8 +1,9 @@
 /**
  * Browser-safe notification catalogue: the event names, digest grouping and per-poll preference
  * grid shape the settings UI edits (`components/notifications/NotificationGrid.tsx`) and the API
- * client sends (`api/polls.ts`) to the Go backend's notification_prefs endpoint. Pure data plus
- * zod schemas — no React, no API-client imports — which is why it lives in `lib/`.
+ * client sends (`api/polls.ts`) to the Go backend's `POST /api/v1/polls/{id}/notification-prefs`
+ * endpoint. Pure data plus zod schemas — no React, no API-client imports — which is why it lives
+ * in `lib/`.
  */
 import { z } from 'zod'
 
