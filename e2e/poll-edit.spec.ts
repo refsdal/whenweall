@@ -28,6 +28,9 @@ test('the owner edits a voted poll (confirming the lost vote), adds a day, then 
     await page.goto(`${pollPath}/edit`)
     await waitForHydration(page)
     await expect(page.getByTestId('poll-editor')).toBeVisible()
+    // `exact: true`: the edit page's own settings summary also renders a sentence containing this
+    // substring ("Dates & times poll · 2 options · No deadline"), which a plain substring match
+    // would also hit alongside the options-step badge that reads exactly "2 options".
     await expect(page.getByText('2 options', { exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: /^Remove / }).first().click()
@@ -39,6 +42,7 @@ test('the owner edits a voted poll (confirming the lost vote), adds a day, then 
     await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
     await calendar.getByRole('button', { name: 'Go to the Next Month' }).click()
     await calendar.locator('button[data-day]:not([disabled])').first().click()
+    // Same badge-vs-summary collision as above, disambiguated the same way.
     await expect(page.getByText('2 options', { exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: 'Save changes' }).click()
