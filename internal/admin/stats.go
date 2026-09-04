@@ -17,8 +17,9 @@ type Count struct {
 // DashboardStats mirrors AdminStats (stats.ts), minus its `revenue` block — billing is gone from
 // this rewrite, so subscriptions/MRR/premium-org counts have no source of truth left to read from
 // — and plus two fields the TS source had no way to express: on Cloudflare, mail delivery went
-// through a managed Queue with no SQL-queryable depth; here it is scheduled_jobs rows (see
-// internal/mailer's "mail:send" kind), so MailQueueDepth and FailedJobs (the dead-letter count,
+// through a managed Queue with no SQL-queryable depth; here it is scheduled_jobs rows (every
+// "mail:*" kind — mailer's "mail:send", polls' "mail:poll", bookings' "mail:booking"), so
+// MailQueueDepth and FailedJobs (the dead-letter count,
 // mirroring jobs.Dead's own attempts >= max_attempts predicate) are now first-class stats.
 type DashboardStats struct {
 	Users          Count `json:"users"`
@@ -69,12 +70,15 @@ func Stats(ctx context.Context, tx db.DBTX) (*DashboardStats, error) {
 		return nil, fmt.Errorf("admin: counting finalized polls: %w", err)
 	}
 
-	// "mail:send" is internal/mailer's job kind (its Enqueue schedules it) — this counts every
-	// row that hasn't yet either succeeded (Fail/claim removes/updates it, so a delivered mail
-	// leaves no row at all — see jobs.go's claim query) or exhausted its attempts (excluded here,
-	// counted separately below as FailedJobs, exactly like a queue's own backlog vs its DLQ).
+	// Every mail kind counts, not just internal/mailer's "mail:send" (auth/org mail): entity
+	// mail runs as "mail:poll" (internal/polls/timers.go) and "mail:booking"
+	// (internal/bookings/emails.go), and those handlers deliver via Send directly rather than
+	// re-enqueueing as "mail:send", so a LIKE 'mail:%' predicate is the only one that shows an
+	// operator a backlog of digests or booking confirmations. This counts every row that hasn't
+	// yet either succeeded (Complete deletes the row — see jobs.go) or exhausted its attempts
+	// (excluded here, counted separately below as FailedJobs — a queue's backlog vs its DLQ).
 	if err := tx.QueryRowContext(ctx, `
-		SELECT count(*) FROM scheduled_jobs WHERE kind = 'mail:send' AND attempts < max_attempts
+		SELECT count(*) FROM scheduled_jobs WHERE kind LIKE 'mail:%' AND attempts < max_attempts
 	`).Scan(&s.MailQueueDepth); err != nil {
 		return nil, fmt.Errorf("admin: counting mail queue depth: %w", err)
 	}

@@ -161,11 +161,17 @@ func TestStats_SeededExactNumbers(t *testing.T) {
 	insertBooking(t, d, pageNow, daysAgo(10))
 	insertBooking(t, d, pageNow, daysAgo(40))
 
-	// Mail queue depth: only "mail:send" jobs that haven't exhausted their attempts count.
-	insertJob(t, d, "mail:send", 0, 5) // pending
-	insertJob(t, d, "mail:send", 2, 5) // pending
-	insertJob(t, d, "mail:send", 5, 5) // dead — excluded from queue depth, counted in FailedJobs
-	insertJob(t, d, "mail:poll", 0, 5) // a different kind entirely — never counted as mail queue depth
+	// Mail queue depth: every "mail:*" kind that hasn't exhausted its attempts. Auth mail is
+	// "mail:send" (internal/mailer); entity mail is "mail:poll" (internal/polls/timers.go) and
+	// "mail:booking" (internal/bookings/emails.go), and those handlers deliver via Send directly —
+	// they never re-enqueue as "mail:send" — so a backlog of digests or booking confirmations is
+	// invisible unless all three count. A timer kind never does.
+	insertJob(t, d, "mail:send", 0, 5)     // pending
+	insertJob(t, d, "mail:send", 2, 5)     // pending
+	insertJob(t, d, "mail:send", 5, 5)     // dead — excluded from queue depth, counted in FailedJobs
+	insertJob(t, d, "mail:poll", 0, 5)     // pending entity mail — counts
+	insertJob(t, d, "mail:booking", 1, 5)  // pending entity mail — counts
+	insertJob(t, d, "poll.deadline", 0, 5) // a timer, not mail — never counted as queue depth
 
 	// Failed jobs: every kind's dead-letter rows, mirroring jobs.Dead's own predicate.
 	insertJob(t, d, "poll.digest", 5, 5)
@@ -184,7 +190,7 @@ func TestStats_SeededExactNumbers(t *testing.T) {
 		Participants:   admin.Count{Total: 4, Last7: 2, Last30: 3},
 		BookingPages:   admin.Count{Total: 2, Last7: 1, Last30: 1},
 		Bookings:       admin.Count{Total: 3, Last7: 1, Last30: 2},
-		MailQueueDepth: 2,
+		MailQueueDepth: 4,
 		FailedJobs:     2,
 	}
 	if *got != *want {
