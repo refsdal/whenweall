@@ -19,7 +19,9 @@ import { cn } from '#/lib/utils'
  * `UsageStatsSection`'s socket (opened once the section scrolls into view) then keeps them live.
  */
 export const Route = createFileRoute('/')({
-  loader: loadLandingStats,
+  // loadLandingStats takes an optional timeoutMs (tests use it to avoid a multi-second wait on
+  // the hang path) — wrapped here so TanStack Router's loader-context argument never reaches it.
+  loader: () => loadLandingStats(),
   head: () => ({
     meta: [
       { title: `${appConfig.name} — ${appConfig.tagline}` },

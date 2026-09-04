@@ -35,4 +35,19 @@ describe('loadLandingStats', () => {
     server.use(http.get('/api/v1/stats', () => HttpResponse.text('upstream down', { status: 502 })))
     await expect(loadLandingStats()).resolves.toEqual({ stats: EMPTY_STATS })
   })
+
+  // Fix-round regression test for a whole-plan review finding (Plan B review, Minor #4): the
+  // loader awaits this read with no timeout, so a struggling backend stalled first paint on the
+  // marketing page indefinitely instead of degrading to zeros the way a hard error already did.
+  // Passes a short timeoutMs (loadLandingStats's real caller always uses the 2s default) so the
+  // test doesn't actually wait out the production timeout.
+  it('degrades to zeros instead of hanging when the read never resolves', async () => {
+    server.use(
+      http.get(
+        '/api/v1/stats',
+        () => new Promise(() => {}), // never resolves — simulates a stuck backend
+      ),
+    )
+    await expect(loadLandingStats(20)).resolves.toEqual({ stats: EMPTY_STATS })
+  })
 })

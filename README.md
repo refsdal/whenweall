@@ -413,8 +413,11 @@ You need [Docker](https://www.docker.com/), [Go](https://go.dev/) 1.26+, and
 git clone https://github.com/refsdal/whenweall.git whenweall
 cd whenweall
 
+cp .env.example .env             # fill in AUTH_SECRET, SMTP_HOST, POSTGRES_PASSWORD, etc. — see
+                                  # below. Compose interpolates the WHOLE file at config load, so
+                                  # its required-variable guards abort even a `db`-only `up` if
+                                  # you run it before .env exists and is filled in.
 docker compose up -d db          # Postgres only — the app itself runs outside the container
-cp .env.example .env             # then fill in AUTH_SECRET, SMTP_HOST, POSTGRES_PASSWORD, etc.
 
 # The binary reads only the process environment — nothing loads .env for you outside compose.
 set -a; . ./.env; set +a

@@ -253,12 +253,15 @@ func statsWSHandler(h *Hub, stats *StatsService) http.HandlerFunc {
 // endpoint exists to avoid.
 func statsSnapshotHandler(stats *StatsService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Set unconditionally, before the fallible read below: a 500 is exactly the kind of
+		// response a proxy must not cache, and this header is this route's only defense against
+		// that — see the doc comment above.
+		w.Header().Set("Cache-Control", "no-store")
 		snapshot, err := stats.Snapshot(r.Context(), RoomKeyStats)
 		if err != nil {
 			httpserver.Err(w, http.StatusInternalServerError, "internal", "internal error", nil)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
 		httpserver.JSON(w, http.StatusOK, snapshot)
 	}
 }

@@ -462,3 +462,36 @@ func TestStatsREST_RateLimited(t *testing.T) {
 		t.Errorf("body = %q, want code rate_limited", body)
 	}
 }
+
+// TestStatsREST_NoStoreOnError is the fix-round regression test for a whole-plan review finding
+// (Plan B review, Minor #5): statsSnapshotHandler used to set Cache-Control: no-store only AFTER
+// a successful Snapshot read, so a 500 (Postgres down, pool exhausted, ...) — the exact response a
+// caching proxy must never keep — went out with no header telling it not to. Forces that failure
+// by closing the *sql.DB out from under the StatsService before the request lands, then asserts
+// the header is present on the resulting 500 too.
+func TestStatsREST_NoStoreOnError(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	hub := startHub(t, url, sqlDB)
+	stats := rooms.NewStatsService(sqlDB, nil)
+
+	mux := http.NewServeMux()
+	rooms.Register(mux, hub, newFakeWSAuth(), &fakePollService{byID: map[string]any{}}, &fakeBookingService{}, stats, &config.Config{})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("closing sqlDB early to force Snapshot's read to fail: %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (sqlDB is closed)", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store even on a 500", got)
+	}
+}
