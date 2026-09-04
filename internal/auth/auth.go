@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -316,7 +318,14 @@ func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption 
 	// Our own internal/httpserver.CheckOrigin already guards every mutating /api/ request (and,
 	// like browsers, treats an absent Origin as "not a cross-site form"), and Limen's CSRF
 	// protection stays on, so nothing is lost by switching Limen's stricter duplicate off here.
-	if cfg.AppEnv == "development" {
+	//
+	// Gated on isLoopbackAppURL(cfg.AppURL) as well as cfg.AppEnv, deliberately: APP_ENV defaults
+	// to "development" (config.Load) when unset, so AppEnv alone would relax Limen's origin check
+	// and trust localhost:5173 for any operator who forgets to set APP_ENV=production — a real
+	// deployment's APP_URL is essentially never a loopback address, so requiring one keeps that
+	// case strict regardless of APP_ENV. `bun dev` itself always talks to APP_URL=http://
+	// localhost:3000 (README), so this loses no legitimate dev-mode behaviour.
+	if cfg.AppEnv == "development" && isLoopbackAppURL(cfg.AppURL) {
 		opts = append(opts,
 			limen.WithHTTPTrustedOrigins([]string{"http://localhost:5173"}),
 			limen.WithHTTPOriginCheck(false),
@@ -324,6 +333,26 @@ func httpConfigOptions(cfg *config.Config, s *Service) []limen.HTTPConfigOption 
 	}
 
 	return opts
+}
+
+// isLoopbackAppURL reports whether rawURL's host is a loopback address (localhost, 127.0.0.1,
+// ::1, ...). Used by httpConfigOptions to require, alongside APP_ENV=development, that APP_URL
+// itself actually points at a local dev server before relaxing Limen's origin check — see that
+// call site's doc comment for why APP_ENV alone isn't a safe enough gate.
+//
+// Malformed or empty input (including a plain "APP_URL is unset" default-zero-value) returns
+// false, i.e. the strict path, never the relaxed one.
+func isLoopbackAppURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Handler returns Limen's own http.Handler, already mounted at the base path configured above

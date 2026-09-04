@@ -586,3 +586,56 @@ func TestOAuthAuthorizeTrustsViteDevOriginOnlyInDevelopment(t *testing.T) {
 		t.Fatalf("production: status %d, want 403 (only APP_URL's origin is trusted): %s", prodResp.StatusCode, body)
 	}
 }
+
+// TestIsLoopbackAppURL is a fix-round regression test for a whole-plan review finding (Plan B
+// review, Important #3): httpConfigOptions used to relax Limen's origin check on APP_ENV==
+// "development" alone, and APP_ENV defaults to "development" when unset (config.Load), so an
+// operator who forgot to set it got the relaxed check regardless of what APP_URL actually pointed
+// at. isLoopbackAppURL is the added gate: only a genuinely local APP_URL should count.
+func TestIsLoopbackAppURL(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{"localhost hostname", "http://localhost:3000", true},
+		{"IPv4 loopback", "http://127.0.0.1:3000", true},
+		{"IPv6 loopback", "http://[::1]:3000", true},
+		{"real domain", "https://app.example.com", false},
+		{"real domain, no scheme host confusion", "https://whenweall.example", false},
+		{"non-loopback IP", "http://10.0.0.5:3000", false},
+		{"empty (APP_URL unset)", "", false},
+		{"malformed", "://not-a-url", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLoopbackAppURL(tc.url); got != tc.want {
+				t.Errorf("isLoopbackAppURL(%q) = %v, want %v", tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOAuthAuthorizeStaysStrictInDevelopmentWithNonLoopbackAppURL is the other direction of the
+// same fix: APP_ENV=development with a real (non-loopback) APP_URL — the shape an operator gets
+// by deploying the binary directly without setting APP_ENV=production — must keep Limen's origin
+// check strict, exactly like the production case above, rather than trusting the Vite dev origin.
+func TestOAuthAuthorizeStaysStrictInDevelopmentWithNonLoopbackAppURL(t *testing.T) {
+	cfg := &config.Config{
+		AppEnv:             "development",
+		AppURL:             "https://app.example.com",
+		LimenSecret:        make([]byte, 32),
+		GoogleClientID:     "client-id",
+		GoogleClientSecret: "client-secret",
+		Capabilities:       config.Capabilities{Google: true},
+	}
+	const viteRedirect = "/api/v1/auth/oauth/google/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Flogin"
+
+	ts := newTestServiceWithConfig(t, cfg)
+	resp := ts.get(t, viteRedirect)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("development+non-loopback APP_URL: status %d, want 403 (a defaulted APP_ENV must not relax the origin check for a real deployment): %s", resp.StatusCode, body)
+	}
+}
