@@ -1030,3 +1030,33 @@ func TestHandlerAddCommentAuthorName(t *testing.T) {
 		}
 	})
 }
+
+// TestHandlerCreateRateLimited pins the 'create' budget back onto POST /api/v1/polls and its
+// duplicate sibling: 20/min per IP, one shared bucket, applied OUTSIDE the session gate — which is
+// what lets this test exhaust it with unauthenticated requests (each a 401) rather than creating
+// twenty real polls.
+func TestHandlerCreateRateLimited(t *testing.T) {
+	d := testdb.New(t)
+	h, _, _ := newTestHandler(d, testConfig(t))
+
+	for i := 0; i < 20; i++ {
+		rec := doRequest(t, h, "POST", "/api/v1/polls", map[string]any{}, nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d: status = %d, want 401 (under budget, no session)", i+1, rec.Code)
+		}
+	}
+
+	over := doRequest(t, h, "POST", "/api/v1/polls", map[string]any{}, nil)
+	if over.Code != http.StatusTooManyRequests {
+		t.Fatalf("21st create: status = %d, want 429; body=%s", over.Code, over.Body)
+	}
+	if errCode(t, over) != "rate_limited" {
+		t.Errorf("code = %q, want rate_limited", errCode(t, over))
+	}
+
+	// Duplicate shares the same bucket, exactly as the old rateLimitMiddleware('create') did.
+	dup := doRequest(t, h, "POST", "/api/v1/polls/some-id/duplicate", map[string]any{}, nil)
+	if dup.Code != http.StatusTooManyRequests {
+		t.Fatalf("duplicate after the create budget is spent: status = %d, want 429; body=%s", dup.Code, dup.Body)
+	}
+}

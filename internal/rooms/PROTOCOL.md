@@ -50,6 +50,10 @@ was originally exempt (reasoning: gated behind a signed-in manager, a meaningful
 an anonymous per-IP budget) — that reasoning no longer holds now that an anonymous caller is the
 expected, common case for this route rather than an edge case.
 
+The budget (like every `PublicRateLimit` bucket in this codebase) is a pass-through when the
+server runs with `ENABLE_TEST_ROUTES=true`, so the Playwright harness's single shared client IP
+never trips it.
+
 ## Query parameters
 
 - `?since=<seq>` — optional. Requests a backfill of every room event with `seq` (an event's

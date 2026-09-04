@@ -114,7 +114,7 @@ func Register(mux *http.ServeMux, h *Hub, a httpserver.Auth, polls PollService, 
 	// h.sqlDB (not a separate parameter): Register lives in the same package as Hub, so it can
 	// reach the pool the hub itself already holds rather than asking every caller to pass it again
 	// — main.go's own rooms.NewHub(cfg.DatabaseURL, sqlDB, ...) call is the same sqlDB either way.
-	connectLimit := httpserver.PublicRateLimit(h.sqlDB, "rooms", "ws_connect", wsConnectLimit, wsConnectWindow, cfg.TrustProxy)
+	connectLimit := httpserver.PublicRateLimit(h.sqlDB, cfg, "rooms", "ws_connect", wsConnectLimit, wsConnectWindow)
 
 	mux.Handle("GET /api/v1/polls/{id}/ws", connectLimit(pollWSHandler(h, a, polls)))
 	mux.Handle("GET /api/v1/booking-pages/{pageId}/ws", connectLimit(bookingWSHandler(h, a, bookings)))

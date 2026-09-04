@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/httpserver"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
@@ -214,6 +215,52 @@ func TestRateLimitSkipsWhenKeyFnReturnsEmpty(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/x", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (limiting skipped)", rec.Code)
+	}
+}
+
+// TestPublicRateLimitEnforcedByDefault pins the ordinary case: with a plain config the per-IP
+// budget applies and the request over it gets the standard 429 envelope.
+func TestPublicRateLimitEnforcedByDefault(t *testing.T) {
+	d := testdb.New(t)
+	h := httpserver.PublicRateLimit(d, testConfig(), "test", "on", 1, time.Minute)(okHandler())
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/x", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("1st request: status = %d, want 200", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/x", nil))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("2nd request: status = %d, want 429", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"rate_limited"`) {
+		t.Errorf("body = %q, want code rate_limited", rec.Body.String())
+	}
+}
+
+// TestPublicRateLimitSkippedWhenTestRoutesEnabled mirrors what Server.routes already does for
+// the auth limiter: a deployment running with ENABLE_TEST_ROUTES (the Playwright harness — one
+// long-lived server, every browser context sharing one client IP, CI retries on top) has no
+// reason to defend a per-IP budget against its own test traffic.
+func TestPublicRateLimitSkippedWhenTestRoutesEnabled(t *testing.T) {
+	d := testdb.New(t)
+	cfg, _, err := config.Load(map[string]string{
+		"APP_URL": "http://localhost:3000", "DATABASE_URL": "postgres://unused/unused",
+		"AUTH_SECRET": strings.Repeat("s", 32), "SMTP_HOST": "localhost",
+		"ENABLE_TEST_ROUTES": "true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httpserver.PublicRateLimit(d, cfg, "test", "off", 1, time.Minute)(okHandler())
+
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/x", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200 (limiter must be a pass-through under ENABLE_TEST_ROUTES)", i+1, rec.Code)
+		}
 	}
 }
 

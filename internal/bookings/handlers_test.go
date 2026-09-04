@@ -1143,3 +1143,26 @@ func TestHandlerDisconnectGoogle(t *testing.T) {
 		}
 	})
 }
+
+// TestHandlerCreatePageRateLimited is internal/polls's TestHandlerCreateRateLimited for booking
+// pages: POST /api/v1/booking-pages has its own 20/min per-IP 'create' bucket, outside the
+// session gate.
+func TestHandlerCreatePageRateLimited(t *testing.T) {
+	d := testdb.New(t)
+	h, _, _ := newTestHandler(d, testConfig(t))
+
+	for i := 0; i < 20; i++ {
+		rec := doRequest(t, h, "POST", "/api/v1/booking-pages", map[string]any{}, nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d: status = %d, want 401 (under budget, no session)", i+1, rec.Code)
+		}
+	}
+
+	over := doRequest(t, h, "POST", "/api/v1/booking-pages", map[string]any{}, nil)
+	if over.Code != http.StatusTooManyRequests {
+		t.Fatalf("21st create: status = %d, want 429; body=%s", over.Code, over.Body)
+	}
+	if errCode(t, over) != "rate_limited" {
+		t.Errorf("code = %q, want rate_limited", errCode(t, over))
+	}
+}

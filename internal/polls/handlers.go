@@ -62,16 +62,22 @@ type Auth = httpserver.Auth
 // `if (!userId) await requireTurnstile(...)` branch; a light per-IP rate limit on the same public
 // mutating endpoints, keyed like internal/httpserver's own authRateLimit.
 func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
-	voteLimit := httpserver.PublicRateLimit(s.db, "polls", "vote", 30, time.Minute, cfg.TrustProxy)
-	commentLimit := httpserver.PublicRateLimit(s.db, "polls", "comment", 20, time.Minute, cfg.TrustProxy)
+	voteLimit := httpserver.PublicRateLimit(s.db, cfg, "polls", "vote", 30, time.Minute)
+	commentLimit := httpserver.PublicRateLimit(s.db, cfg, "polls", "comment", 20, time.Minute)
+	// createLimit ports the old stack's rateLimitMiddleware('create') — 20/min per IP, one bucket
+	// shared by create and duplicate (main:src/server/polls/polls.functions.ts) — which the first
+	// cut lost. It sits OUTSIDE WithOrgSession: an attacker's unauthenticated spray counts too,
+	// and a signed-in account cannot mint unbounded polls (each with deadline/digest jobs and
+	// invitee mail fan-out) either.
+	createLimit := httpserver.PublicRateLimit(s.db, cfg, "polls", "create", 20, time.Minute)
 
-	mux.Handle("POST /api/v1/polls", httpserver.WithOrgSession(a, s.handleCreate))
+	mux.Handle("POST /api/v1/polls", createLimit(httpserver.WithOrgSession(a, s.handleCreate)))
 	mux.HandleFunc("GET /api/v1/polls/{id}", s.handleGetView(a))
 	mux.Handle("PATCH /api/v1/polls/{id}", httpserver.WithOrgSession(a, s.handleUpdate))
 	mux.Handle("POST /api/v1/polls/{id}/status", httpserver.WithOrgSession(a, s.handleSetStatus))
 	mux.Handle("POST /api/v1/polls/{id}/finalize", httpserver.WithOrgSession(a, s.handleFinalize))
 	mux.Handle("DELETE /api/v1/polls/{id}", httpserver.WithOrgSession(a, s.handleDelete))
-	mux.Handle("POST /api/v1/polls/{id}/duplicate", httpserver.WithOrgSession(a, s.handleDuplicate))
+	mux.Handle("POST /api/v1/polls/{id}/duplicate", createLimit(httpserver.WithOrgSession(a, s.handleDuplicate)))
 	mux.Handle("GET /api/v1/polls", httpserver.WithOrgSession(a, s.handleListMine))
 
 	mux.Handle("POST /api/v1/polls/{id}/participants", voteLimit(http.HandlerFunc(s.handleAddParticipant(a, cfg))))

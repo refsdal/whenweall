@@ -153,8 +153,18 @@ func WriteDomainError(w http.ResponseWriter, err error, mapper DomainErrorMapper
 // PublicRateLimit builds a per-IP rate limiter over db — the same fixed-window counter RateLimit
 // uses for the auth surface, namespaced "<namespace>.<name>" (e.g. "polls.vote") so different
 // domains' — and different routes within the same domain's — rate limits never share a bucket.
-func PublicRateLimit(db *sql.DB, namespace, name string, limit int, window time.Duration, trustProxy bool) func(http.Handler) http.Handler {
+// Client identity comes from ClientIP with cfg.TrustProxy.
+//
+// A pass-through when cfg.EnableTestRoutes, for exactly the reason Server.routes skips the auth
+// limiter then: the Playwright harness runs every browser context (and every CI retry) against
+// ONE server process from ONE client IP, which is precisely the traffic shape a per-IP budget is
+// sized to stop, and a deployment that has already accepted the seed route's premise
+// (config.Load hard-fails it alongside APP_ENV=production) has nothing to defend here.
+func PublicRateLimit(db *sql.DB, cfg *config.Config, namespace, name string, limit int, window time.Duration) func(http.Handler) http.Handler {
+	if cfg.EnableTestRoutes {
+		return func(next http.Handler) http.Handler { return next }
+	}
 	return RateLimit(db, namespace+"."+name, limit, window, func(r *http.Request) string {
-		return ClientIP(r, trustProxy)
+		return ClientIP(r, cfg.TrustProxy)
 	})
 }

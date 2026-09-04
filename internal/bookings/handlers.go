@@ -76,9 +76,13 @@ type Auth = httpserver.Auth
 // authenticated by the manage token itself and never call requireTurnstile in the TS source
 // either, so this port doesn't add a captcha gate to handleCancel/handleReschedule.
 func (s *Service) Register(mux *http.ServeMux, a Auth, cfg *config.Config) {
-	bookLimit := httpserver.PublicRateLimit(s.db, "bookings", "book", 20, time.Minute, cfg.TrustProxy)
+	bookLimit := httpserver.PublicRateLimit(s.db, cfg, "bookings", "book", 20, time.Minute)
+	// createLimit is the booking-page analogue of internal/polls's 'create' bucket: page creation
+	// was REQUIRE_ORG-only in the TS source too, but an account minting pages without bound is the
+	// same abuse shape as unbounded poll creation, so it gets the same 20/min per-IP budget.
+	createLimit := httpserver.PublicRateLimit(s.db, cfg, "bookings", "create", 20, time.Minute)
 
-	mux.Handle("POST /api/v1/booking-pages", httpserver.WithOrgSession(a, s.handleCreatePage))
+	mux.Handle("POST /api/v1/booking-pages", createLimit(httpserver.WithOrgSession(a, s.handleCreatePage)))
 	mux.Handle("GET /api/v1/booking-pages", httpserver.WithOrgSession(a, s.handleListMyPages))
 	mux.Handle("GET /api/v1/booking-pages/{id}", httpserver.WithOrgSession(a, s.handleGetOwnedPage))
 	mux.Handle("PATCH /api/v1/booking-pages/{id}", httpserver.WithOrgSession(a, s.handleUpdatePage))
