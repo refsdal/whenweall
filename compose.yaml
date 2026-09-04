@@ -35,7 +35,7 @@ services:
     # Pulled from the registry .github/workflows/release.yml publishes — `docker compose pull app`
     # is the upgrade path (README "Ops"). `build:` stays so `docker compose up --build` still
     # produces the same image from a source checkout — but the Dockerfile compiles nothing, so run
-    # `bash scripts/build-artifacts.sh linux/amd64` first or the build fails on a missing binary.
+    # `bash scripts/build-artifacts.sh host` first or the build fails on a missing binary.
     image: ghcr.io/refsdal/whenweall:latest
     build:
       context: .

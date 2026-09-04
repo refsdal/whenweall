@@ -387,7 +387,7 @@ build the binary first, then rebuild and restart in one step; migrations still r
 boot:
 
 ```bash
-bash scripts/build-artifacts.sh linux/amd64   # needs Go and bun on the host
+bash scripts/build-artifacts.sh host   # needs Go and bun on the host
 docker compose up -d --build app
 ```
 
@@ -488,7 +488,7 @@ The same suite also runs against the **built Docker image** with the compose har
 `e2e-image` job does:
 
 ```bash
-bash scripts/build-artifacts.sh linux/amd64   # the image build itself compiles nothing
+bash scripts/build-artifacts.sh host   # the image build itself compiles nothing
 docker build -t whenweall:e2e .
 e2e/compose-e2e.sh up -d --wait      # compose.yaml + compose.e2e.yaml, app on :3100
 e2e/assert-hardening.sh              # proves the flags are live on the running container

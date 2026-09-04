@@ -57,11 +57,13 @@ jobs:
       - run: cd web && bun run lint
       - run: cd web && bunx vitest run
 
-  # An unpushed build of the exact multi-arch image release.yml publishes, by exactly the route
-  # release.yml takes: binaries cross-compiled natively here, then a COPY-only Dockerfile. Because
-  # nothing compiles inside the image any more, building BOTH platforms costs a couple of seconds,
-  # so this job proves the arm64 leg on every PR rather than leaving it to be discovered at
-  # release time. No setup-qemu-action, by design — see release.yml.
+  # An unpushed multi-arch build over the same route release.yml takes: binaries cross-compiled
+  # natively here, then a COPY-only Dockerfile. Not a byte-identical release image — this stamps
+  # VERSION=dev and skips the SBOM, provenance and metadata labels release.yml attaches — but it
+  # exercises the part that can break. Because nothing compiles inside the image any more, building
+  # BOTH platforms costs a couple of seconds, so the arm64 leg is proven on every PR rather than
+  # first at release time; build-artifacts.sh checks each binary's GOARCH, since a COPY never
+  # would. No setup-qemu-action, by design — see release.yml.
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -169,7 +171,7 @@ jobs:
       # Only this runner's architecture: the image under test runs here, and the arm64 leg is
       # already proven by the `docker` job above.
       - name: Cross-compile the binary and build the SPA into it
-        run: bash scripts/build-artifacts.sh linux/amd64
+        run: bash scripts/build-artifacts.sh host
       - name: Build the release image
         run: docker build -t whenweall:e2e .
       - name: Start Postgres + Mailpit + the image with the hardening flags

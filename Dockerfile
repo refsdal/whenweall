@@ -1,13 +1,14 @@
-# syntax=docker/dockerfile:1
-
 # NOTHING COMPILES IN HERE. The binaries are built natively, outside Docker:
 #
-#   bash scripts/build-artifacts.sh   # -> dist/server/linux/{amd64,arm64}/whenweall
+#   bash scripts/build-artifacts.sh host   # -> dist/server/<os>/<arch>/whenweall
 #
 # and this file only COPYs the one matching the platform being built. That keeps a multi-arch
 # `docker buildx build --platform linux/amd64,linux/arm64` down to seconds of file copying — no
-# QEMU emulation, no in-container Go or Bun toolchains, and the native build reuses the developer's
-# (or CI's) module and Vite caches. If the COPY below fails with "not found", run the script first.
+# QEMU emulation, no in-container Go or Bun toolchains, and the native build reuses caches (bun's
+# installs, Go's modules and build output) that an image layer cannot.
+#
+# If the COPY below fails with "not found", run that script. Note `host`: a plain `docker build`
+# targets the machine it runs on, so on an arm64 host the binary has to be an arm64 one.
 #
 # The SPA is not copied separately: it is embedded inside the binary (internal/httpserver/spa.go's
 # `//go:embed all:dist`), along with the SQL migrations and the IANA zone database
@@ -21,12 +22,7 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 
 # Set automatically by buildx, one value per --platform: "linux/amd64", "linux/arm64".
 ARG TARGETPLATFORM
-# Where the per-platform binaries sit in the build context. The default matches
-# scripts/build-artifacts.sh's layout; a release tool that hands Docker a context with the
-# binaries already at linux/<arch>/whenweall passes BINARY_ROOT=. instead.
-ARG BINARY_ROOT=dist/server
-
-COPY ${BINARY_ROOT}/${TARGETPLATFORM}/whenweall /whenweall
+COPY dist/server/${TARGETPLATFORM}/whenweall /whenweall
 
 # The base image's :nonroot tag already sets uid 65532, but as the bare number with no group.
 # Spelling out both halves keeps `docker image inspect -f '{{.Config.User}}'` equal to
