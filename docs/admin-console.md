@@ -34,8 +34,9 @@ docker compose exec db psql -U whenweall -d whenweall -c \
 Staff status is re-checked on every request (never cached in the session itself), so this
 takes effect on their very next request — no session revocation needed for the role change
 alone. If the revocation is urgent — a compromised or departing admin — also **lock** their
-account from the console (or the API directly), which additionally revokes every one of
-their existing sessions immediately:
+account — open them at `/admin/users`, press **Lock account**, type a
+reason — which additionally revokes every one of their existing sessions immediately. The
+same thing from the API directly:
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/admin/users/<id>/lock \
@@ -47,7 +48,10 @@ curl -X POST http://localhost:3000/api/v1/admin/users/<id>/lock \
 
 List and search users; view an account with its organisations and content; **lock**
 (revokes every session, blocks sign-in) and **unlock**; **delete**; view platform stats;
-and view/retry failed background jobs (digests, reminders, Google Calendar sync).
+and view/retry failed background jobs. Lock, unlock and delete are buttons on the user's
+page (`/admin/users/<id>`) — each opens a dialog that requires a reason, which is what ends
+up in the audit log. Failed jobs have their own tab, `/admin/jobs` — see
+[Failed jobs](#failed-jobs) below.
 
 **There is no impersonation and no direct password reset from the console.** Both were
 deliberate cuts versus the pre-rewrite TypeScript admin console — see
@@ -73,8 +77,9 @@ Notes on reading it:
 
 - **`reason` is required for lock/unlock/delete** — there is no reasonless path for those
   three, unlike the old TS console. A blank `reason` is rejected as a validation error
-  before the action runs at all. A job retry carries no reason (there's no one's rights
-  to weigh against resuming work the system itself already scheduled).
+  before the action runs at all. A job retry (`job.retry`) carries no reason (there's no one's rights to weigh against
+  resuming work the system itself already scheduled). A *refused* retry — the job isn't
+  actually dead-lettered, or its payload has expired (below) — leaves no row at all.
 - **`actor_user_id` is null for a deleted admin, but `actor_email` survives.** The trail is
   designed to outlive the person it describes.
 - **`metadata` lists which fields an action touched, never their values.** An audit row
@@ -85,6 +90,45 @@ Notes on reading it:
   See [Granting a staff account](#granting-a-staff-account) above.
 
 The log has no mutator by design — nothing in the application can edit or delete a row.
+
+## Failed jobs
+
+Every background job — mail delivery (`mail:send` for sign-in/verification/reset/invite
+mail, `mail:poll` and `mail:booking` for notifications), poll deadlines and digests,
+booking reminders — is a row in `scheduled_jobs`, retried with
+backoff until its attempt budget is spent (10 for mail, 5 otherwise). A job that still
+fails then **parks as dead-lettered**: it stops retrying and appears at `/admin/jobs` with
+its kind, attempt count, last error and last run time. The dashboard's *Failed jobs* count
+is the size of that list; *Mail queue depth* is every `mail:*` job still waiting or
+retrying. (Google Calendar sync is disabled product-wide — `googleSyncActive` in
+`internal/bookings/google.go` is hard-coded `false` — so no `google:sync` job is ever
+enqueued, and none can appear here.)
+
+**Retry** re-queues the job to run immediately (the worker picks it up within its poll
+interval) and writes a `job.retry` audit row. A retry is refused with `409 conflict` for a
+job that isn't dead-lettered — a stale tab, or the worker already has it — and with
+`409 payload_expired` in the case below.
+
+### Dead-letter retention
+
+A queued mail's payload is the rendered message: the recipient address and, for
+verification and password-reset mail, the raw token in the link. A dead-lettered row would
+otherwise keep that readable to anyone with database access for as long as it sat there.
+So a housekeeping job (`deadletter:sweep`, hourly) does two things:
+
+- **24 hours** after a `mail:*` job dead-letters, its **payload is nulled**. Kind, attempt
+  count and last error are kept, so the row still tells you what failed and why — but it
+  can no longer be retried (there is nothing left to send), and the console shows
+  *Payload purged — can't be retried* in place of the button; the API answers
+  `409 payload_expired`. If a batch of mail bounced and you want it resent, the console
+  gives you a day. After that, the user re-requests (a new verification or reset mail) —
+  which is also the only safe answer, since the original token has expired anyway.
+  Non-mail jobs carry ids only and are never purged.
+- **30 days** after any job dead-letters, the **row is deleted**. The failed-jobs screen
+  is a to-do list, not an archive; the audit log keeps the `job.retry` entries.
+
+Age is measured on the job's last scheduled run, so a job you retried that dies again gets
+a fresh 24 hours.
 
 ## If an admin account is compromised
 
