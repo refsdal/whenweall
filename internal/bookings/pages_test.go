@@ -78,6 +78,7 @@ func baseInput(mutate func(*bookings.PageInput)) bookings.PageInput {
 		Availability:    weekdayAvailability(),
 		GoogleSync:      false,
 		Reminders:       true,
+		Status:          "active",
 	}
 	if mutate != nil {
 		mutate(&in)
@@ -228,6 +229,36 @@ func TestUpdatePage(t *testing.T) {
 			in.Slug = "other-slug"
 		})); !errors.Is(err, bookings.ErrSlugTaken) {
 			t.Errorf("UpdatePage(slug collision) error = %v, want ErrSlugTaken", err)
+		}
+	})
+
+	t.Run("requires status — an omitted status must never un-pause a page", func(t *testing.T) {
+		d := testdb.New(t)
+		s := bookings.NewService(testConfig(t), d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+
+		page, err := s.CreatePage(ctx, orgID, ownerID, baseInput(nil))
+		if err != nil {
+			t.Fatalf("CreatePage: %v", err)
+		}
+		if _, err := s.UpdatePage(ctx, page.ID, orgID, baseInput(func(in *bookings.PageInput) {
+			in.Status = "paused"
+		})); err != nil {
+			t.Fatalf("UpdatePage(paused): %v", err)
+		}
+
+		_, err = s.UpdatePage(ctx, page.ID, orgID, baseInput(func(in *bookings.PageInput) { in.Status = "" }))
+		var verr *bookings.ValidationError
+		if !errors.As(err, &verr) || verr.Fields["status"] != "status is required" {
+			t.Fatalf("UpdatePage(no status) error = %v, want ValidationError{status: status is required}", err)
+		}
+
+		got, err := s.GetOwnedPage(ctx, page.ID, orgID)
+		if err != nil {
+			t.Fatalf("GetOwnedPage: %v", err)
+		}
+		if got.Status != "paused" {
+			t.Errorf("Status = %q, want paused (the rejected update must not have un-paused the page)", got.Status)
 		}
 	})
 }

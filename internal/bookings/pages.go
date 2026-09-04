@@ -236,6 +236,12 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 	if err := in.Validate(); err != nil {
 		return nil, err
 	}
+	// Status is required on an update (updateBookingPageSchema's own z.enum(['active','paused'])
+	// now that its .partial() is gone — web/src/api/bookings.ts): an omitted status used to
+	// default to "active" here, silently un-pausing a paused page on any PATCH missing the field.
+	if in.Status == "" {
+		return nil, &ValidationError{Fields: map[string]string{"status": "status is required"}}
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -258,10 +264,6 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 		return nil, err
 	}
 
-	status := in.Status
-	if status == "" {
-		status = "active"
-	}
 	now := time.Now().UTC()
 
 	if err := q.UpdateBookingPage(ctx, queries.UpdateBookingPageParams{
@@ -280,7 +282,7 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 		DateOverrides:   dateOverridesJSON,
 		GoogleSync:      in.GoogleSync,
 		Reminders:       in.Reminders,
-		Status:          status,
+		Status:          in.Status,
 		UpdatedAt:       now,
 	}); err != nil {
 		if isSlugConflict(err) {
@@ -310,7 +312,7 @@ func (s *Service) UpdatePage(ctx context.Context, pageID, orgID string, in PageI
 	existing.DateOverrides = dateOverridesJSON
 	existing.GoogleSync = in.GoogleSync
 	existing.Reminders = in.Reminders
-	existing.Status = status
+	existing.Status = in.Status
 	existing.UpdatedAt = now
 
 	return toPageView(existing)

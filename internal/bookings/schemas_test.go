@@ -225,8 +225,23 @@ func TestPageInputValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("empty status is valid (defaults to active at the service layer)", func(t *testing.T) {
-		if err := baseInput(nil).Validate(); err != nil {
+	t.Run("empty status passes Validate (CreatePage ignores status; UpdatePage requires it itself)", func(t *testing.T) {
+		if err := baseInput(func(in *bookings.PageInput) { in.Status = "" }).Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("rejects an omitted availability (nil map) — never stored as JSON null", func(t *testing.T) {
+		in := baseInput(func(in *bookings.PageInput) { in.Availability = nil })
+		fields := fieldsOf(t, in.Validate())
+		if fields["availability"] != "availability is required" {
+			t.Errorf("Fields = %+v, want availability: availability is required", fields)
+		}
+	})
+
+	t.Run("accepts an empty availability object (a page with no open days is valid, just unbookable)", func(t *testing.T) {
+		in := baseInput(func(in *bookings.PageInput) { in.Availability = bookings.Availability{} })
+		if err := in.Validate(); err != nil {
 			t.Errorf("Validate() = %v, want nil", err)
 		}
 	})

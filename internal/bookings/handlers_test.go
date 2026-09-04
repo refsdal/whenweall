@@ -462,6 +462,38 @@ func TestHandlerUpdatePage(t *testing.T) {
 			t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body)
 		}
 	})
+
+	t.Run("422 when status is omitted (no default to active)", func(t *testing.T) {
+		noStatus := map[string]any{}
+		for k, v := range body {
+			noStatus[k] = v
+		}
+		delete(noStatus, "status")
+
+		rec := doRequest(t, p.h, "PATCH", "/api/v1/booking-pages/"+p.pageID, noStatus, sessHeader(p.ownerID))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body)
+		}
+		if errFields(t, rec)["status"] == "" {
+			t.Errorf("fields = %+v, want a status entry", errFields(t, rec))
+		}
+	})
+
+	t.Run("422 when availability is omitted (never stored as JSON null)", func(t *testing.T) {
+		noAvailability := map[string]any{}
+		for k, v := range body {
+			noAvailability[k] = v
+		}
+		delete(noAvailability, "availability")
+
+		rec := doRequest(t, p.h, "PATCH", "/api/v1/booking-pages/"+p.pageID, noAvailability, sessHeader(p.ownerID))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body)
+		}
+		if errFields(t, rec)["availability"] == "" {
+			t.Errorf("fields = %+v, want an availability entry", errFields(t, rec))
+		}
+	})
 }
 
 // ---- row 5: DELETE /api/v1/booking-pages/{id} (auth+org -> DeletePage) ---------------------

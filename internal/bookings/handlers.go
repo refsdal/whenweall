@@ -314,11 +314,10 @@ func (s *Service) handleGetOwnedPage(w http.ResponseWriter, r *http.Request, ses
 	httpserver.JSON(w, http.StatusOK, view)
 }
 
-// handleUpdatePage ports updateBookingPage (pages.functions.ts). Accumulated requirement (c): this
-// is a FULL replacement of every editable field (PageInput's own doc comment — there is no
-// PATCH-style "omitted means unchanged" here, despite the HTTP method being PATCH), so a client
-// changing one field must round-trip GetOwnedPage first to get the page's current values for
-// every other field, then send the whole shape back.
+// handleUpdatePage ports updateBookingPage (pages.functions.ts) as a FULL replacement of every
+// editable field: availability and status are required (422 "invalid" with field errors when
+// omitted — see PageInput's doc comment, schemas.go), there is no "omitted means unchanged", so a
+// client changing one field round-trips GetOwnedPage first and sends the whole shape back.
 func (s *Service) handleUpdatePage(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	pageID := r.PathValue("id")
 	if err := s.RequireManageablePage(r.Context(), pageID, sess.ActiveOrgID, sess.UserID); err != nil {

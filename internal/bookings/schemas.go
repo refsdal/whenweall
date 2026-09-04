@@ -67,17 +67,14 @@ type Availability map[string][]TimeRange
 // availability that day" (a full-day block), distinct from the key being absent entirely.
 type DateOverrides map[string][]TimeRange
 
-// PageInput ports schemas.ts's pageSchema — the merged shape createBookingPageSchema/
-// updateBookingPageSchema share once the create-only "no status field" / update-only "status is
-// optional" difference is set aside. Validate() enforces the same field-level rules; the caller-
-// facing distinction between create and update is instead carried by the two Service methods:
-// CreatePage always writes status "active" regardless of what Status holds here, UpdatePage uses
-// Status (defaulting to "active" when empty). This is a deliberate simplification of the brief's
-// shared PageInput type: unlike updateBookingPageSchema's zod .partial(), UpdatePage takes a FULL
-// replacement value for every field (there is no PATCH-style "omitted means unchanged" here) — the
-// brief's exact signature (`UpdatePage(ctx, pageID, orgID string, in PageInput)`) reuses the same
-// non-partial PageInput type CreatePage does, so a caller wanting to change one field must supply
-// the page's current values for the rest (typically by calling GetOwnedPage first).
+// PageInput ports schemas.ts's pageSchema — the shape createBookingPageSchema/
+// updateBookingPageSchema share. Validate() enforces the field-level rules (Availability is
+// required — a nil map is rejected, an empty one accepted). The create/update distinction is
+// carried by the two Service methods: CreatePage always writes status "active" and ignores Status;
+// UpdatePage REQUIRES Status ("active"/"paused") and replaces every field with in's value — there
+// is no PATCH-style "omitted means unchanged", and no defaulting: an omitted status must never
+// silently un-pause a page. The web schema (web/src/api/bookings.ts updateBookingPageSchema) is
+// the same full shape, so a caller changing one field round-trips GetOwnedPage first.
 type PageInput struct {
 	Slug            string
 	Title           string
@@ -93,8 +90,8 @@ type PageInput struct {
 	DateOverrides   DateOverrides // nil = omitted
 	GoogleSync      bool
 	Reminders       bool
-	// Status is only meaningful to UpdatePage ("" defaults to "active"); CreatePage ignores it and
-	// always writes "active", matching createBookingPageSchema having no status field at all.
+	// Status is required by UpdatePage ("active" or "paused"); CreatePage ignores it and always
+	// writes "active", matching createBookingPageSchema having no status field at all.
 	Status string
 }
 
@@ -142,7 +139,14 @@ func (in PageInput) Validate() error {
 		fields["maxDaysAhead"] = fmt.Sprintf("maxDaysAhead must be between %d and %d", LimitMaxDaysAheadLo, LimitMaxDaysAheadHi)
 	}
 
-	validateDayRangesMap("availability", weekdayKeyRegexp, "Weekday keys must be '0'..'6'", in.Availability, 0, fields)
+	if in.Availability == nil {
+		// An absent JSON key decodes to a nil map; marshalling that would store the literal
+		// `null` in the NOT NULL jsonb column. A present-but-empty object ({}) is a valid page
+		// that simply has no open days.
+		fields["availability"] = "availability is required"
+	} else {
+		validateDayRangesMap("availability", weekdayKeyRegexp, "Weekday keys must be '0'..'6'", in.Availability, 0, fields)
+	}
 	if in.DateOverrides != nil {
 		validateDayRangesMap("dateOverrides", dateKeyRegexp, "Override keys must be 'YYYY-MM-DD'", in.DateOverrides, LimitOverrideDays, fields)
 	}

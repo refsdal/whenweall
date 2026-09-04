@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import { ApiError } from '#/api/client'
-import { getPublicAvailability, getPublicPage } from '#/api/bookings'
+import { getPublicAvailability, getPublicPage, updateBookingPageSchema } from '#/api/bookings'
 
 const server = setupServer()
 
@@ -60,5 +60,29 @@ describe('getPublicAvailability', () => {
     expect(result?.slots).toEqual([
       { start: '2026-09-15T07:00:00.000Z', end: '2026-09-15T07:30:00.000Z' },
     ])
+  })
+})
+
+const validCreateInput = {
+  slug: 'intro-call',
+  title: 'Intro call',
+  timezone: 'Europe/Oslo',
+  slotDurationMin: 30,
+  bufferBeforeMin: 0,
+  bufferAfterMin: 0,
+  minNoticeMin: 0,
+  maxDaysAhead: 60,
+  availability: { '1': [{ start: '09:00', end: '17:00' }] },
+  googleSync: false,
+  reminders: true,
+}
+
+describe('updateBookingPageSchema', () => {
+  it('is a full replacement: every create field plus status is required', () => {
+    expect(updateBookingPageSchema.safeParse({ pageId: 'p1', status: 'active' }).success).toBe(false)
+    expect(updateBookingPageSchema.safeParse({ ...validCreateInput, pageId: 'p1' }).success).toBe(false)
+    expect(
+      updateBookingPageSchema.safeParse({ ...validCreateInput, pageId: 'p1', status: 'paused' }).success,
+    ).toBe(true)
   })
 })

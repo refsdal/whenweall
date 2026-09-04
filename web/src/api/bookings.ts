@@ -140,9 +140,13 @@ export const createBookingPageSchema = z.object({
 
 export type CreateBookingPageInput = z.infer<typeof createBookingPageSchema>
 
-export const updateBookingPageSchema = createBookingPageSchema.partial().extend({
+/** A full replacement, not a partial patch: `PATCH /booking-pages/{id}` (internal/bookings/
+ * handlers.go handleUpdatePage) overwrites every field and rejects an omitted availability or
+ * status with 422, so the client schema requires them too. `draftToUpdate` (editor-state.ts)
+ * always sends the whole draft. */
+export const updateBookingPageSchema = createBookingPageSchema.extend({
   pageId: z.string(),
-  status: z.enum(['active', 'paused']).optional(),
+  status: z.enum(['active', 'paused']),
 })
 
 export type UpdateBookingPageInput = z.infer<typeof updateBookingPageSchema>

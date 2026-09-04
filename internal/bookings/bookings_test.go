@@ -45,6 +45,7 @@ func openPageInput(mutate func(*bookings.PageInput)) bookings.PageInput {
 		Availability:    openAvailability(),
 		GoogleSync:      false,
 		Reminders:       true,
+		Status:          "active",
 	}
 	if mutate != nil {
 		mutate(&in)
