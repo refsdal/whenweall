@@ -629,6 +629,11 @@ func (s *Service) composeBookingReminder(ctx context.Context, appURL, recipient 
 // notice that a Google Calendar sync failed (google.go's googleSyncInsert/Delete/Reschedule are the
 // only enqueuers of the "sync_failed" kind). nil when the page has no assigned member (nothing to
 // notify), matching the TS source's own `if (!owner) return`.
+//
+// Unlike every other compose* function in this file, this one sets no Locale on the returned
+// mailer.Message — unreachable today only because googleSyncActive (google.go) stops "sync_failed"
+// from ever being enqueued; see that function's own "reviving Google Calendar sync" checklist,
+// which carries this as an item to fix before the gate reopens.
 func (s *Service) composeGoogleSyncFailed(ctx context.Context, page queries.BookingPage) (*mailer.Message, error) {
 	if !page.MemberUserID.Valid {
 		return nil, nil //nolint:nilnil // nothing to notify

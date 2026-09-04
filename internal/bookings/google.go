@@ -421,14 +421,14 @@ func (s *Service) DisconnectGoogleSync(ctx context.Context, userID string) error
 // booking.GoogleEventID) to decide whether to make a live call while this returns false.
 //
 // Hard-coded false for the whole of v5 (user decision 2026-09-03, Plan D fix round 1): Limen's own
-// /oauth/google/link route ignores requested calendar scopes (handlers.go's rejectGoogleSync doc
-// comment), so no organiser can ever hold a token good for Busy/InsertEvent/DeleteEvent. Before
-// this gate existed, a page whose stored google_sync column was still true from before this
-// decision — combined with an operator who has GOOGLE_CLIENT_ID/SECRET configured (the same pair
-// that powers the still-recommended "Continue with Google," which is enough to make
-// NewGoogleSync return non-nil) — would still make a live call that fails for want of scope and
-// enqueues a "sync_failed" notice per booking: exactly the failure mode tasks 10-13 exist to
-// eliminate.
+// /oauth/google/link route ignores requested calendar scopes (see oauthLinkUrl's own doc comment,
+// web/src/api/auth.ts:170-177, and README.md:313-319), so no organiser can ever hold a token good
+// for Busy/InsertEvent/DeleteEvent. Before this gate existed, a page whose stored google_sync
+// column was still true from before this decision — combined with an operator who has
+// GOOGLE_CLIENT_ID/SECRET configured (the same pair that powers the still-recommended "Continue
+// with Google," which is enough to make NewGoogleSync return non-nil) — would still make a live
+// call that fails for want of scope and enqueues a "sync_failed" notice per booking: exactly the
+// failure mode tasks 10-13 exist to eliminate.
 //
 // The stored booking_pages.google_sync column and the googleSync client (google.go) are both left
 // completely alone by this gate: GetOwnedPage/ListMyPages still read the column back verbatim, and
@@ -439,6 +439,39 @@ func (s *Service) DisconnectGoogleSync(ctx context.Context, userID string) error
 // booking lifecycle. A future plan restoring the feature replaces this one function's body (with
 // the real per-page check its own consent-flow design calls for) rather than touching any of its
 // four call sites.
+//
+// Reviving Google Calendar sync — checklist (this function's body is only one of seven switches;
+// line numbers below are as of Plan D's whole-plan review, 2026-09-04, and will drift — check them):
+//  1. This gate: replace the `return false` above with the real per-page check.
+//  2. rejectGoogleSync (handlers.go, currently ~L179) and its two call sites in handleCreatePage/
+//     handleUpdatePage (handlers.go, currently ~L306 and ~L354) — all three go away or gain a real
+//     condition.
+//  3. handleGoogleStatus's hard-coded {"connected":false,"syncEnabled":false} response
+//     (handlers.go, currently ~L406-412) needs to call the still-real Service.GoogleStatus instead.
+//  4. Re-mount POST /api/v1/me/google/disconnect with a re-added handler (unmounted in commit
+//     481b2b3, "feat(bookings): disable Google Calendar sync at the API").
+//  5. editor-state.ts's hard-coded `googleSync: false` (web/src/components/booking/
+//     editor-state.ts, currently line 271).
+//  6. The deleted GoogleCalendarCard.tsx, its PageEditor.tsx section, and its eleven i18n message
+//     keys — all removed in commit ea4a4c0 ("feat(web): remove the Google Calendar card and dead
+//     calendar-scope plumbing"); recoverable only from git history, not from anything left in the
+//     tree.
+//  7. The README.md ("Google Calendar sync is not available in v5 yet", currently L313-319) and
+//     .env.example copy describing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET as sign-in-only.
+//
+// Three more items ride along, all created by this gate and easy to forget because nothing
+// exercises them while it holds:
+//   - composeGoogleSyncFailed (emails.go) sets no Locale on its mailer.Message, unlike every other
+//     compose* function in that file — harmless only because this gate stops "sync_failed" from
+//     ever being enqueued; it ships silently in the wrong locale the day step 1 above lands.
+//   - Cancel's and Reschedule's own enqueue conditions (bookings.go: Cancel guards on
+//     booking.GoogleEventID.Valid alone; Reschedule ORs that with page.GoogleSync) have had no
+//     test able to tell "ignores the page toggle" apart from "always zero" since this gate went
+//     in — add one that flips page.GoogleSync/booking.GoogleEventID independently of the gate.
+//   - Removing TestGoogleSyncBusyMergesGoogleFreebusyIntoAvailability (see the comment above
+//     TestNewGoogleSyncNilWhenCapabilityOff in google_test.go) removed the only test calling
+//     Busy() with a non-empty busy array — its RFC3339 interval parsing and malformed-entry skip
+//     branch have no coverage until a replacement is written.
 func googleSyncActive() bool {
 	return false
 }
