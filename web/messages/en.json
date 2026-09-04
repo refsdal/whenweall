@@ -442,6 +442,8 @@
   "error_404_cta": "Go to the front page",
   "error_title": "Something went wrong",
   "error_body": "An unexpected error occurred. You can try again or head back home.",
+  "error_detail_unauthenticated": "You need to be signed in to see this. Try signing in again.",
+  "error_detail_forbidden": "You don't have access to this.",
   "error_retry": "Try again",
   "error_home": "Go home",
   "email_booking_confirmed_subject": "Confirmed: {title}",

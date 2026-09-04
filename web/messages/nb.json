@@ -442,6 +442,8 @@
   "error_404_cta": "Gå til forsiden",
   "error_title": "Noe gikk galt",
   "error_body": "En uventet feil oppstod. Du kan prøve igjen eller gå tilbake til forsiden.",
+  "error_detail_unauthenticated": "Du må være innlogget for å se dette. Prøv å logge inn på nytt.",
+  "error_detail_forbidden": "Du har ikke tilgang til dette.",
   "error_retry": "Prøv igjen",
   "error_home": "Gå til forsiden",
   "email_booking_confirmed_subject": "Bekreftet: {title}",
