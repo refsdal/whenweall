@@ -48,7 +48,10 @@ const STRENGTH_LABEL = [
 
 const STRENGTH_CLASS = ['bg-border', 'bg-destructive', 'bg-ifneedbe', 'bg-yes'] as const
 
-function SignupPage() {
+// Exported (rather than kept module-private) purely so its captcha handling can be
+// unit-tested directly — see this file's own test, and verify-email.tsx's VerifyWithToken for the
+// same pattern.
+export function SignupPage() {
   const { next } = Route.useSearch()
   const { publicConfig } = Route.useRouteContext()
   const captchaEnabled = useCaptchaEnabled()
@@ -60,6 +63,12 @@ function SignupPage() {
   const [errors, setErrors] = useState<{ name?: string; email?: string; password?: string }>({})
   const [submitting, setSubmitting] = useState(false)
   const [submittedEmail, setSubmittedEmail] = useState<string | null>(null)
+  // A Turnstile token is good for exactly one submit (`authCaptchaMiddleware` verifies AND
+  // redeems it before Limen ever sees the request), so a rejected signup — a duplicate email,
+  // anything — still burns it; the widget is remounted (via its key) after every failed attempt
+  // so a retry gets a fresh token instead of failing captcha_failed forever. Same pattern as
+  // BookingForm's own `attempt` state.
+  const [attempt, setAttempt] = useState(0)
 
   const strength = passwordStrength(password)
   const showProviders = publicConfig.googleEnabled || publicConfig.oidcEnabled
@@ -87,6 +96,8 @@ function SignupPage() {
       setSubmittedEmail(email)
     } catch (error) {
       toast.error(authErrorMessage(error))
+      setCaptchaToken(null)
+      setAttempt((value) => value + 1)
     } finally {
       setSubmitting(false)
     }
@@ -189,7 +200,7 @@ function SignupPage() {
           )}
         </div>
 
-        <TurnstileField onToken={setCaptchaToken} />
+        <TurnstileField key={attempt} onToken={setCaptchaToken} />
 
         <Button type="submit" className="w-full" disabled={submitting}>
           {submitting ? m.auth_signup_submitting() : m.auth_signup_submit()}

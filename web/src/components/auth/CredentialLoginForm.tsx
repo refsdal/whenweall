@@ -35,6 +35,12 @@ export function CredentialLoginForm({ onSignedIn }: { onSignedIn: (user: AuthUse
   const [submitting, setSubmitting] = useState(false)
   const [outcome, setOutcome] = useState<Outcome>({ kind: 'form' })
   const [resending, setResending] = useState(false)
+  // A Turnstile token is good for exactly one submit (`authCaptchaMiddleware` verifies AND
+  // redeems it before Limen ever sees the request), so a rejected sign-in — wrong password, a
+  // locked/unverified outcome, anything — still burns it; the widget is remounted (via its key)
+  // after every failed attempt so a retry gets a fresh token instead of failing captcha_failed
+  // forever. Same pattern as BookingForm's own `attempt` state.
+  const [attempt, setAttempt] = useState(0)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -65,6 +71,8 @@ export function CredentialLoginForm({ onSignedIn }: { onSignedIn: (user: AuthUse
       await onSignedIn(user)
     } catch (error) {
       toast.error(authErrorMessage(error))
+      setCaptchaToken(null)
+      setAttempt((value) => value + 1)
     } finally {
       setSubmitting(false)
     }
@@ -140,7 +148,7 @@ export function CredentialLoginForm({ onSignedIn }: { onSignedIn: (user: AuthUse
         )}
       </div>
 
-      <TurnstileField onToken={setCaptchaToken} />
+      <TurnstileField key={attempt} onToken={setCaptchaToken} />
 
       <Button type="submit" className="w-full" disabled={submitting}>
         {submitting ? m.auth_login_submitting() : m.auth_login_submit()}

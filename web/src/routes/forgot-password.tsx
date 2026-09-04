@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { toast } from 'sonner'
 import * as z from 'zod'
 import { AuthCard } from '#/components/auth/AuthCard'
 import { TurnstileField } from '#/components/auth/TurnstileField'
 import { Button, buttonVariants } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { Label } from '#/components/ui/label'
+import { authErrorMessage, isCaptchaFailedError } from '#/lib/auth-errors'
 import { useCaptchaEnabled } from '#/lib/captcha'
 import { m } from '#/lib/i18n'
 import { cn } from '#/lib/utils'
@@ -17,13 +19,21 @@ export const Route = createFileRoute('/forgot-password')({
 
 const emailSchema = z.email()
 
-function ForgotPasswordPage() {
+// Exported (rather than kept module-private, like most route components) purely so its captcha
+// handling can be unit-tested directly — see this file's own test, and verify-email.tsx's
+// VerifyWithToken for the same pattern.
+export function ForgotPasswordPage() {
   const captchaEnabled = useCaptchaEnabled()
   const [email, setEmail] = useState('')
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [sent, setSent] = useState(false)
+  // A Turnstile token is good for exactly one submit (`authCaptchaMiddleware` verifies AND
+  // redeems it before Limen ever sees the request); the widget is remounted (via its key) after a
+  // captcha failure so a retry gets a fresh token instead of failing captcha_failed forever. Same
+  // pattern as BookingForm's own `attempt` state.
+  const [attempt, setAttempt] = useState(0)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -38,11 +48,24 @@ function ForgotPasswordPage() {
     setSubmitting(true)
     try {
       await requestPasswordReset(email, captchaToken)
-    } finally {
-      // Always show the success state, whether or not the address has an account — the request
-      // endpoint must not let an attacker learn which emails are registered.
-      setSubmitting(false)
       setSent(true)
+    } catch (err) {
+      // A captcha failure is a request-level problem, not a question about whether the address is
+      // registered — the server's captcha check runs before Limen ever looks the email up
+      // (authCaptchaMiddleware sits in front of the whole /passwords/request-reset route), so
+      // surfacing it leaks nothing an attacker could use. Reset the burned token and let the user
+      // retry with a fresh one instead of silently claiming success for a request that never went
+      // through. Every other failure still shows the success state below — this endpoint must
+      // never let an attacker learn which emails are registered.
+      if (isCaptchaFailedError(err)) {
+        toast.error(authErrorMessage(err))
+        setCaptchaToken(null)
+        setAttempt((value) => value + 1)
+      } else {
+        setSent(true)
+      }
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -78,7 +101,7 @@ function ForgotPasswordPage() {
           )}
         </div>
 
-        <TurnstileField onToken={setCaptchaToken} />
+        <TurnstileField key={attempt} onToken={setCaptchaToken} />
 
         <Button type="submit" className="w-full" disabled={submitting || (captchaEnabled && !captchaToken)}>
           {submitting ? m.auth_forgot_submitting() : m.auth_forgot_submit()}
