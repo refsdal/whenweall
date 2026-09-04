@@ -18,7 +18,7 @@ import (
 func fullChain(logger *slog.Logger, final http.Handler) http.Handler {
 	h := httpserver.Recover(logger)(final)
 	h = httpserver.RequestLogger(logger)(h)
-	h = httpserver.SecurityHeaders(h)
+	h = httpserver.SecurityHeaders(httpserver.SecurityPolicy{})(h)
 	return h
 }
 

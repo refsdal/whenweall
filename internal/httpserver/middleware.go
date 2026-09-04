@@ -63,14 +63,27 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// SecurityHeaders sets the fixed set of security headers on every response.
-func SecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("X-Frame-Options", "DENY")
-		next.ServeHTTP(w, r)
-	})
+// SecurityHeaders sets the fixed security headers on every response — the three the first cut
+// shipped (nosniff, Referrer-Policy, X-Frame-Options) plus Permissions-Policy, the computed
+// Content-Security-Policy (see csp.go) and, for an https APP_URL, Strict-Transport-Security.
+// policy is built once by New; this middleware only ever copies strings.
+func SecurityHeaders(policy SecurityPolicy) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+			if policy.CSP != "" {
+				h.Set("Content-Security-Policy", policy.CSP)
+			}
+			if policy.HSTS {
+				h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // Recover catches panics from downstream handlers, logs the stack, and responds with the

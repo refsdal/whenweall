@@ -23,6 +23,9 @@ type Server struct {
 	authSvc *auth.Service
 	mux     *http.ServeMux
 	logger  *slog.Logger
+	// policy is the process-wide Content-Security-Policy/HSTS decision, computed once here from
+	// the embedded index.html's inline scripts and cfg.AppURL's scheme — see csp.go.
+	policy SecurityPolicy
 }
 
 // New builds the full mux: health check, the auth API (mounted at /api/v1/auth/), API 404
@@ -36,6 +39,7 @@ func New(cfg *config.Config, sqlDB *sql.DB, authSvc *auth.Service) *Server {
 		authSvc: authSvc,
 		mux:     http.NewServeMux(),
 		logger:  slog.Default(),
+		policy:  BuildSecurityPolicy(cfg.AppURL, EmbeddedIndexHTML()),
 	}
 	s.routes()
 	return s
@@ -202,7 +206,7 @@ func (s *Server) Handler() http.Handler {
 	h = APIOnly(s.authSvc.Middleware)(h)
 	h = Recover(s.logger)(h)
 	h = RequestLogger(s.logger)(h)
-	h = SecurityHeaders(h)
+	h = SecurityHeaders(s.policy)(h)
 	return h
 }
 
