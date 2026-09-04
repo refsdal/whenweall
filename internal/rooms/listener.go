@@ -64,17 +64,39 @@ const (
 // snapshot refetch, triggered by this nudge — not any DB-side replay from here.
 //
 // Run always returns ctx.Err() (nil is never a possible return): the only way out of its loop is
-// ctx ending, whether that happens before the first connection attempt or in the middle of one.
+// ctx ending, whether that happens before the first connection attempt or in the middle of one —
+// and it returns only AFTER shutdown has drained this replica's WebSockets and presence rows.
 func (h *Hub) Run(ctx context.Context) error {
 	// Presence's boot sweep and heartbeat (presence.go) are wired in here, not because they have
-	// anything to do with the LISTEN session this function otherwise manages, but because Run is
-	// this Hub's one "I am now alive as a replica" entry point — the natural place to start and
-	// stop them alongside everything else this process does for as long as ctx lives.
+	// anything to do with the LISTEN session runListener manages, but because Run is this Hub's
+	// one "I am now alive as a replica" entry point — the natural place to start them, and
+	// (shutdown, below) the natural place to undo them when ctx ends.
 	if err := h.presenceBootSweep(ctx); err != nil {
 		h.log.Error("rooms: presence boot sweep", "replica_id", h.replicaID, "error", err)
 	}
 	go h.presenceHeartbeatLoop(ctx)
 
+	err := h.runListener(ctx)
+	h.shutdown()
+	return err
+}
+
+// shutdown is Run's exit path, run once ctx is done: close every live WebSocket with a GoingAway
+// frame and wait for its handler (ws.go: closeAllConns), then delete this replica's presence rows
+// (presence.go: presenceShutdownSweep). Both run on fresh, bounded contexts — Run's own ctx is
+// already done by the time this is called.
+func (h *Hub) shutdown() {
+	h.closeAllConns()
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	if err := h.presenceShutdownSweep(ctx); err != nil {
+		h.log.Error("rooms: presence shutdown sweep", "replica_id", h.replicaID, "error", err)
+	}
+}
+
+// runListener owns the LISTEN connection loop — see Run's doc comment for the contract (always
+// returns ctx.Err(); resync after every successful LISTEN; reconnect with jittered backoff).
+func (h *Hub) runListener(ctx context.Context) error {
 	backoff := initialBackoff
 	reconnecting := false
 

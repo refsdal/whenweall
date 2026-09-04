@@ -99,16 +99,54 @@ func BroadcastPresenceTotal(ctx context.Context, sqlDB db.DBTX, roomKey string) 
 }
 
 // presenceBootSweep deletes any ws_presence rows already tagged with this replica's id, called
-// once from Run before it starts listening. In the hub's current design this is a defensive
-// no-op in practice — NewHub's replicaID is a fresh random id every process start (db.NewID()),
-// so no pre-existing row can carry it — but it is the direct port of presence.ts's
-// clearReplicaPresence, run at boot rather than at graceful shutdown (Run has no shutdown hook to
-// call it from; here, ctx simply ending IS how a replica goes away). It costs one cheap DELETE to
-// keep as a safety net against a future identity scheme (e.g. a stable per-pod id that could
-// survive a crash-restart) making it meaningful again.
+// once from Run before it starts listening. With NewHub's replicaID a fresh random id every
+// process start (db.NewID()) no pre-existing row can carry it, so this is a defensive no-op in
+// practice — presenceShutdownSweep below is the one that actually clears a replica's rows, at
+// graceful shutdown. It costs one cheap DELETE to keep as a safety net against a future identity
+// scheme (e.g. a stable per-pod id that could survive a crash-restart) making it meaningful again.
 func (h *Hub) presenceBootSweep(ctx context.Context) error {
 	_, err := h.sqlDB.ExecContext(ctx, `DELETE FROM ws_presence WHERE replica_id = $1`, h.replicaID)
 	return err
+}
+
+// presenceShutdownSweep is presenceBootSweep's counterpart at graceful shutdown — the direct port
+// of presence.ts's clearReplicaPresence, run at the moment this replica goes away rather than
+// only defensively at the next boot. By the time it runs, closeAllConns has let every handler's
+// own presenceLeave land, so the rows it deletes should all be at count 0; a row still above 0
+// means a handler did not unwind within the grace period (a wedged peer), and that is exactly the
+// over-count this sweep exists to remove now instead of leaving it for internal/jobs's
+// presence:sweep to notice ~90s later. Rooms whose deleted row still carried viewers get a
+// corrected total broadcast, same as that job does.
+func (h *Hub) presenceShutdownSweep(ctx context.Context) error {
+	rows, err := h.sqlDB.QueryContext(ctx,
+		`DELETE FROM ws_presence WHERE replica_id = $1 RETURNING room_key, count`, h.replicaID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stillCounted []string
+	for rows.Next() {
+		var (
+			roomKey string
+			count   int64
+		)
+		if err := rows.Scan(&roomKey, &count); err != nil {
+			return err
+		}
+		if count > 0 {
+			stillCounted = append(stillCounted, roomKey)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, roomKey := range stillCounted {
+		if err := BroadcastPresenceTotal(ctx, h.sqlDB, roomKey); err != nil {
+			h.log.Error("rooms: presence shutdown broadcast", "room_key", roomKey, "error", err)
+		}
+	}
+	return nil
 }
 
 // presenceHeartbeatLoop re-stamps every ws_presence row this replica owns AND STILL HAS AT LEAST

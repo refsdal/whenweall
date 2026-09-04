@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -118,10 +119,19 @@ func serve() int {
 	if u, err := url.Parse(cfg.AppURL); err == nil && u.Host != "" {
 		hub.OriginPatterns = []string{u.Host}
 	}
-	// Run always returns ctx.Err() (never nil, per its own doc comment) — on an ordinary
-	// SIGINT/SIGTERM shutdown that's just context.Canceled, not a failure worth logging; Run's
-	// own internal logging already covers every real connection/LISTEN problem along the way.
-	go func() { _ = hub.Run(ctx) }()
+	// bg tracks the two long-lived background goroutines (hub.Run, worker.Run) so serve() can wait
+	// for them to unwind — the hub closing its WebSockets with a GoingAway frame and clearing this
+	// replica's presence rows, the worker finishing its current poll — BEFORE the deferred
+	// sqlDB.Close() above pulls the pool out from under them. Run always returns ctx.Err() (never
+	// nil, per its own doc comment) — on an ordinary SIGINT/SIGTERM that's just context.Canceled,
+	// not a failure worth logging; Run's own internal logging already covers every real
+	// connection/LISTEN problem along the way.
+	var bg sync.WaitGroup
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		_ = hub.Run(ctx)
+	}()
 	statsSvc := rooms.NewStatsService(sqlDB, slog.Default())
 
 	// pollsSvc owns the poll/sign-up-sheet domain: its HTTP surface (Register, below) and its
@@ -145,7 +155,11 @@ func serve() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	go worker.Run(ctx)
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		worker.Run(ctx)
+	}()
 
 	authSvc, err := auth.New(cfg, sqlDB)
 	if err != nil {
@@ -166,8 +180,16 @@ func serve() int {
 			httpserver.RegisterTestRoutes(mux, cfg, authSvc, pollsSvc, bookingsSvc)
 		}
 	})
-	if err := srv.ListenAndServe(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	serveErr := srv.ListenAndServe(ctx)
+	// Whether ListenAndServe returned because ctx ended (SIGTERM — the hub and worker are already
+	// unwinding) or because the listener itself failed (they are not), the background goroutines
+	// stop the same way: cancel, then wait for them to actually exit. A job in flight at this
+	// moment sees its ctx cancelled and is retried later by the at-least-once queue (5-minute lock
+	// expiry) — an accepted trade for never holding shutdown hostage to a two-minute JobTimeout.
+	cancel()
+	bg.Wait()
+	if serveErr != nil {
+		fmt.Fprintln(os.Stderr, serveErr)
 		return 1
 	}
 	return 0

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/refsdal/whenweall/internal/db"
 )
 
@@ -157,6 +159,19 @@ type Hub struct {
 	// topology guarantees that. Explicitly allow-listing the configured AppURL's own host here
 	// closes that gap without weakening the existing check at all.
 	OriginPatterns []string
+
+	// connsMu guards conns and closing — the live-connection registry ServeWS maintains
+	// (ws.go: trackConn/untrackConn) so Run's exit path (listener.go: shutdown → ws.go:
+	// closeAllConns) can send every open WebSocket a StatusGoingAway close frame and wait for its
+	// handler to unwind. http.Server.Shutdown will not do this for us: by documented design it
+	// "does not attempt to close nor wait for hijacked connections such as WebSockets", so
+	// without this registry a SIGTERM left every client with a bare TCP drop and every handler's
+	// deferred presenceLeave unrun. connWG counts handlers that have registered and not yet
+	// unregistered; closing, once set, refuses new registrations.
+	connsMu sync.Mutex
+	conns   map[*websocket.Conn]struct{}
+	closing bool
+	connWG  sync.WaitGroup
 }
 
 // NewHub builds a Hub. listenURL is used only for Run's dedicated LISTEN connection (a pooled
@@ -178,6 +193,7 @@ func NewHub(listenURL string, sqlDB *sql.DB, log *slog.Logger) *Hub {
 		PingTimeout:       defaultPingTimeout,
 		ListenIdleTimeout: defaultListenIdleTimeout,
 		ListenPingTimeout: defaultListenPingTimeout,
+		conns:             make(map[*websocket.Conn]struct{}),
 	}
 }
 

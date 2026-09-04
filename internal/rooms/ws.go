@@ -100,6 +100,14 @@ func (h *Hub) ServeWS(opts WSOptions) http.HandlerFunc {
 		}
 		defer func() { _ = conn.CloseNow() }()
 
+		if !h.trackConn(conn) {
+			// Shutdown began between Accept and here: say goodbye properly rather than let the
+			// deferred CloseNow drop the peer without a close frame.
+			_ = conn.Close(websocket.StatusGoingAway, "server shutting down")
+			return
+		}
+		defer h.untrackConn(conn)
+
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
@@ -339,5 +347,68 @@ func (h *Hub) keepaliveLoop(ctx context.Context, conn *websocket.Conn, cancel co
 				return
 			}
 		}
+	}
+}
+
+// shutdownGrace bounds how long closeAllConns waits for handlers to unwind after every connection
+// has been sent its close frame. conn.Close itself waits up to 5s for the peer's answering close
+// frame before giving up, so this is "that, plus a little" — and comfortably inside compose.yaml's
+// stop_grace_period. http.Server.Shutdown's own 10s drain runs concurrently, not additively.
+const shutdownGrace = 8 * time.Second
+
+// trackConn registers conn in the hub's live registry. Reports false — registering nothing — once
+// shutdown has begun, so a connection that wins the race against closeAllConns is refused instead
+// of being left open unnoticed.
+func (h *Hub) trackConn(conn *websocket.Conn) bool {
+	h.connsMu.Lock()
+	defer h.connsMu.Unlock()
+	if h.closing {
+		return false
+	}
+	h.conns[conn] = struct{}{}
+	h.connWG.Add(1)
+	return true
+}
+
+// untrackConn is trackConn's deferred counterpart: it runs after the handler's presenceLeave and
+// unsubscribe defers, so connWG reaching zero means every connection's cleanup has landed.
+func (h *Hub) untrackConn(conn *websocket.Conn) {
+	h.connsMu.Lock()
+	delete(h.conns, conn)
+	h.connsMu.Unlock()
+	h.connWG.Done()
+}
+
+// closeAllConns flips the hub into shutdown, sends every live connection a StatusGoingAway close
+// frame, and waits (bounded by shutdownGrace) for every ServeWS handler to run its deferred
+// cleanup. The close handshake completing — or the peer vanishing — is what unblocks each
+// handler's readPumpLoop, so no per-connection ctx needs cancelling here.
+func (h *Hub) closeAllConns() {
+	h.connsMu.Lock()
+	h.closing = true
+	open := make([]*websocket.Conn, 0, len(h.conns))
+	for conn := range h.conns {
+		open = append(open, conn)
+	}
+	h.connsMu.Unlock()
+
+	for _, conn := range open {
+		// Close performs the full handshake (write the frame, wait up to 5s for the peer's) and
+		// so can block for seconds per peer — every connection gets its own goroutine rather
+		// than a sequential walk; a thousand idle tabs must not take a thousand × 5s to leave.
+		go func(c *websocket.Conn) {
+			_ = c.Close(websocket.StatusGoingAway, "server shutting down")
+		}(conn)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		h.connWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(shutdownGrace):
+		h.log.Warn("rooms: websocket handlers did not unwind within shutdown grace", "grace", shutdownGrace, "open", len(open))
 	}
 }

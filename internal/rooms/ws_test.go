@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -330,5 +331,70 @@ func TestServeWS_AuthorizeErrorRejectsBeforeUpgrade(t *testing.T) {
 				t.Errorf("status = %d, want a 4xx", resp.StatusCode)
 			}
 		})
+	}
+}
+
+// TestServeWS_ShutdownClosesGoingAwayAndClearsPresence is the graceful-shutdown proof: cancelling
+// Run's ctx must (1) send every live client a StatusGoingAway close frame — a well-behaved client
+// reconnects, to whichever replica survives the deploy — rather than a bare TCP drop, (2) let each
+// handler unwind (its deferred presenceLeave lands), and (3) delete this replica's ws_presence
+// rows, so the "N viewing" pill on other replicas never inherits a dead replica's viewers for the
+// ~90s it used to take internal/jobs's presence:sweep to notice.
+func TestServeWS_ShutdownClosesGoingAwayAndClearsPresence(t *testing.T) {
+	url, sqlDB := testdb.URL(t)
+	hub := rooms.NewHub(url, sqlDB, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- hub.Run(ctx) }()
+	awaitListening(t, hub, sqlDB)
+	const roomKey = "poll:ws-shutdown"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", hub.ServeWS(rooms.WSOptions{
+		Authorize: func(r *http.Request) (string, error) { return roomKey, nil },
+		Presence:  true,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	conn := dialWS(t, server, "/ws")
+	defer func() { _ = conn.CloseNow() }()
+	_ = readWSFrame(t, conn, 5*time.Second) // snapshot
+	awaitPresenceFrame(t, conn, 1)
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("hub.Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("hub.Run did not return within 15s of cancel — shutdown is not draining connections")
+	}
+
+	// The client must have been told why: a GoingAway close frame. A trailing presence frame
+	// (this connection's own leave) may precede it and is fine.
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	for {
+		_, _, err := conn.Read(readCtx)
+		if err == nil {
+			continue
+		}
+		if got := websocket.CloseStatus(err); got != websocket.StatusGoingAway {
+			t.Fatalf("close status = %v (err %v), want StatusGoingAway", got, err)
+		}
+		break
+	}
+
+	var rows int
+	if err := sqlDB.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM ws_presence WHERE room_key = $1`, roomKey,
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("ws_presence rows for %s after shutdown = %d, want 0 (this replica's rows must be deleted on the way out)", roomKey, rows)
 	}
 }
