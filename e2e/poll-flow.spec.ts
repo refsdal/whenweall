@@ -4,7 +4,6 @@ import {
   signIn,
   test,
   waitForHydration,
-  waitForTurnstile,
 } from './fixtures'
 
 test('create a poll, guest votes, edits their answer, owner finalizes, .ics downloads', async ({
@@ -57,7 +56,6 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
     await expect(guestCells).toHaveCount(2)
     await guestCells.nth(0).click()
     await guestCells.nth(1).click()
-    await waitForTurnstile(guestPage)
     await guestPage.getByRole('button', { name: 'Save my answer' }).click()
 
     const yourRow = guestPage.locator('[data-testid^="participant-row-"]').filter({

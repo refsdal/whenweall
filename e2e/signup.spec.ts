@@ -1,8 +1,8 @@
-import { expect, signIn, test, waitForHydration, waitForTurnstile } from './fixtures'
+import { expect, signIn, test, waitForHydration } from './fixtures'
 
 /**
  * Claims a slot for a fresh guest page: opens the identity sheet on first claim, fills the name,
- * waits out the Turnstile test widget, and submits. Mirrors the flow a real guest goes through
+ * and submits. Mirrors the flow a real guest goes through
  * the first time they press "Claim spot" on a sign-up sheet — see `IdentitySheet.tsx`.
  */
 async function claimSlotAsNewGuest(
@@ -16,7 +16,6 @@ async function claimSlotAsNewGuest(
   const identityDialog = page.getByRole('dialog', { name: "Who's taking the slot?" })
   await expect(identityDialog).toBeVisible()
   await identityDialog.getByLabel('Your name').fill(name)
-  await waitForTurnstile(page)
   await identityDialog.getByRole('button', { name: 'Sign me up' }).click()
   await expect(identityDialog).toBeHidden()
 }

@@ -1,16 +1,20 @@
 import { defineConfig, devices } from '@playwright/test'
 import {
+  APP_PORT,
+  APP_URL,
   AUTH_SECRET,
   DB_CONTAINER,
+  DB_IMAGE,
   DB_NAME,
   DB_PASSWORD,
   DB_PORT,
   DB_USER,
   MAILPIT_CONTAINER,
   MAILPIT_HTTP_PORT,
+  MAILPIT_IMAGE,
   MAILPIT_SMTP_PORT,
-  TURNSTILE_SECRET_KEY,
-  TURNSTILE_SITE_KEY,
+  RUN_MARKER,
+  SERVER_MODE,
 } from './e2e/e2e-env'
 
 /**
@@ -20,10 +24,17 @@ import {
  * handles it, and the built SPA is what internal/httpserver/spa.go actually serves in every real
  * environment (see Dockerfile's own `web` build stage).
  *
- * Postgres and Mailpit run as two throwaway Docker containers, started by `e2e/run-server.sh`
- * (webServer's own command — see its doc comment for why container startup lives there rather
- * than in Playwright's `globalSetup` hook) and stopped in `globalTeardown` once the whole suite
- * finishes.
+ * Two server modes, picked by `E2E_SERVER` (see e2e/e2e-env.ts):
+ *   - `go` (default): `e2e/run-server.sh` starts Postgres + Mailpit as two throwaway `docker run`
+ *     containers, builds the SPA, and `go run`s the server on :3100. `global-teardown.ts` removes
+ *     exactly the containers that script recorded in its marker file, nothing else.
+ *   - `image`: the built Docker image is already running via `e2e/compose-e2e.sh up -d --wait`
+ *     (compose.yaml + compose.e2e.yaml — read_only, cap_drop ALL, no-new-privileges, user 65532).
+ *     Playwright reuses that server; run-server.sh only waits for /healthz if it is ever invoked.
+ *
+ * Turnstile is deliberately NOT configured here: the suite covers the documented default (captcha
+ * off) and no longer depends on challenges.cloudflare.com. The server-side verifier is unit-tested
+ * in internal/httpserver/turnstile_test.go.
  */
 
 /**
@@ -53,38 +64,45 @@ export default defineConfig({
   // A fixed browser locale keeps Paraglide's `preferredLanguage` strategy deterministic: without
   // it the suite resolves whatever `Accept-Language` the host machine happens to send, and the
   // English assertions in `i18n.spec.ts` pass or fail depending on the developer's OS settings.
-  use: { baseURL: 'http://localhost:3000', locale: 'en-US', trace: 'on-first-retry' },
+  use: { baseURL: APP_URL, locale: 'en-US', trace: 'on-first-retry' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   globalTeardown: './e2e/global-teardown.ts',
   webServer: {
     command: 'bash e2e/run-server.sh',
-    url: 'http://localhost:3000/healthz',
-    reuseExistingServer: !process.env.CI,
+    url: `${APP_URL}/healthz`,
+    // Locally a developer may keep `bash e2e/run-server.sh` running and iterate; in image mode the
+    // compose stack IS the server and Playwright must not try to start another one on the same
+    // port (it would refuse with "already used" otherwise).
+    reuseExistingServer: !process.env.CI || SERVER_MODE === 'image',
     timeout: 180_000,
     env: {
-      // Read by e2e/run-server.sh to start/probe the throwaway containers.
+      // Read by e2e/run-server.sh to pick its branch, start/probe the throwaway containers and
+      // record what it started.
+      E2E_SERVER: SERVER_MODE,
+      APP_PORT: String(APP_PORT),
+      RUN_MARKER,
       DB_CONTAINER,
+      DB_IMAGE,
       DB_PORT: String(DB_PORT),
       DB_USER,
       DB_PASSWORD,
       DB_NAME,
       MAILPIT_CONTAINER,
+      MAILPIT_IMAGE,
       MAILPIT_SMTP_PORT: String(MAILPIT_SMTP_PORT),
       MAILPIT_HTTP_PORT: String(MAILPIT_HTTP_PORT),
       // Read by cmd/whenweall itself (internal/config.Load).
       ENABLE_TEST_ROUTES: 'true',
       APP_ENV: 'test',
-      APP_URL: 'http://localhost:3000',
-      PORT: '3000',
+      APP_URL,
+      PORT: String(APP_PORT),
       DATABASE_URL: databaseURL,
       DATABASE_POOL_SIZE: '10',
-      AUTH_SECRET: AUTH_SECRET,
+      AUTH_SECRET,
       SMTP_HOST: 'localhost',
       SMTP_PORT: String(MAILPIT_SMTP_PORT),
       SMTP_SECURE: 'false',
       EMAIL_FROM: 'whenweall e2e <no-reply@localhost>',
-      TURNSTILE_SITE_KEY: TURNSTILE_SITE_KEY,
-      TURNSTILE_SECRET_KEY: TURNSTILE_SECRET_KEY,
       TRUST_PROXY: 'false',
       MIGRATE_ON_BOOT: 'true',
     },

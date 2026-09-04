@@ -4,7 +4,6 @@ import {
   signIn,
   test,
   waitForHydration,
-  waitForTurnstile,
 } from './fixtures'
 
 test('a visitor books the first open slot, the owner sees it, and cancelling frees it live', async ({
@@ -60,7 +59,6 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     await expect(dialog).toBeVisible()
     await visitorPage.locator('#booking-name').fill('Visitor One')
     await visitorPage.locator('#booking-email').fill('visitor-one@example.com')
-    await waitForTurnstile(visitorPage)
     await visitorPage.getByRole('button', { name: 'Confirm booking' }).click()
 
     const confirmed = visitorPage.getByTestId('booking-confirmed')

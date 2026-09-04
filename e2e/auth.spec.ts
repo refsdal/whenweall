@@ -1,4 +1,4 @@
-import { expect, signIn, test, waitForHydration, waitForTurnstile } from './fixtures'
+import { expect, signIn, test, waitForHydration } from './fixtures'
 
 test.describe('auth', () => {
   test('signing up shows the check-your-inbox screen', async ({ page }) => {
@@ -8,7 +8,6 @@ test.describe('auth', () => {
     await page.locator('#signup-name').fill('New Person')
     await page.locator('#signup-email').fill(`signup-${Date.now()}@example.com`)
     await page.locator('#signup-password').fill('correct horse battery staple')
-    await waitForTurnstile(page)
     await page.getByRole('button', { name: 'Create account' }).click()
 
     await expect(page.getByRole('heading', { name: 'Check your inbox' })).toBeVisible({
@@ -29,7 +28,6 @@ test.describe('auth', () => {
 
     await page.locator('#login-email').fill(user.email)
     await page.locator('#login-password').fill('definitely-the-wrong-password')
-    await waitForTurnstile(page)
     await page.getByRole('button', { name: 'Sign in' }).click()
 
     await expect(page.getByText("That email or password isn't right.")).toBeVisible()

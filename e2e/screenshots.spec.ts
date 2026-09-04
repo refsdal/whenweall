@@ -6,7 +6,6 @@ import {
   signIn,
   test,
   waitForHydration,
-  waitForTurnstile,
 } from './fixtures'
 
 /**
@@ -78,7 +77,6 @@ test('poll page with votes', { tag: '@screenshots' }, async ({ page, browser, us
       for (const [index, taps] of answers.entries()) {
         for (let tap = 0; tap < taps; tap++) await cells.nth(index).click()
       }
-      await waitForTurnstile(guest)
       await guest.getByRole('button', { name: 'Save my answer' }).click()
       await expect(
         guest.locator('[data-testid^="participant-row-"]').filter({ hasText: name }),
@@ -152,7 +150,6 @@ test('sign-up sheet', { tag: '@screenshots' }, async ({ page, browser, userWithS
 
     const identityDialog = guest.getByRole('dialog', { name: "Who's taking the slot?" })
     await identityDialog.getByLabel('Your name').fill('Kari')
-    await waitForTurnstile(guest)
     await identityDialog.getByRole('button', { name: 'Sign me up' }).click()
     await expect(identityDialog).toBeHidden()
   } finally {
