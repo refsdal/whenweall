@@ -62,6 +62,23 @@ if you need the history.
 with 400 before anything else runs — a staff member acting on themselves would revoke
 their own session mid-request with no recovery path short of another staff member's help.
 
+### A destructive route this console does not offer
+
+`DELETE /api/v1/auth/organizations/<id>` (from the underlying auth library, not this
+console) has no last-owner guard — unlike leaving an organization or removing a member,
+deleting one is not blocked just because the caller is its only owner. Any owner of an
+organization can call it directly, as an ordinary signed-in user, no staff session
+required. For an organization with more than one member, that one request deletes every
+poll and every booking page the organization owns (both cascade from `organizations` in
+the schema), with no confirmation prompt and no audit row anywhere — this console's own
+audit log only covers actions taken *through the console*.
+
+This is a known gap, inherited from the auth library, not something this admin console
+adds a guard for — whether to add one is a product decision, not an operational one, and
+is out of scope for this document. If you are investigating unexplained data loss for an
+organization, this route is one thing to rule out; there is nothing in the audit log that
+will show it happened.
+
 ## Reading the audit log
 
 Every mutating action (lock, unlock, delete, job retry) is recorded, whether it came from
@@ -96,7 +113,10 @@ The log has no mutator by design — nothing in the application can edit or dele
 Every background job — mail delivery (`mail:send` for sign-in/verification/reset/invite
 mail, `mail:poll` and `mail:booking` for notifications), poll deadlines and digests,
 booking reminders — is a row in `scheduled_jobs`, retried with
-backoff until its attempt budget is spent (10 for mail, 5 otherwise). A job that still
+backoff until its attempt budget is spent (10 for mail, 5 otherwise; the three
+`deadletter:sweep`/`rooms:prune`/`presence:sweep`/`ratelimit:sweep` housekeeping chains
+carry a far larger budget by design — see [Checking housekeeping is alive](#checking-housekeeping-is-alive)
+below — so they never dead-letter and never appear on this screen). A job that still
 fails then **parks as dead-lettered**: it stops retrying and appears at `/admin/jobs` with
 its kind, attempt count, last error and last run time. The dashboard's *Failed jobs* count
 is the size of that list; *Mail queue depth* is every `mail:*` job still waiting or
@@ -111,24 +131,55 @@ job that isn't dead-lettered — a stale tab, or the worker already has it — a
 
 ### Dead-letter retention
 
-A queued mail's payload is the rendered message: the recipient address and, for
+`mail:send`'s payload is the rendered message: the recipient address and, for
 verification and password-reset mail, the raw token in the link. A dead-lettered row would
 otherwise keep that readable to anyone with database access for as long as it sat there.
-So a housekeeping job (`deadletter:sweep`, hourly) does two things:
+`mail:poll` and `mail:booking` (the other two mail kinds, used for poll and booking
+notifications) carry no such thing — ids only. `mail:poll`'s payload is a poll id plus a
+participant or user id (internal/polls' `mailPollPayload`); `mail:booking`'s is a booking
+id plus which side to notify, `visitor` or `organiser` (internal/bookings'
+`mailBookingPayload`). Neither ever carries an address or a token, so there is nothing in
+them this retention exists to protect. So a housekeeping job (`deadletter:sweep`, hourly)
+does two things:
 
-- **24 hours** after a `mail:*` job dead-letters, its **payload is nulled**. Kind, attempt
-  count and last error are kept, so the row still tells you what failed and why — but it
-  can no longer be retried (there is nothing left to send), and the console shows
+- **24 hours** after a `mail:send` job dead-letters, its **payload is nulled**. Kind,
+  attempt count and last error are kept, so the row still tells you what failed and why —
+  but it can no longer be retried (there is nothing left to send), and the console shows
   *Payload purged — can't be retried* in place of the button; the API answers
   `409 payload_expired`. If a batch of mail bounced and you want it resent, the console
   gives you a day. After that, the user re-requests (a new verification or reset mail) —
   which is also the only safe answer, since the original token has expired anyway.
-  Non-mail jobs carry ids only and are never purged.
+  Every other kind — `mail:poll`, `mail:booking`, and every non-mail kind — keeps its
+  payload indefinitely (until the 30-day row delete below) and stays retryable, precisely
+  because an SMTP outage dead-lettering a batch of booking confirmations or poll digests
+  must not make them permanently unresendable: unlike a verification or reset mail, a
+  visitor cannot simply re-request a booking confirmation.
 - **30 days** after any job dead-letters, the **row is deleted**. The failed-jobs screen
   is a to-do list, not an archive; the audit log keeps the `job.retry` entries.
 
 Age is measured on the job's last scheduled run, so a job you retried that dies again gets
 a fresh 24 hours.
+
+### Checking housekeeping is alive
+
+`deadletter:sweep` is the only thing enforcing the retention above, and because it shares
+the housekeeping chains' deliberately huge attempt budget (so a transient blip can never
+permanently kill a self-perpetuating chain — see `housekeepingMaxAttempts` in
+`internal/jobs/housekeeping.go`), it can never dead-letter and so never shows up on
+`/admin/jobs` even if it has stalled. There is no console signal for this — check it
+directly:
+
+```bash
+docker compose exec db psql -U whenweall -d whenweall -c \
+  "select kind, run_at, attempts from scheduled_jobs where kind = 'deadletter:sweep'"
+```
+
+One row, `run_at` no more than an hour or so in the future (it reschedules itself hourly on
+every successful run) and `attempts` at 0 — a healthy chain always completes and reschedules
+before it would ever need a retry. A `run_at` stuck in the past, or `attempts` climbing,
+means the sweep itself is failing and needs investigating like any other stuck job — just
+without a console screen to notice it for you. The same query works for
+`rooms:prune`/`presence:sweep`/`ratelimit:sweep` by swapping the `kind`.
 
 ## If an admin account is compromised
 

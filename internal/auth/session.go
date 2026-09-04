@@ -151,13 +151,23 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 			if !ok {
 				// Zero memberships: ensurePersonalOrgOnce's guarantee only holds up to the moment
 				// it cached this user as done — it is never re-checked after that for the rest of
-				// this process's life. But Limen's DeleteOrganization (unlike LeaveOrganization/
+				// this process's life. Limen's DeleteOrganization (unlike LeaveOrganization/
 				// RemoveMember) has no last-owner guard, so a personal-org owner can delete their
 				// own only organization — which clears sessions.active_organization_id and leaves
 				// zero organization_members rows behind, with the cache still marking this user
 				// done. Without re-deriving here, that user would be stuck with no active
 				// organization forever. Clear the cache entry and re-run the same ensure path
 				// (self-healing, not a redesign of it) before giving up.
+				//
+				// This heals ONLY that one user's own now-org-less session — it is not a guard, and
+				// it does nothing about the missing check itself. The same missing last-owner guard
+				// also lets an owner of a MULTI-member organization call DeleteOrganization on it: a
+				// route the SPA never calls, with no confirmation and no audit row, that cascades to
+				// delete every poll and booking_page the organization owns (migrations/00003_polls.sql,
+				// migrations/00004_bookings.sql) out from under every other member. That exposure is
+				// pre-existing (inherited from Limen), is not touched by this self-heal, and whether
+				// to add a guard is a product decision left to docs/admin-console.md's operator note,
+				// not to this comment.
 				s.personalOrgEnsured.Delete(fmt.Sprint(validated.User.ID))
 				s.ensurePersonalOrgOnce(r.Context(), validated.User)
 				org, ok = s.oldestMembership(r.Context(), validated.User)
@@ -189,7 +199,12 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 // organization_members row for this user. Only ErrMemberNotInOrganization counts as dangling: any
 // other error (a closed database, say) returns false, so an infrastructure fault leaves the
 // stored choice alone instead of silently re-pointing someone's active organization on a flaky
-// request — RequireOrgMember downstream still fails closed on its own check.
+// request. Fail-open here is still the right call — a transient error must not evict someone from
+// their own org — but there is no downstream safety net catching the false-negative case on every
+// path: RequireOrgMember re-checks membership on the paths that call it, but polls' and bookings'
+// create/list handlers (internal/polls/handlers.go's handleCreate/handleListMine,
+// internal/bookings/handlers.go's handleCreatePage/handleListMyPages) read sess.ActiveOrgID
+// directly and never call it.
 func (s *Service) membershipDangling(ctx context.Context, orgID, userID any) bool {
 	err := s.orgs.CheckMemberExistsInOrganization(ctx, orgID, userID)
 	switch {
