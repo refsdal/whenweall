@@ -6,6 +6,7 @@ import type { Interval } from '#/lib/availability'
 import { getLocale, m } from '#/lib/i18n'
 import { spring, useReducedMotion } from '#/lib/motion'
 import { slotSummary } from '#/components/booking/BookingForm'
+import { bookingCalendarIcsUrl } from '#/api/bookings'
 
 function pad(value: number): string {
   return String(value).padStart(2, '0')
@@ -111,10 +112,7 @@ export function BookingConfirmed({
 
       <div className="flex flex-wrap gap-2">
         <Button asChild variant="outline" size="sm">
-          <a
-            href={`/booking/${bookingId}/calendar.ics?t=${encodeURIComponent(manageToken)}`}
-            download
-          >
+          <a href={bookingCalendarIcsUrl(bookingId, manageToken)} download>
             <CalendarPlus aria-hidden="true" />
             {m.poll_add_to_calendar()}
           </a>
