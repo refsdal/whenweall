@@ -37,7 +37,7 @@ jobs:
       # Image tags: a version tag push (v1.2.3) publishes semver tags (1.2.3, 1.2); a push to
       # main additionally (and only then) publishes `latest`, so `latest` always tracks main, not
       # whatever the most recent release tag happened to be.
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ghcr.io/refsdal/whenweall
