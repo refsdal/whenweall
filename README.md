@@ -41,8 +41,8 @@ Postgres does the job a cache/broker/queue would otherwise be needed for too (`L
 `NOTIFY` for WebSocket fan-out across replicas, presence and rate-limit tables, a
 `scheduled_jobs` table for timers and the mail queue), so there is exactly one stateful
 service to run and back up. whenweall phones home to nobody; the only outbound calls it
-ever makes are the ones you configure yourself (your SMTP relay, and Google's API if you
-turn on calendar sync).
+ever makes are the ones you configure yourself (your SMTP relay, and Google's OAuth
+endpoints if you turn on Google sign-in).
 
 > **Status.** v1, v2 (sign-up sheets) and v3 (booking pages) are feature-complete and
 > pass their full test suite, but there is no public hosted instance — self-host your own
@@ -160,10 +160,10 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
 - **For organisers** — publish a page at `/book/<handle>/<slug>` with a **weekly
   availability grid** (per-weekday time ranges), slot duration, **buffers** before/after
   each meeting, a **minimum notice** and a **booking horizon**, and **date overrides**
-  for one-off days off or extra hours. Optionally connect **Google Calendar**: busy
-  times block slots automatically, and every booking creates (and later removes) a real
-  event on your calendar. Turn on **reminder e-mails** 24 hours out, and see every
-  booking — upcoming and past, with cancel — on the page's own roster.
+  for one-off days off or extra hours. Turn on **reminder e-mails** 24 hours out, and see
+  every booking — upcoming and past, with cancel — on the page's own roster. Google
+  Calendar sync (busy-time blocking, events on your calendar) is **not available in v5
+  yet** — see [Roadmap](#roadmap).
 - **For visitors** — pick an open slot in **your own time zone**, no account needed.
   Booking gets you a confirmation e-mail with an `.ics` attachment and a **manage
   link** to cancel or reschedule later, no sign-in required — and if you lose that mail,
@@ -172,8 +172,8 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
 ### Under the hood
 
 - **One binary, one database.** `cmd/whenweall` serves the HTTP API, the WebSocket
-  endpoints and the built SPA, runs scheduled jobs (digests, reminders, Google Calendar
-  sync) in-process, and runs its own migrations on boot. Postgres is the only other
+  endpoints and the built SPA, runs scheduled jobs (digests, reminders) in-process, and
+  runs its own migrations on boot. Postgres is the only other
   service — see [Architecture](#architecture).
 - **Postgres is the only source of truth.** Every mutation is a single transaction;
   `FOR UPDATE` locking (not an external lock service) is what makes "two guests claim the
@@ -213,13 +213,12 @@ flowchart LR
     direction TB
     H["net/http API + embedded SPA<br/>internal/httpserver"]
     RM["Realtime hub<br/>internal/rooms"]
-    J["Job worker<br/>internal/jobs<br/>digests · reminders · google:sync"]
+    J["Job worker<br/>internal/jobs<br/>digests · reminders · housekeeping"]
     A["internal/auth<br/>Limen-backed sessions"]
   end
 
   PG[("Postgres<br/>rows · room_events · scheduled_jobs")]
   SMTP["Your SMTP relay"]
-  G["Google Calendar API<br/>freebusy · events (optional)"]
 
   B -- "fetch: /api/v1/*" --> H
   B -. "WebSocket: /api/v1/polls/:id/ws, /api/v1/booking-pages/:id/ws" .-> RM
@@ -227,7 +226,6 @@ flowchart LR
   RM -- "LISTEN/NOTIFY room_events" --> PG
   J -- "claims scheduled_jobs, FOR UPDATE SKIP LOCKED" --> PG
   J -- "verification · confirmations · digests · reminders" --> SMTP
-  J -. "freebusy, create/delete event (optional)" .-> G
   A -- "sessions, orgs, staff" --> PG
 ```
 
@@ -256,16 +254,14 @@ concurrent requests.
 **A booking, end to end.** `internal/bookings`' availability engine is a pure function:
 weekly rules, date overrides, slot duration, buffers, notice, horizon and a list of busy
 intervals in, a deterministic, DST-safe list of open slots out. The public page and the
-booking endpoint call it with the same inputs — booked slots (with their buffers) plus,
-if the organiser connected Google Calendar, that account's freebusy over the requested
-range — so a slot the visitor is shown is always still bookable a moment later, short of
+booking endpoint call it with the same inputs — booked slots, with their buffers — so a
+slot the visitor is shown is always still bookable a moment later, short of
 someone else taking it first. That race is closed the same way a sign-up claim is: the
 write that creates a booking runs inside a transaction that locks the page's relevant
 rows, so two visitors racing for the same slot can never both win it. A confirmed booking
 gets a deterministic, HMAC-derived manage token (the visitor's whole credential for the
-manage link — nothing to store or leak from a database) and, if Google Calendar is
-connected, a real calendar event; cancelling or rescheduling reverses both. A
-`booking.reminder` job, scheduled per booking, e-mails both parties 24 hours out.
+manage link — nothing to store or leak from a database). A `booking.reminder` job,
+scheduled per booking, e-mails both parties 24 hours out.
 
 ## Configuration
 
@@ -276,7 +272,7 @@ touches a missing variable is strictly worse than one that refuses to boot at al
 automatically.
 
 **Capability semantics: unset = feature invisible, never broken.** Every optional
-integration below (Turnstile, Google sign-in/calendar, OIDC) is all-or-nothing: leave
+integration below (Turnstile, Google sign-in, OIDC) is all-or-nothing: leave
 every variable for it unset and the feature simply doesn't appear in the UI. Set *some
 but not all* of a group and the feature stays off too, but the server logs a warning at
 boot — a half-configured integration failing silently at request time, pointing nowhere
@@ -314,16 +310,13 @@ booking's manage-link token is deterministically derived from it. Rotate it and 
 signed-in user is signed out, and every outstanding "manage your booking" e-mail link
 anyone is still holding onto stops working. Rotate deliberately, not as a routine.
 
-**Google Calendar scopes.** The same `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` pair that
-enables "Continue with Google" also powers the optional Google Calendar sync on a
-booking page — there is no separate app or credential to create. Sign-in itself only
-ever requests the default profile/email scopes; an organiser who connects Google
-Calendar triggers a second, incremental consent request for
-`https://www.googleapis.com/auth/calendar.readonly` and
-`https://www.googleapis.com/auth/calendar.events` on their existing linked Google
-account. If your OAuth client's consent screen is in "Testing" publishing status, add
-both scopes under **OAuth consent screen → Data access** in the Google Cloud console, or
-the incremental consent prompt fails for anyone outside your test user list.
+**Google Calendar sync is not available in v5 yet.** The `GOOGLE_CLIENT_ID`/
+`GOOGLE_CLIENT_SECRET` pair only powers "Continue with Google", which requests the
+default openid/email/profile scopes and nothing else. The v3 booking-page calendar
+integration (busy-time blocking, events on the organiser's calendar) has not been
+re-enabled in the Go backend: the page editor shows no Google card, the API refuses
+`googleSync: true`, and `GET /api/v1/booking-pages/{id}/google-status` always answers
+"not connected". You do not need to add any calendar scopes to your OAuth consent screen.
 
 ## Reverse proxy
 
@@ -505,7 +498,7 @@ internal/
   polls/                  scheduling polls + sign-up sheets: service layer, HTTP handlers, sqlc queries
   bookings/               1:1 booking pages: availability engine, service layer, HTTP handlers, .ics
   rooms/                  the realtime hub: LISTEN/NOTIFY fan-out, WebSocket routes, PROTOCOL.md
-  jobs/                   scheduled-job worker: digests, reminders, google:sync, housekeeping
+  jobs/                   scheduled-job worker: digests, reminders, housekeeping
   mailer/                 SMTP transport + html/template rendering
   ics/                    shared RFC 5545 building blocks (escaping, folding, VCALENDAR wrapper)
   httpserver/             mux wiring, auth middleware, rate limiting, the embedded SPA (go:embed)
@@ -557,7 +550,8 @@ To add a locale — say German:
   cancel/reschedule via a manage link, reminder e-mails, and an organiser roster per
   page.
 - **Go rewrite — done.** The whole backend left Cloudflare Workers/D1/Durable Objects
-  for a single Go binary and Postgres — see [Architecture](#architecture).
+  for a single Go binary and Postgres — see [Architecture](#architecture). One v3
+  feature did not make the cut yet: Google Calendar sync (below).
 
 ### What's next
 
@@ -565,8 +559,11 @@ No date attached yet — ideas under consideration:
 
 - **Round-robin / team pages** — one link that distributes bookings across several
   organisers' calendars.
-- **Google Meet links** — auto-attach a Meet link to the calendar event a booking
-  creates, instead of a plain text location.
+- **Google Calendar sync (return)** — re-enable v3's busy-time blocking and event
+  creation once incremental consent for the calendar scopes is wired through the auth
+  layer; the Go sync code is in the tree, dormant.
+- **Google Meet links** — once calendar sync is back, auto-attach a Meet link to the
+  event a booking creates, instead of a plain text location.
 - **Waitlists** — let a visitor join a full or past-notice slot and get offered it if
   it opens back up.
 
