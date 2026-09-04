@@ -556,32 +556,36 @@ func (s *Service) SetStatus(ctx context.Context, pollID, orgID, status string) e
 // with the poll.finalized email channel on, EXCLUDING the acting user (resolveRecipients already
 // drops actorUserID) and excluding anyone already enqueued the direct-mail way above (so a
 // subscribed owner/participant never gets two "finalized" emails for the same event).
-func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUserID string) error {
+// FinalizeWithCount is Finalize's implementation, additionally reporting how many distinct
+// recipients a "finalized" mail:poll job was enqueued for — the `{ sent }` count finalizePoll
+// (polls.functions.ts) returned and the SPA's success toast prints. Finalize below keeps the
+// error-only signature every other caller uses.
+func (s *Service) FinalizeWithCount(ctx context.Context, pollID, orgID, optionID, actorUserID string) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := queries.New(tx)
 
 	poll, err := requireOrgPoll(ctx, q, pollID, orgID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if poll.Type == string(PollTypeSignup) {
-		return newValidationError("type", "signup polls cannot be finalized")
+		return 0, newValidationError("type", "signup polls cannot be finalized")
 	}
 	if poll.Status == pollFinalizedStatus {
 		// Plain ErrConflict, deliberately not ErrPollFinalized: finalizePoll's own "already
 		// finalized" guard (service.ts) throws the plain CONFLICT code, not POLL_FINALIZED — see
 		// errors.go's package doc comment for why the two near-identical English messages carry
 		// different TS codes.
-		return fmt.Errorf("%w: poll is already finalized", ErrConflict)
+		return 0, fmt.Errorf("%w: poll is already finalized", ErrConflict)
 	}
 
 	options, err := q.ListOptionsByPoll(ctx, pollID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	found := false
 	for _, o := range options {
@@ -591,7 +595,7 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		}
 	}
 	if !found {
-		return ErrNotFound
+		return 0, ErrNotFound
 	}
 
 	if err := q.FinalizePoll(ctx, queries.FinalizePollParams{
@@ -600,30 +604,31 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		Status:            pollFinalizedStatus,
 		UpdatedAt:         time.Now().UTC(),
 	}); err != nil {
-		return err
+		return 0, err
 	}
 	if err := rooms.Emit(ctx, tx, "poll:"+pollID, "poll.changed", map[string]any{"entity": "poll"}); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Port of finalizePoll's own syncDeadline(id, null) call (polls.functions.ts): a finalized
 	// poll no longer needs its deadline job OR its 24h "closes soon" reminder (I11).
 	if err := jobs.Cancel(ctx, tx, jobKindDeadline, "poll:"+pollID); err != nil {
-		return err
+		return 0, err
 	}
 	if err := jobs.Cancel(ctx, tx, jobKindReminder, "poll:"+pollID); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Port of finalizePoll's recipient computation (service.ts) + sendFinalizedEmails: every
 	// participant with an email, plus the poll's creator if one exists — deduped by email (lower-
 	// cased), owner added only if not already present. One "mail:poll"/"finalized" job per unique
-	// recipient, ids-only (participantId or userId — never an address).
+	// recipient, ids-only (participantId or userId — never an address). sent counts them.
+	sent := 0
 	seenEmail := make(map[string]bool)
 	seenUserID := make(map[string]bool)
 	participantRows, err := q.ListParticipantsByPoll(ctx, pollID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, p := range participantRows {
 		if !p.Email.Valid {
@@ -635,8 +640,9 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		}
 		seenEmail[key] = true
 		if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "finalized", ParticipantID: p.ID}); err != nil {
-			return err
+			return 0, err
 		}
+		sent++
 	}
 	if poll.CreatedBy.Valid {
 		owner, oerr := q.GetUser(ctx, poll.CreatedBy.Int64)
@@ -644,7 +650,7 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		case errors.Is(oerr, sql.ErrNoRows):
 			// Account gone — same graceful skip as the TS source (finalizePoll's own comment).
 		case oerr != nil:
-			return oerr
+			return 0, oerr
 		default:
 			key := strings.ToLower(owner.Email)
 			ownerIDStr := strconv.FormatInt(owner.ID, 10)
@@ -652,20 +658,21 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 				if err := enqueueMailPoll(ctx, tx, mailPollPayload{
 					PollID: pollID, Event: "finalized", UserID: ownerIDStr,
 				}); err != nil {
-					return err
+					return 0, err
 				}
+				sent++
 			}
 			seenUserID[ownerIDStr] = true
 		}
 	}
 
-	// Task 7: the separate subscriber notification (emitPollEvent's own poll.finalized call in
+	// The separate subscriber notification (emitPollEvent's own poll.finalized call in
 	// polls.functions.ts's finalizePoll route) — every org member subscribed to poll.finalized's
 	// email channel, minus the actor (resolveRecipients' own actorUserID parameter) and minus
 	// anyone the direct-mail loop above already enqueued for.
 	recipients, err := s.resolveRecipients(ctx, q, poll.OrganizationID, pollID, EventPollFinalized, actorUserID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, r := range recipients {
 		if seenUserID[r.UserID] {
@@ -673,21 +680,27 @@ func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUs
 		}
 		seenUserID[r.UserID] = true
 		if err := enqueueMailPoll(ctx, tx, mailPollPayload{PollID: pollID, Event: "finalized", UserID: r.UserID}); err != nil {
-			return err
+			return 0, err
 		}
+		sent++
 	}
 
 	if err := tx.Commit(); err != nil {
-		return err
+		return 0, err
 	}
 
-	// Task 3 (plan 6): finalizePoll's own recordPollFinalized call (polls.functions.ts) — reached
-	// only on a genuine not-decided -> decided transition (the already-finalized guard above
-	// returns ErrConflict before this point), matching that source's own comment. Post-commit,
-	// best-effort — see recordStats/StatsService.Record's own doc comments.
+	// finalizePoll's own recordPollFinalized call (polls.functions.ts) — reached only on a genuine
+	// not-decided -> decided transition. Post-commit, best-effort — see recordStats.
 	s.recordStats(ctx, map[string]int64{rooms.StatsPollsFinalized: 1})
 
-	return nil
+	return sent, nil
+}
+
+// Finalize ports finalizePoll — see FinalizeWithCount for the body; this is the error-only
+// signature the brief pinned and every non-HTTP caller uses.
+func (s *Service) Finalize(ctx context.Context, pollID, orgID, optionID, actorUserID string) error {
+	_, err := s.FinalizeWithCount(ctx, pollID, orgID, optionID, actorUserID)
+	return err
 }
 
 // Delete ports deletePoll: a soft delete (deleted_at set). Also emits poll.changed/entity:poll —

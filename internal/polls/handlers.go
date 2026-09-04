@@ -543,16 +543,21 @@ func (s *Service) handleFinalize(w http.ResponseWriter, r *http.Request, sess *a
 	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.Finalize(r.Context(), pollID, sess.ActiveOrgID, req.OptionID, sess.UserID); err != nil {
+	sent, err := s.FinalizeWithCount(r.Context(), pollID, sess.ActiveOrgID, req.OptionID, sess.UserID)
+	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	s.respondWithFreshView(w, r, pollID, sess.UserID)
+	// finalizePoll (polls.functions.ts) returned `{ sent }`, and the SPA's FinalizeDialog toast
+	// prints exactly that count; the fresh PollView the client needs arrives through its own
+	// router.invalidate() (onFinalized) — see web/src/components/poll/FinalizeDialog.tsx.
+	httpserver.JSON(w, http.StatusOK, map[string]int{"sent": sent})
 }
 
 // respondWithFreshView re-reads pollID's view (as viewerUserID) and writes it — used by
-// SetStatus/Finalize, whose own Service methods return only an error, so the handler's own
-// natural "here is the resource you just changed" response comes from a follow-up GetView.
+// SetStatus, whose own Service method returns only an error, so the handler's own natural "here
+// is the resource you just changed" response comes from a follow-up GetView. handleFinalize used
+// to share this (Finalize was error-only too) but now returns FinalizeWithCount's own {sent}.
 func (s *Service) respondWithFreshView(w http.ResponseWriter, r *http.Request, pollID, viewerUserID string) {
 	view, err := s.GetView(r.Context(), pollID, Viewer{UserID: viewerUserID})
 	if err != nil {

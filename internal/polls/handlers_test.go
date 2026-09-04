@@ -1309,3 +1309,38 @@ func TestHandlerClaimReturningGuestSkipsCaptcha(t *testing.T) {
 		}
 	})
 }
+
+// TestHandlerFinalizeReturnsSentCount ports finalizePoll's `{ sent }` response
+// (main:src/server/polls/polls.functions.ts:116-126): the count of distinct recipients a
+// "finalized" mail was queued for — emailed participants deduped by lower-cased address, plus the
+// creator if their address isn't already among them, plus subscribed non-actor members.
+func TestHandlerFinalizeReturnsSentCount(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig(t)
+	h, a, s := newTestHandler(d, cfg)
+	ctx := context.Background()
+	orgID, ownerID := seedOrgAndUser(t, d)
+	addOrgMember(t, d, orgID, ownerID, "owner")
+	a.login(&auth.Session{UserID: ownerID, ActiveOrgID: orgID})
+	created := createTestPoll(t, ctx, s, orgID, ownerID)
+	opt := created.Options[0].ID
+
+	seedParticipant(t, d, created.ID, "Ada", map[string]string{opt: "yes"}, "ada@example.com")
+	seedParticipant(t, d, created.ID, "Ada again", map[string]string{opt: "no"}, "ADA@example.com") // same address, different case
+	seedParticipant(t, d, created.ID, "Bob", map[string]string{opt: "yes"}, "bob@example.com")
+	seedParticipant(t, d, created.ID, "No mail", map[string]string{opt: "yes"}, "")
+
+	rec := doRequest(t, h, "POST", "/api/v1/polls/"+created.ID+"/finalize",
+		map[string]any{"optionId": opt}, sessHeader(ownerID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	resp := decodeBody[map[string]any](t, rec)
+	// ada + bob (participants, deduped) + the creator's own distinct address = 3.
+	if sent, _ := resp["sent"].(float64); sent != 3 {
+		t.Errorf("sent = %v, want 3; body=%s", resp["sent"], rec.Body)
+	}
+	if n := len(filterByEvent(decodeMailPollJobs(t, listJobs(t, d, "mail:poll")), "finalized")); n != 3 {
+		t.Errorf("finalized mail:poll jobs = %d, want 3 (sent must equal what was actually queued)", n)
+	}
+}
