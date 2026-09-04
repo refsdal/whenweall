@@ -197,10 +197,20 @@ func (s *Service) EnqueueDigestItem(ctx context.Context, pollID string, item Dig
 	return tx.Commit()
 }
 
-// RegisterJobs wires this package's four job kinds into w. m is the real mailer used only by
-// "mail:poll" — "poll.deadline"/"poll.reminder"/"poll.digest" never touch SMTP directly, they only
-// ever schedule further "mail:poll" jobs.
-func (s *Service) RegisterJobs(w *jobs.Worker, m *mailer.Mailer) {
+// MailSender is the narrow seam this package's send paths need from *mailer.Mailer — the
+// canonical app origin for links, and Send. An interface (rather than *mailer.Mailer in every
+// signature) so a test can record the rendered Message instead of running an SMTP server.
+type MailSender interface {
+	AppURL() string
+	Send(ctx context.Context, msg mailer.Message) error
+}
+
+var _ MailSender = (*mailer.Mailer)(nil)
+
+// RegisterJobs wires this package's four job kinds into w. m is the real mailer (any MailSender)
+// used only by mail:poll — "poll.deadline"/"poll.reminder"/"poll.digest" never touch SMTP
+// directly, they only ever schedule further "mail:poll" jobs.
+func (s *Service) RegisterJobs(w *jobs.Worker, m MailSender) {
 	w.Register(jobKindDeadline, func(ctx context.Context, job jobs.Job) error {
 		var p struct {
 			PollID string `json:"pollId"`
@@ -359,7 +369,7 @@ func (s *Service) handleDigestJob(ctx context.Context, payload digestPayload) er
 // handleMailPollJob is "mail:poll"'s body: re-read the poll fresh (a deleted/missing poll is a
 // silent no-op — the world has moved on since this was scheduled), then dispatch to the
 // event-specific renderer/sender below.
-func (s *Service) handleMailPollJob(ctx context.Context, m *mailer.Mailer, job jobs.Job) error {
+func (s *Service) handleMailPollJob(ctx context.Context, m MailSender, job jobs.Job) error {
 	var payload mailPollPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return fmt.Errorf("polls: decode mail:poll payload: %w", err)
@@ -399,7 +409,7 @@ func (s *Service) handleMailPollJob(ctx context.Context, m *mailer.Mailer, job j
 // Attaches the finalized option's .ics invite (internal/polls/ics.go's BuildPollICS, given the
 // same absolute pollURL this mail's own body links to) whenever it has calendar meaning — nil for
 // a plain-text finalized option, matching buildOptionIcs's own null case (finalize-emails.ts).
-func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
+func (s *Service) sendFinalizedMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if poll.Status != pollFinalizedStatus || !poll.FinalizedOptionID.Valid {
 		return nil
 	}
@@ -454,7 +464,7 @@ func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll 
 		if err != nil {
 			return err
 		}
-		name, email, locale = displayName(u), u.Email, "en"
+		name, email, locale = displayName(u), u.Email, s.userLocale(ctx, payload.UserID)
 	default:
 		return nil
 	}
@@ -478,7 +488,7 @@ func (s *Service) sendFinalizedMail(ctx context.Context, m *mailer.Mailer, poll 
 // its own dedicated template, not the generic "notification" one). Re-checks poll.Status: if the
 // poll moved on (e.g. finalized) since this was scheduled, the "closed without a winner" mail
 // would be misleading, so this is a no-op.
-func (s *Service) sendClosedMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
+func (s *Service) sendClosedMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if poll.Status != "closed" || payload.UserID == "" {
 		return nil
 	}
@@ -497,7 +507,7 @@ func (s *Service) sendClosedMail(ctx context.Context, m *mailer.Mailer, poll que
 	return m.Send(ctx, mailer.Message{
 		To:       u.Email,
 		Template: "closed",
-		Data:     map[string]any{"PollTitle": poll.Title, "PollURL": pollURL, "Locale": "en"},
+		Data:     map[string]any{"PollTitle": poll.Title, "PollURL": pollURL, "Locale": s.userLocale(ctx, payload.UserID)},
 	})
 }
 
@@ -507,7 +517,7 @@ func (s *Service) sendClosedMail(ctx context.Context, m *mailer.Mailer, poll que
 // shape recipients.ts's own non-digest branch builds ({event, title, url}), using the
 // email_notification_deadline_subject/body catalog keys (messages.go) notifSubject/notifBody
 // already resolve for this event.
-func (s *Service) sendReminderMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
+func (s *Service) sendReminderMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if payload.UserID == "" {
 		return nil
 	}
@@ -530,14 +540,14 @@ func (s *Service) sendReminderMail(ctx context.Context, m *mailer.Mailer, poll q
 			"Event":  string(EventDeadlineApproaching),
 			"Title":  poll.Title,
 			"URL":    pollURL,
-			"Locale": "en",
+			"Locale": s.userLocale(ctx, payload.UserID),
 		},
 	})
 }
 
 // sendDigestMail ports PollRoom#processDigest's per-recipient send (the render+mail half only —
 // the resolve/invert half already ran in handleDigestJob).
-func (s *Service) sendDigestMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
+func (s *Service) sendDigestMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if payload.UserID == "" {
 		return nil
 	}
@@ -560,7 +570,7 @@ func (s *Service) sendDigestMail(ctx context.Context, m *mailer.Mailer, poll que
 			"PollTitle": poll.Title,
 			"PollURL":   pollURL,
 			"Lines":     buildDigestLines(payload.Items),
-			"Locale":    "en",
+			"Locale":    s.userLocale(ctx, payload.UserID),
 		},
 	})
 }
@@ -575,7 +585,7 @@ func (s *Service) sendDigestMail(ctx context.Context, m *mailer.Mailer, poll que
 // so this can't reuse BuildPollICS (internal/polls/ics.go), which only ever builds the single
 // finalized-option event. Left as a follow-up task (a BuildPollICSMulti or equivalent) rather than
 // task 5's scope, which produced BuildPollICS for the finalized-mail path only.
-func (s *Service) sendClaimConfirmationMail(ctx context.Context, m *mailer.Mailer, poll queries.Poll, pollURL string, payload mailPollPayload) error {
+func (s *Service) sendClaimConfirmationMail(ctx context.Context, m MailSender, poll queries.Poll, pollURL string, payload mailPollPayload) error {
 	if payload.ParticipantID == "" {
 		return nil
 	}

@@ -11,10 +11,8 @@ package polls
 // yet (emit.ts's own comment already calls push "Phase 2"). resolveRecipients here only ever
 // returns email recipients; see the task report for the full rationale.
 //
-// User locale is NOT carried either: migrations/00002_auth.sql's `users` table has no locale
-// column (unlike Drizzle's `user.locale`), so every user-identified recipient (as opposed to a
-// participant, which does have its own `locale` column) renders in "en". Flagged in the task
-// report as a gap to close once Go grows a user-locale column.
+// User locale comes from the LocaleSource wired via SetLocaleSource (locale.go) — auth.Service's
+// LocaleFor over user_preferences in production; participants keep their own locale column.
 
 import (
 	"context"
@@ -186,7 +184,7 @@ func (s *Service) resolveRecipients(
 			continue
 		}
 
-		out = append(out, Recipient{UserID: uid, Email: u.Email, Name: displayName(u), Locale: "en"})
+		out = append(out, Recipient{UserID: uid, Email: u.Email, Name: displayName(u), Locale: s.userLocale(ctx, uid)})
 	}
 	return out, nil
 }

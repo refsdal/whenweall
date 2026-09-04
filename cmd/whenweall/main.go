@@ -151,6 +151,15 @@ func serve() int {
 	bookingsSvc.SetGoogleSync(bookings.NewGoogleSync(cfg, sqlDB))
 	bookingsSvc.RegisterJobs(worker, m)
 
+	authSvc, err := auth.New(cfg, sqlDB)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	// Plan C: user recipients' mail locale (user_preferences via auth.Service.LocaleFor). Wired
+	// before worker.Run so the first mail:poll job the worker claims already sees it.
+	pollsSvc.SetLocaleSource(authSvc)
+
 	if err := jobs.EnsureScheduled(ctx, sqlDB); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -160,12 +169,6 @@ func serve() int {
 		defer bg.Done()
 		worker.Run(ctx)
 	}()
-
-	authSvc, err := auth.New(cfg, sqlDB)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
 
 	srv := httpserver.New(cfg, sqlDB, authSvc)
 	srv.RegisterAPI(func(mux *http.ServeMux) {

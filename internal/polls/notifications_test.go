@@ -1132,3 +1132,119 @@ func TestEnqueueDigestItemConcurrentRace(t *testing.T) {
 		t.Errorf("len(Items) = %d, want %d: %+v", len(payloads[0].Items), len(names), payloads[0].Items)
 	}
 }
+
+// recordingMailer is a polls.MailSender that records every Send instead of dialing SMTP — the
+// seam send-path tests use to assert on the rendered Message (template, Data, attachments)
+// directly, without Mailpit.
+type recordingMailer struct {
+	mu   sync.Mutex
+	sent []mailer.Message
+}
+
+func (r *recordingMailer) AppURL() string { return "https://whenweall.example" }
+
+func (r *recordingMailer) Send(_ context.Context, msg mailer.Message) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, msg)
+	return nil
+}
+
+func (r *recordingMailer) byTemplate(template string) []mailer.Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []mailer.Message
+	for _, m := range r.sent {
+		if m.Template == template {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// fakeLocales is a polls.LocaleSource keyed by userID — the test stand-in for
+// auth.Service.LocaleFor (Plan A), which this package never calls directly in tests.
+type fakeLocales map[string]string
+
+func (f fakeLocales) LocaleFor(_ context.Context, userID string) string {
+	if l, ok := f[userID]; ok {
+		return l
+	}
+	return "en"
+}
+
+// drainJobs runs w until a RunOnce claims nothing — every due job, and every job those jobs
+// scheduled in turn (poll.digest -> mail:poll), has been processed.
+func drainJobs(t *testing.T, ctx context.Context, w *jobs.Worker) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		n, err := w.RunOnce(ctx)
+		if err != nil {
+			t.Fatalf("RunOnce: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+	}
+	t.Fatal("drainJobs: jobs still pending after 50 rounds")
+}
+
+// TestUserRecipientMailUsesLocaleSource restores the user.locale half of the old recipients
+// (main:src/server/notifications/recipients.ts:78, finalize-emails.ts:51): a user-identified
+// recipient renders in the locale the LocaleSource (auth.Service.LocaleFor in production)
+// reports, not a hard-coded "en".
+func TestUserRecipientMailUsesLocaleSource(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("digest and finalized owner mail render in the user's locale", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "member")
+		s.SetLocaleSource(fakeLocales{ownerID: "nb"})
+		created := createTestPoll(t, ctx, s, orgID, ownerID) // Create subscribes the creator
+
+		if err := s.EnqueueDigestItem(ctx, created.ID, polls.DigestItem{Event: polls.EventResponseCreated, Name: "Ada"}); err != nil {
+			t.Fatalf("EnqueueDigestItem: %v", err)
+		}
+		forceDue(t, d, "poll.digest")
+		if err := s.Finalize(ctx, created.ID, orgID, created.Options[0].ID, ""); err != nil {
+			t.Fatalf("Finalize: %v", err)
+		}
+
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+		drainJobs(t, ctx, w)
+
+		digests := rec.byTemplate("digest")
+		if len(digests) != 1 || digests[0].Data["Locale"] != "nb" {
+			t.Errorf("digest mails = %+v, want exactly one with Locale nb", digests)
+		}
+		finalized := rec.byTemplate("finalized")
+		if len(finalized) != 1 || finalized[0].Data["Locale"] != "nb" {
+			t.Errorf("finalized mails = %+v, want exactly one (the owner) with Locale nb", finalized)
+		}
+	})
+
+	t.Run("falls back to en when no LocaleSource is wired", func(t *testing.T) {
+		d := testdb.New(t)
+		s := polls.NewService(d)
+		orgID, ownerID := seedOrgAndUser(t, d)
+		addOrgMember(t, d, orgID, ownerID, "member")
+		created := createTestPoll(t, ctx, s, orgID, ownerID)
+		if err := s.EnqueueDigestItem(ctx, created.ID, polls.DigestItem{Event: polls.EventResponseCreated, Name: "Ada"}); err != nil {
+			t.Fatalf("EnqueueDigestItem: %v", err)
+		}
+		forceDue(t, d, "poll.digest")
+
+		rec := &recordingMailer{}
+		w := jobs.NewWorker(d, "test-replica", slog.Default())
+		s.RegisterJobs(w, rec)
+		drainJobs(t, ctx, w)
+
+		if digests := rec.byTemplate("digest"); len(digests) != 1 || digests[0].Data["Locale"] != "en" {
+			t.Errorf("digest mails = %+v, want exactly one with Locale en", digests)
+		}
+	})
+}

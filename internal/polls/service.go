@@ -39,6 +39,9 @@ type Service struct {
 	// other behavior unchanged, with counting simply turned off. See recordStats's own doc comment
 	// for the call convention every mutating method below uses it with.
 	stats *rooms.StatsService
+
+	// locales resolves user recipients' mail locale — nil until SetLocaleSource (locale.go).
+	locales LocaleSource
 }
 
 // NewService builds a Service bound to sqlDB. Read-only methods use the Service's own Queries;
