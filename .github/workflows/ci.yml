@@ -1,9 +1,16 @@
 name: CI
 on:
-  push: { branches: [main] }
+  # Tags are here, not only main, because the release job at the bottom of this file publishes
+  # from them — and it must never publish anything this workflow has not just proven.
+  push: { branches: [main], tags: ['v*'] }
   pull_request:
 permissions: { contents: read }
-concurrency: { group: 'ci-${{ github.ref }}', cancel-in-progress: true }
+concurrency:
+  group: 'ci-${{ github.ref }}'
+  # PR runs are superseded by their own next push, so cancelling them is free. A main or tag run
+  # is NOT cancellable: it ends in a multi-arch image push, and a half-pushed manifest is worse
+  # than a slightly stale queue. (This is why the publish job can live here at all — see it.)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # Backend: vet + lint + the full suite against a real Postgres (testcontainers-go spins up its
   # own container — nothing to provision here), plus a second, narrower pass under the race
@@ -193,3 +200,100 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: failure()
         with: { name: playwright-report-image, path: playwright-report, retention-days: 7 }
+
+  # Publishes the multi-arch image to ghcr — the last job in this file, and deliberately IN this
+  # file rather than a workflow of its own.
+  #
+  # It used to be release.yml, triggered by `push` to main and to a v* tag, with no dependency on
+  # CI at all: an image was published for every commit, passing or failing, and the two workflows
+  # raced. The obvious repair — `on: workflow_run: [CI]` — is the one #49 was actually filed
+  # about: for a workflow_run event `github.sha` resolves to the head of the default branch WHEN
+  # THE DEPLOY RUNS, not to the commit whose CI passed, so two pushes landing close together
+  # publish the second commit off the first commit's green run. Getting it right means
+  # remembering `github.event.workflow_run.head_sha` at every checkout, and re-deriving the tag
+  # name from `head_branch` because `github.ref` is wrong there too.
+  #
+  # `needs` has neither problem. There is one run, one checkout, one SHA, and the image cannot be
+  # built until every gate on it has passed on that exact tree.
+  release:
+    needs: [go, web, docker, e2e, e2e-image]
+    # A fork must not try (and fail, loudly) to push into the upstream owner's registry under its
+    # own copy of this workflow. The ref check is what keeps PR runs from publishing: `needs`
+    # decides ordering, not whether this is a releasable ref.
+    if: >-
+      github.repository == 'refsdal/whenweall' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v7
+
+      # cmd/whenweall's own `version` subcommand wants a real version string: the pushed tag for a
+      # release, a "main-<short sha>" marker for a rolling main build. It reaches the binary as an
+      # env var read by scripts/build-artifacts.sh, which passes it to `-ldflags -X main.version`;
+      # there is no Docker build-arg any more, because the Dockerfile no longer compiles anything.
+      # (Image LABELs are metadata-action's job, below, and always were.) Kept as a plain shell
+      # step rather than leaning on metadata-action's own `version` output, which is resolved from
+      # tag-priority rules not obviously the same thing.
+      - name: Resolve the version string
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=main-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Image tags: a version tag push (v1.2.3) publishes semver tags (1.2.3, 1.2); a push to
+      # main moves `latest`.
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ghcr.io/refsdal/whenweall
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Both toolchains run NATIVELY on the amd64 runner. This is the whole point of the split
+      # between scripts/build-artifacts.sh and the Dockerfile: the SPA is compiled once (its output
+      # is architecture-independent) and the Go compiler cross-compiles the arm64 binary, so
+      # nothing below ever runs under QEMU. There is deliberately no setup-qemu-action here — if
+      # one reappears, something has started compiling inside the image again.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: web/.bun-version }
+      - uses: actions/cache@v6
+        with:
+          {
+            path: ~/.bun/install/cache,
+            key: "bun-release-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}",
+            restore-keys: 'bun-release-${{ runner.os }}-',
+          }
+
+      - name: Build the per-platform binaries natively
+        run: bash scripts/build-artifacts.sh linux/amd64 linux/arm64
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Seconds of file copying: the Dockerfile COPYs one already-built binary per platform.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: true
