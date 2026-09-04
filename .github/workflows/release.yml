@@ -51,7 +51,7 @@ jobs:
       # is architecture-independent) and the Go compiler cross-compiles the arm64 binary, so
       # nothing below ever runs under QEMU. There is deliberately no setup-qemu-action here — if
       # one reappears, something has started compiling inside the image again.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
