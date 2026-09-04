@@ -59,21 +59,121 @@ test.describe('admin console', () => {
     await expect(page.getByRole('link', { name: 'Admin' })).toHaveCount(0)
   })
 
-  // NOT IMPLEMENTED — blocked by a real navigation bug, not a test-selector problem: see the
-  // task-11-14 report for full reproduction. `web/src/routes/admin/users.tsx` (the users LIST
-  // route) is the TanStack Router *parent* of `admin/users.$id.tsx` (routeTree.gen.ts:
-  // `AdminUsersIdRoute`'s `getParentRoute: () => AdminUsersRoute`), but `AdminUsers`'s component
-  // never renders an `<Outlet />`. The child route's loader and API calls all fire correctly and
-  // the URL genuinely changes to `/admin/users/$id` (confirmed both via a `<Link>` click and via a
-  // hard `page.goto` to that exact URL), but nothing the child renders — ReasonDialog, the lock/
-  // unlock/delete buttons, the lockReason field, the per-user audit history — ever appears; the
-  // list page's own markup stays on screen throughout. This is a pre-existing bug (present since
-  // the console's very first commit, 7d317a1, not a Go-rewrite regression) that has apparently
-  // never been reached by a real click before now — every user of this admin console today is
-  // clicking a user's name and silently getting the list page back. Fixing it is an app-code
-  // change outside this task's remit (adding `<Outlet />` to `AdminUsers`, or un-nesting the route
-  // via `users_.$id.tsx`), so this test was intentionally left out rather than committed failing
-  // or papered over with a workaround that avoids exercising the real navigation.
+  test('staff lock, unlock and delete a user with reasons; the user is signed out while locked; the audit log records each', async ({
+    page,
+    browser,
+    userStaff,
+    user,
+  }) => {
+    // The target signs in first so the lock can be seen taking effect on a live session.
+    const targetContext = await browser.newContext()
+    const targetPage = await targetContext.newPage()
+    try {
+      await signIn(targetPage, user)
+
+      await signIn(page, userStaff)
+      await page.goto('/admin/users')
+      await waitForHydration(page)
+      await page.getByLabel('Search by email or name').fill(user.email)
+      await page.getByLabel('Search by email or name').press('Enter')
+      await expect(page.getByRole('cell', { name: user.email })).toBeVisible()
+      // Every seeded user defaults to the same display name ("E2E User" — fixtures.ts), so the
+      // link is found by the row containing this spec's own email, not by name.
+      const href = await page
+        .getByRole('row')
+        .filter({ hasText: user.email })
+        .getByRole('link')
+        .getAttribute('href')
+      if (!href) throw new Error(`no admin/users/$id link in the row for ${user.email}`)
+      const userId = href.split('/').filter(Boolean).pop()!
+      await page.goto(href)
+      await waitForHydration(page)
+      await expect(page.getByRole('heading', { name: user.name })).toBeVisible()
+
+      // Plan E's action buttons (e.g. "Lock account") and ReasonDialog confirm buttons (e.g.
+      // "Lock") share only a leading verb, so the regexes are anchored on that.
+      async function actWithReason(verb: RegExp, reason: string) {
+        await page.getByRole('button', { name: verb }).click()
+        const dialog = page.getByRole('dialog')
+        await expect(dialog).toBeVisible()
+        const confirm = dialog.getByRole('button', { name: verb })
+        await expect(confirm).toBeDisabled() // a reason is mandatory
+        await dialog.getByLabel('Why are you doing this?').fill(reason)
+        await confirm.click()
+        await expect(dialog).toBeHidden()
+      }
+
+      // --- lock ---
+      await actWithReason(/^Lock\b/, 'e2e: lock')
+      // "Locked" appears twice on the detail card once locked: the status badge, and the label of
+      // the lockReason field below it — `.first()` sidesteps the ambiguity (same pattern as the
+      // first test in this file, which scopes an equally-repeated string).
+      await expect(page.getByText('Locked', { exact: true }).first()).toBeVisible()
+      // The lockReason field's own value is the only element whose FULL text is exactly this
+      // string — the audit-history entry further down the page also mentions the reason, but
+      // quoted (“e2e: lock”), which `exact: true` does not match.
+      await expect(page.getByText('e2e: lock', { exact: true })).toBeVisible()
+
+      // The durable effect: the locked user's very next request is refused (not just a badge on
+      // the admin screen), and the SPA renders them signed out. LockUser revokes the target's
+      // existing Limen session outright (internal/admin/users.go's RevokeUserSessions call), so
+      // the already-signed-in session this test is holding gets a plain 401 (no valid session)
+      // rather than AuthMountGuard's 403 "account is locked" — that 403 is for the OTHER lock
+      // scenario, a locked user completing a *fresh* sign-in while still locked (AuthMountGuard's
+      // own doc comment in internal/auth/session.go), which is not this test's path.
+      await expect
+        .poll(async () => (await targetPage.request.get('/api/v1/auth/me')).status())
+        .toBe(401)
+      await targetPage.reload()
+      await waitForHydration(targetPage)
+      await expect(targetPage.getByRole('link', { name: 'Sign in' })).toBeVisible()
+      await expect(targetPage.getByRole('button', { name: 'Account menu' })).toHaveCount(0)
+
+      // --- unlock ---
+      await actWithReason(/^Unlock\b/, 'e2e: unlock')
+      await expect(page.getByText('Locked', { exact: true })).toHaveCount(0)
+      // The durable effect: the account works again, not just that the badge is gone.
+      await targetPage.context().clearCookies()
+      await signIn(targetPage, user)
+      await expect(targetPage.getByRole('heading', { name: 'Your polls' })).toBeVisible()
+
+      // --- delete ---
+      await actWithReason(/^Delete\b/, 'e2e: delete')
+      await page.goto(`/admin/users/${userId}`)
+      await waitForHydration(page)
+      await expect(page.getByText('No account with that id.')).toBeVisible()
+
+      // The durable effect: the credentials themselves are gone, not just the admin-side row.
+      await targetPage.goto('/login')
+      await waitForHydration(targetPage)
+      await targetPage.locator('#login-email').fill(user.email)
+      await targetPage.locator('#login-password').fill(user.password)
+      await targetPage.getByRole('button', { name: 'Sign in' }).click()
+      await expect(targetPage.getByText("That email or password isn't right.")).toBeVisible()
+
+      // --- audit log ---
+      // Scoped to `userId` (this spec's own seeded subject) *and* the typed reason, not merely the
+      // action name, since /admin/audit is a single global, 100-row-capped table shared with every
+      // other worker's admin actions across the whole suite.
+      await page.goto('/admin/audit')
+      await waitForHydration(page)
+      for (const [action, reason] of [
+        ['lock-user', 'e2e: lock'],
+        ['unlock-user', 'e2e: unlock'],
+        ['delete-user', 'e2e: delete'],
+      ] as const) {
+        await expect(
+          page
+            .getByRole('row')
+            .filter({ hasText: action })
+            .filter({ hasText: userId })
+            .filter({ hasText: reason }),
+        ).toHaveCount(1)
+      }
+    } finally {
+      await targetContext.close()
+    }
+  })
 
   test('the jobs page lists a dead-lettered job and retrying it clears it from the list', async ({
     page,
