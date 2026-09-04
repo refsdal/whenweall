@@ -600,16 +600,35 @@ func personalOrgSlug(email, userID string) string {
 // (main:src/server/auth/session.functions.ts); deliberately not Limen's ListOrganizations, whose
 // default ordering is unspecified. ensurePersonalOrgOnce (called just before this in
 // resolveSession) guarantees at least one membership exists by the time this runs.
+//
+// Only sql.ErrNoRows means what the (nil, false) return says: this user genuinely has zero
+// membership rows, which resolveSession's caller treats as license to re-run the self-heal path.
+// Any other error — a closed pool, a query timeout, GetOrganization failing on an id the row
+// query just returned — is a transient or infrastructure fault, not evidence of zero memberships,
+// and is logged rather than silently folded into the same case (membershipDangling, just above,
+// draws exactly this distinction for the same reason: routing a fault into the self-heal branch
+// would needlessly clear the personalOrgEnsured cache entry it guards).
 func (s *Service) oldestMembership(ctx context.Context, user *limen.User) (*organization.Organization, bool) {
 	var orgID int64
-	if err := s.db.QueryRowContext(ctx,
+	switch err := s.db.QueryRowContext(ctx,
 		`SELECT organization_id FROM organization_members WHERE user_id = $1 ORDER BY created_at, id LIMIT 1`,
 		user.ID,
-	).Scan(&orgID); err != nil {
+	).Scan(&orgID); {
+	case err == nil:
+		// fall through
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, false
+	default:
+		s.logger.Error("auth: reading oldest membership failed", "user_id", fmt.Sprint(user.ID), "error", err)
 		return nil, false
 	}
 	org, err := s.orgs.GetOrganization(ctx, orgID)
-	if err != nil || org == nil {
+	if err != nil {
+		s.logger.Error("auth: loading oldest membership's organization failed",
+			"user_id", fmt.Sprint(user.ID), "organization_id", orgID, "error", err)
+		return nil, false
+	}
+	if org == nil {
 		return nil, false
 	}
 	return org, true

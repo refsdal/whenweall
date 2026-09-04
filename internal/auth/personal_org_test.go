@@ -1,17 +1,22 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/thecodearcher/limen"
 	"github.com/thecodearcher/limen/plugins/organization"
+
+	"github.com/refsdal/whenweall/internal/testdb"
 )
 
 // lookupUserID looks up email's user id directly (same approach as MakeStaff — there is no
@@ -525,5 +530,59 @@ func TestSessionSelfHealsAfterUserDeletesTheirOnlyOrganization(t *testing.T) {
 	}
 	if !stored.Valid || fmt.Sprint(stored.Int64) != healedOrgID {
 		t.Errorf("sessions.active_organization_id = %v, want the healed org id %s persisted", stored, healedOrgID)
+	}
+}
+
+// TestOldestMembershipDistinguishesNoRowsFromInfrastructureFaults is Minor 3's regression test:
+// oldestMembership must not fold every error into the same "zero memberships" case the way
+// membershipDangling (just above it in auth.go) deliberately avoids doing for its own check. A
+// user with genuinely zero organization_members rows (sql.ErrNoRows) is silent — resolveSession's
+// self-heal branch is the right place for that, not a log line. Any other error — simulated here
+// with a closed connection pool, standing in for a closed pool or a GetOrganization failure — must
+// be logged instead of silently returning the exact same (nil, false).
+func TestOldestMembershipDistinguishesNoRowsFromInfrastructureFaults(t *testing.T) {
+	ts := newTestService(t)
+	ctx := context.Background()
+
+	// Swap the logger and db in place (not a struct copy — Service embeds a sync.Map, which must
+	// never be copied) and restore both afterwards.
+	origLogger, origDB := ts.svc.logger, ts.svc.db
+	defer func() { ts.svc.logger, ts.svc.db = origLogger, origDB }()
+
+	var logBuf bytes.Buffer
+	ts.svc.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	// Zero memberships: a signed-up user before session resolution has no organization_members
+	// row at all (signup alone never creates one — only resolveSession's ensurePersonalOrgOnce
+	// does, and this test never triggers session resolution for this user).
+	email := "oldest-membership-no-rows@example.com"
+	requireStatus2xx(t, ts.postJSON(t, "/api/v1/auth/signup/credential", map[string]any{
+		"email":    email,
+		"password": signupPassword,
+	}), "signup")
+	user := &limen.User{ID: lookupUserID(t, ts, email), Email: email}
+
+	if org, ok := ts.svc.oldestMembership(ctx, user); ok || org != nil {
+		t.Errorf("oldestMembership(zero memberships) = (%v, %v), want (nil, false)", org, ok)
+	}
+	if logBuf.Len() != 0 {
+		t.Errorf("oldestMembership(zero memberships) logged %q, want silence — sql.ErrNoRows is a legitimate empty result, not a fault", logBuf.String())
+	}
+
+	// Any other error must be distinguished — logged, not silently folded into the same "zero
+	// memberships" outcome. A closed pool stands in for that here (cheap: testdb.New clones an
+	// already-migrated template database in milliseconds, so opening one just to close it again
+	// costs nothing worth avoiding).
+	closedDB := testdb.New(t)
+	if err := closedDB.Close(); err != nil {
+		t.Fatalf("closing stand-in db: %v", err)
+	}
+	ts.svc.db = closedDB
+
+	if org, ok := ts.svc.oldestMembership(ctx, user); ok || org != nil {
+		t.Errorf("oldestMembership(closed pool) = (%v, %v), want (nil, false)", org, ok)
+	}
+	if !strings.Contains(logBuf.String(), "auth: reading oldest membership failed") {
+		t.Errorf("oldestMembership(closed pool) did not log the failure; log = %q", logBuf.String())
 	}
 }
