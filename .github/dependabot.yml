@@ -1,35 +1,76 @@
 version: 2
+
+# GROUPING POLICY. Every ecosystem below ends in a catch-all pair of groups, so no update can fall
+# through into a pull request of its own. That fallback is the default Dependabot behaviour and it
+# is where this repo's queue came from: the github-actions entry had no `groups:` at all, so four
+# separate action bumps sat open at once.
+#
+# Each ecosystem produces at most:
+#
+#   minor-and-patch   the safe weekly batch — merge once CI is green
+#   major             everything breaking, together
+#   <named>           only where a set of packages MUST move as one
+#
+# Majors are kept out of the weekly batch on purpose: one breaking major that fails CI would
+# otherwise hold back every routine patch behind it. If you would rather have exactly one PR per
+# ecosystem regardless, delete the `major` groups and drop `update-types` from `minor-and-patch`.
+#
+# ORDER MATTERS. A dependency joins the FIRST group it matches, so every named group has to come
+# before the catch-alls or it will never see a single package.
 updates:
-  # The Go module — Limen is pinned to one pseudo-version across core, adapter and plugins, so its
-  # updates are grouped to land (or be declined) together.
   - package-ecosystem: gomod
     directory: /
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 10
     groups:
+      # Limen is pinned to one pseudo-version across core, adapter and plugins, so its updates
+      # have to land (or be declined) together — and separately from everything else, so that
+      # declining Limen does not mean declining the whole week's batch with it.
+      limen:
+        patterns: ['github.com/thecodearcher/limen*']
       minor-and-patch:
+        patterns: ['*']
         update-types: [minor, patch]
-      limen: { patterns: ['github.com/thecodearcher/limen*'] }
-  # The SPA.
+      major:
+        patterns: ['*']
+        update-types: [major]
+
+  # Both package.json files in one entry: /web is the shipped SPA, / is Playwright and nothing
+  # else. `directories` (plural) lets a single group span them, so a quiet week is one PR rather
+  # than one per directory.
   - package-ecosystem: npm
-    directory: /web
+    directories: ['/', '/web']
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 10
     groups:
+      tanstack:
+        patterns: ['@tanstack/*']
+      playwright:
+        patterns: ['@playwright/*', 'playwright']
       minor-and-patch:
+        patterns: ['*']
         update-types: [minor, patch]
-      tanstack: { patterns: ['@tanstack/*'] }
-  # The root package.json is Playwright only (the e2e suite).
-  - package-ecosystem: npm
-    directory: /
-    schedule: { interval: weekly, day: monday }
-    groups:
-      playwright: { patterns: ['@playwright/*', 'playwright'] }
+      major:
+        patterns: ['*']
+        update-types: [major]
+
+  # Actions take majors in the same PR as everything else, unlike the ecosystems above. A bump
+  # here is proven or disproven by the very CI run the PR triggers — there is no half-broken state
+  # to quarantine — and action majors are frequent enough (four open at once) that separating them
+  # would put most of the PRs back.
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ['*']
+
   # The Dockerfile's one base image (distroless static), pinned by digest — Dependabot bumps the
-  # digest. There are no toolchain images left to track: nothing compiles inside the image.
+  # digest. There are no toolchain images left to track: nothing compiles inside the image. Grouped
+  # so that stays true if a second image ever appears.
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }
+    groups:
+      images:
+        patterns: ['*']
