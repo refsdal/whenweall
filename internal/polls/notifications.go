@@ -58,6 +58,13 @@ func isDigestEvent(event NotificationEvent) bool { return digestEvents[event] }
 
 // ChannelPrefs mirrors ChannelPrefs (src/lib/notifications.ts): whether an event reaches a given
 // channel at all.
+//
+// Push is stored but never delivered — nothing in this repo subscribes a browser or sends a web
+// push, and resolveRecipients' callers consume Email alone. The field stays because it is the
+// shape of the `channels` jsonb on notification_prefs/notification_subscriptions, and no UI
+// offers it as a choice, so nobody is being told a channel works when it does not (the old
+// Cloudflare-era bug in #38, where a paid tier advertised it). Building push means adding a
+// delivery path here, not a column.
 type ChannelPrefs struct {
 	Email bool `json:"email"`
 	Push  bool `json:"push"`
@@ -69,7 +76,7 @@ type ChannelPrefs struct {
 type NotificationGrid map[NotificationEvent]ChannelPrefs
 
 // systemDefaults mirrors SYSTEM_DEFAULTS (src/lib/notifications.ts) — the grid a user has before
-// ever opening settings.
+// ever opening settings. The Push values describe intent only; see ChannelPrefs.
 var systemDefaults = map[NotificationEvent]ChannelPrefs{
 	EventResponseCreated:     {Email: true, Push: true},
 	EventResponseUpdated:     {Email: true, Push: false},

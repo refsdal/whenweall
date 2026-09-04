@@ -96,7 +96,8 @@ func serve() int {
 		hostname = "replica"
 	}
 	worker := jobs.NewWorker(sqlDB, hostname+"-"+db.NewID()[:6], slog.Default())
-	m := mailer.New(cfg)
+	// sqlDB is the unsubscribe suppression list Send checks before every notification mail.
+	m := mailer.New(cfg, sqlDB)
 	m.RegisterHandler(worker)
 	// rooms.BroadcastPresenceTotal is a package-level function, not tied to any particular Hub
 	// instance, so it can be wired in here even though the Hub itself isn't constructed until

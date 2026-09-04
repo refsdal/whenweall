@@ -35,6 +35,13 @@
                   <tr>
                     <td>
                       <p id="wwa-footer" style="color:#71717a;font-size:12px;line-height:18px;margin:0;">{{t $locale "email_footer" "name" "whenweall"}} &middot; hello@whenweall.com</p>
+                      {{/* Notification mail only: Send sets .UnsubscribeURL when Message.Unsubscribable
+                           is true, and leaves it empty otherwise, so a verification or reset mail
+                           never grows an invitation to opt out of itself. Rendered here in the shared
+                           layout rather than per template, which is what makes it impossible for a new
+                           notification template to ship without one — the plain-text half is appended
+                           centrally in Send for the same reason. */}}
+                      {{if .UnsubscribeURL}}<p style="color:#71717a;font-size:12px;line-height:18px;margin:8px 0 0;">{{t $locale "email_unsubscribe"}} <a href="{{.UnsubscribeURL}}" style="color:#71717a;">{{t $locale "email_unsubscribe_link"}}</a></p>{{end}}
                     </td>
                   </tr>
                 </table>

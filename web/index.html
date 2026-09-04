@@ -10,7 +10,47 @@
     />
     <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#130e0b" media="(prefers-color-scheme: dark)" />
+
+    <!--
+      The link preview card. whenweall's whole distribution model is one person pasting a link
+      into a group chat, so this is the highest-leverage markup in the app: it is the moment the
+      product lands in front of eight people who have never heard of it.
+
+      These live here, in the static document, rather than in a route's `head` block, because
+      every unfurl bot that matters — Slackbot, Twitterbot, WhatsApp, Facebook, Discord, iMessage
+      — fetches the HTML and does NOT run JavaScript. This is a pure SPA (see `__root.tsx`), so
+      the per-route tags in `src/routes/**` are injected by React after load and no bot ever sees
+      them; they still serve the tab title and any JS-executing consumer. A poll-specific card
+      ("Team offsite — 5 dates") would need the server to render the tag into this document, which
+      is a deliberate non-goal for now.
+
+      og:url and og:image must be ABSOLUTE (Facebook rejects a relative og:image outright), and
+      they are checked against `appConfig.url` by `src/__tests__/index-html.test.ts` — a static
+      file cannot import it, so a test holds the two together.
+    -->
+    <meta property="og:site_name" content="whenweall" />
+    <meta property="og:title" content="whenweall — Find a time everyone can make." />
+    <meta
+      property="og:description"
+      content="whenweall is a free, fast scheduling poll: propose dates, share a link, let everyone vote, pick the winner."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://whenweall.com" />
+    <meta property="og:image" content="https://whenweall.com/brand/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="whenweall — find a time everyone can make." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="whenweall — Find a time everyone can make." />
+    <meta
+      name="twitter:description"
+      content="whenweall is a free, fast scheduling poll: propose dates, share a link, let everyone vote, pick the winner."
+    />
+    <meta name="twitter:image" content="https://whenweall.com/brand/og.png" />
+
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/brand/icon-180.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <!--
       Resolves the stored theme before first paint so the page never flashes the wrong theme.
       Plain (non-module, blocking) inline script so it runs before anything renders — a module

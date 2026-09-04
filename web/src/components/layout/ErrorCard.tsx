@@ -1,11 +1,24 @@
+import { useEffect } from 'react'
 import { Link } from '@tanstack/react-router'
 import { RotateCcw, TriangleAlert } from 'lucide-react'
 import { Button } from '#/components/ui/button'
+import { errorDetailMessage } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 
-/** The root route's `errorComponent` — an uncaught render/loader error anywhere in the app. */
+/**
+ * The root route's `errorComponent` — an uncaught render/loader error anywhere in the app.
+ *
+ * The detail line under `error_body` comes from `errorDetailMessage`'s allowlist of our own error
+ * codes, never from `error.message`: an unexpected error's text is written by whatever threw it
+ * (Postgres, an upstream API, the runtime), so rendering it hands a visitor server internals for
+ * free. The full error still reaches the console, which is where it is actually useful.
+ */
 export function ErrorCard({ error, onRetry }: { error?: unknown; onRetry?: () => void }) {
-  const message = error instanceof Error ? error.message : null
+  const message = errorDetailMessage(error)
+
+  useEffect(() => {
+    if (error !== undefined) console.error('[error-boundary]', error)
+  }, [error])
 
   return (
     <div className="mx-auto flex w-full max-w-lg flex-col items-center gap-4 px-5 py-24 text-center">

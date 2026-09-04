@@ -79,7 +79,11 @@ export function NotificationGrid({
     events: group.events.filter((event) => events.includes(event)),
   })).filter((group) => group.events.length > 0)
 
-  function toggle(event: NotificationEvent, channel: 'email' | 'push', checked: boolean) {
+  // `channel` is 'email' and only 'email': push is not delivered by anything in this codebase
+  // (no service worker, no VAPID key, no send path), so there is no control for it — see this
+  // component's test. `ChannelPrefs` still carries the `push` boolean because that is the shape
+  // of the stored jsonb grid, which is why the resolved row below still writes it through.
+  function toggle(event: NotificationEvent, channel: 'email', checked: boolean) {
     // Write the fully resolved row, not a partial one: the stored grid is an override, so it must
     // capture both channels or the untouched one would silently fall back to a different value.
     const current = resolveChannels(event, value, defaults)

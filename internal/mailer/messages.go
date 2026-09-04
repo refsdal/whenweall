@@ -57,6 +57,10 @@ var catalog = map[string]map[string]string{
 		"email_claim_cta":     "View sign-up sheet",
 
 		"email_footer": "You're receiving this email because you used {name}.",
+		// Notification mail only (Message.Unsubscribable) — never on a verification,
+		// reset, invitation or booking confirmation.
+		"email_unsubscribe":      "Don't want these emails?",
+		"email_unsubscribe_link": "Unsubscribe",
 
 		"email_booking_confirmed_subject": "Confirmed: {title}",
 		"email_booking_confirmed_heading": "Booking confirmed",
@@ -148,7 +152,9 @@ var catalog = map[string]map[string]string{
 		"email_claim_body":    "Hei {name}, her er det du har meldt deg på.",
 		"email_claim_cta":     "Se påmeldingsskjemaet",
 
-		"email_footer": "Du mottar denne e-posten fordi du har brukt {name}.",
+		"email_footer":           "Du mottar denne e-posten fordi du har brukt {name}.",
+		"email_unsubscribe":      "Vil du ikke ha disse e-postene?",
+		"email_unsubscribe_link": "Meld deg av",
 
 		"email_booking_confirmed_subject": "Bekreftet: {title}",
 		"email_booking_confirmed_heading": "Bookingen er bekreftet",

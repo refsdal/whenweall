@@ -20,6 +20,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitation/$id'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
@@ -89,6 +90,11 @@ const SignupRoute = SignupRouteImport.update({
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UnsubscribeRoute = UnsubscribeRouteImport.update({
+  id: '/unsubscribe',
+  path: '/unsubscribe',
   getParentRoute: () => rootRouteImport,
 } as any)
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
@@ -179,6 +185,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
+  '/unsubscribe': typeof UnsubscribeRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
@@ -206,6 +213,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
+  '/unsubscribe': typeof UnsubscribeRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
@@ -235,6 +243,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
+  '/unsubscribe': typeof UnsubscribeRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
@@ -265,6 +274,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/terms'
+    | '/unsubscribe'
     | '/verify-email'
     | '/accept-invitation/$id'
     | '/admin/audit'
@@ -292,6 +302,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/terms'
+    | '/unsubscribe'
     | '/verify-email'
     | '/accept-invitation/$id'
     | '/admin/audit'
@@ -320,6 +331,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/signup'
     | '/terms'
+    | '/unsubscribe'
     | '/verify-email'
     | '/accept-invitation/$id'
     | '/admin/audit'
@@ -349,6 +361,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
   TermsRoute: typeof TermsRoute
+  UnsubscribeRoute: typeof UnsubscribeRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   AcceptInvitationIdRoute: typeof AcceptInvitationIdRoute
   BookingsNewRoute: typeof BookingsNewRoute
@@ -438,6 +451,13 @@ declare module '@tanstack/react-router' {
       path: '/terms'
       fullPath: '/terms'
       preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/unsubscribe': {
+      id: '/unsubscribe'
+      path: '/unsubscribe'
+      fullPath: '/unsubscribe'
+      preLoaderRoute: typeof UnsubscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/verify-email': {
@@ -580,6 +600,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
   TermsRoute: TermsRoute,
+  UnsubscribeRoute: UnsubscribeRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   AcceptInvitationIdRoute: AcceptInvitationIdRoute,
   BookingsNewRoute: BookingsNewRoute,
