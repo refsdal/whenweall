@@ -17,6 +17,7 @@ require (
 	github.com/thecodearcher/limen/plugins/oauth-google v0.2.1-0.20260813001613-c6a34aa6dcb4
 	github.com/thecodearcher/limen/plugins/organization v0.1.1-0.20260813001613-c6a34aa6dcb4
 	github.com/wneessen/go-mail v0.8.1
+	golang.org/x/net v0.57.0
 	golang.org/x/oauth2 v0.35.0
 )
 

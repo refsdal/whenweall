@@ -1,11 +1,16 @@
 package httpserver_test
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
 
 	"github.com/refsdal/whenweall/internal/httpserver"
 	"github.com/refsdal/whenweall/internal/testdb"
@@ -39,32 +44,51 @@ func TestInlineScriptHashes_OnlySrclessScripts(t *testing.T) {
 }
 
 // TestWebIndexInlineScriptsAreAllHashed is the guard the audit asked for: if web/index.html grows
-// an inline <script> the extraction regex does not catch, this fails — the browser would block
-// that script under the served CSP. The independent count below deliberately does NOT reuse the
-// production regex.
+// an inline <script> the extraction regex does not catch — or, more subtly, extracts the WRONG
+// text for one it does catch (e.g. a script body that happens to contain the literal substring
+// "</script" inside a string or comment, which a naive non-greedy match could end on early or
+// late relative to what a browser's HTML5 tokenizer would treat as the element's end) — this
+// fails, because the browser would then reject that script's hash under the served CSP. The
+// independent extraction below deliberately does NOT reuse the production regex: it drives
+// golang.org/x/net/html's spec-compliant HTML5 tokenizer (the same "script data state" raw-text
+// handling a real browser implements) over the file and hashes each script's raw text content
+// exactly as the tokenizer delivers it, then requires the two hash LISTS to be byte-for-byte
+// identical and in the same order — not merely equal in count, which a truncated or over-captured
+// body could satisfy while still shipping a hash the browser computes differently. Verified by
+// hand against a synthetic file with a "</script >" (space before '>') close tag: the production
+// regex requires the literal "</script>" and so merges that script with the next one in the file
+// (mismatched hash count, already the old guard's job) while golang.org/x/net/html correctly
+// treats the whitespace-tolerant close as ending the element, exactly like a real browser — see
+// the fix report for the two extractions' outputs. One residual gap this guard shares with the
+// production regex: neither implements the WHATWG "script data escaped state" (a literal `<!--`
+// inside the script body suppresses a following `</script>` from closing it until a matching
+// `-->`); closing this would need a full tokenizer state machine rather than any regex or the
+// simplified golang.org/x/net/html tokenizer used here. Left as-is: triggering it requires the
+// developer to hand-write `<!--` into their own inline script, not something an attacker without
+// write access to web/index.html could exploit — and if they had that access, hashing wouldn't be
+// the control holding them back.
 func TestWebIndexInlineScriptsAreAllHashed(t *testing.T) {
-	html, err := os.ReadFile("../../web/index.html")
+	htmlBytes, err := os.ReadFile("../../web/index.html")
 	if err != nil {
 		t.Fatalf("reading web/index.html: %v", err)
 	}
 
-	inline := 0
-	for _, after := range strings.Split(strings.ToLower(string(html)), "<script")[1:] {
-		openTag := after[:strings.Index(after, ">")]
-		if !strings.Contains(openTag, "src=") {
-			inline++
+	independent := independentInlineScriptHashes(t, htmlBytes)
+	if len(independent) < 2 {
+		t.Fatalf("independent tokenizer found %d inline scripts in web/index.html, expected at least the theme and locale bootstraps", len(independent))
+	}
+
+	hashes := httpserver.InlineScriptHashes(htmlBytes)
+	if len(hashes) != len(independent) {
+		t.Fatalf("InlineScriptHashes found %d scripts, the independent HTML5-tokenizer extraction found %d — an inline script is not being hashed (or is being mis-split)", len(hashes), len(independent))
+	}
+	for i := range hashes {
+		if hashes[i] != independent[i] {
+			t.Fatalf("hash[%d] = %s, independent extraction computed %s for the same script — the production regex captured different bytes than a real HTML5 parser would treat as this script's content", i, hashes[i], independent[i])
 		}
 	}
-	if inline < 2 {
-		t.Fatalf("counted %d inline scripts in web/index.html, expected at least the theme and locale bootstraps", inline)
-	}
 
-	hashes := httpserver.InlineScriptHashes(html)
-	if len(hashes) != inline {
-		t.Fatalf("InlineScriptHashes found %d scripts, the independent count found %d — an inline script is not being hashed", len(hashes), inline)
-	}
-
-	policy := httpserver.BuildSecurityPolicy("https://whenweall.example", html)
+	policy := httpserver.BuildSecurityPolicy("https://whenweall.example", htmlBytes)
 	scriptSrc := directive(t, policy.CSP, "script-src")
 	for _, h := range hashes {
 		if !strings.Contains(scriptSrc, h) {
@@ -76,6 +100,54 @@ func TestWebIndexInlineScriptsAreAllHashed(t *testing.T) {
 	}
 	if !strings.Contains(scriptSrc, "https://challenges.cloudflare.com") {
 		t.Errorf("script-src must allow Turnstile: %q", scriptSrc)
+	}
+}
+
+// independentInlineScriptHashes extracts one 'sha256-<base64>' entry per src-less <script>
+// element in htmlSrc, in document order, using golang.org/x/net/html's HTML5 tokenizer — a
+// completely different code path from httpserver.InlineScriptHashes's regex, so the two can only
+// agree if both are actually looking at the same bytes for each script.
+func independentInlineScriptHashes(t *testing.T, htmlSrc []byte) []string {
+	t.Helper()
+	z := html.NewTokenizer(bytes.NewReader(htmlSrc))
+	var hashes []string
+	inNoSrcScript := false
+	var body bytes.Buffer
+
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return hashes
+		case html.StartTagToken:
+			name, hasAttr := z.TagName()
+			if string(name) != "script" {
+				continue
+			}
+			hasSrc := false
+			for hasAttr {
+				var key, val []byte
+				key, val, hasAttr = z.TagAttr()
+				_ = val
+				if string(key) == "src" {
+					hasSrc = true
+				}
+			}
+			if !hasSrc {
+				inNoSrcScript = true
+				body.Reset()
+			}
+		case html.TextToken:
+			if inNoSrcScript {
+				body.Write(z.Text())
+			}
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			if string(name) == "script" && inNoSrcScript {
+				sum := sha256.Sum256(body.Bytes())
+				hashes = append(hashes, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+				inNoSrcScript = false
+			}
+		}
 	}
 }
 
