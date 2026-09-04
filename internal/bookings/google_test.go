@@ -8,7 +8,6 @@ package bookings_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -136,92 +135,37 @@ func TestNewGoogleSyncNilWhenCapabilityOff(t *testing.T) {
 	}
 }
 
-func TestGoogleSyncBusyMergesGoogleFreebusyIntoAvailability(t *testing.T) {
-	ctx := context.Background()
-	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
+// TestGoogleSyncBusyMergesGoogleFreebusyIntoAvailability and
+// TestRescheduleRejectsSlotBlockedByGoogleFreebusy (proving PublicAvailability/Reschedule actually
+// subtracted a Google Calendar busy interval from a page's slots) were removed in fix round 1
+// (2026-09-04): that composition can no longer be exercised through the live pipeline now that
+// googleSyncActive (google.go) hard-gates googleBusyForPage off for the whole of v5 — the "live
+// call never happens" side of exactly this contract is what
+// TestPublicAvailabilityMakesNoLiveGoogleCallWhileDisabled and
+// TestRescheduleEnqueuesNoGoogleSyncJobWhileDisabled (below) now prove instead. Busy()'s own
+// interval-parsing correctness is still covered directly by
+// TestGoogleSyncRefreshesAccessTokenOn401ThenRetriesOnce.
 
-	blockedSlot := futureUTCSlot(3, 10, 0)
-	openSlot := futureUTCSlot(3, 11, 0)
-
-	memberUserID := ownerUserID(t, p.db, p.pageID)
-	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/freeBusy" {
-			t.Errorf("unexpected path %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w,
-			`{"calendars":{"primary":{"busy":[{"start":%q,"end":%q}]}}}`,
-			blockedSlot.Format(time.RFC3339), blockedSlot.Add(30*time.Minute).Format(time.RFC3339),
-		)
-	}))
-	withGoogleAPIStub(t, ts)
-
-	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
-
-	from := blockedSlot.Add(-time.Hour)
-	to := openSlot.Add(time.Hour)
-	slots, err := p.svc.PublicAvailability(ctx, p.orgSlug, p.slug, from, to)
-	if err != nil {
-		t.Fatalf("PublicAvailability: %v", err)
-	}
-
-	for _, s := range slots {
-		if s.Equal(blockedSlot) {
-			t.Errorf("blockedSlot %s present in availability, want it subtracted by Google freebusy", blockedSlot)
-		}
-	}
-	foundOpen := false
-	for _, s := range slots {
-		if s.Equal(openSlot) {
-			foundOpen = true
-		}
-	}
-	if !foundOpen {
-		t.Errorf("openSlot %s missing from availability", openSlot)
+// scheduleGoogleSyncJob manufactures one "google:sync" job directly (bookingID/kind payload,
+// google.go's own googleSyncPayload shape) — the same technique TestGoogleSyncInsertIsIdempotent's
+// own second-job case already used. Fix round 1 (2026-09-04) made this the ONLY way any of this
+// file's job-handler tests below can still reach handleGoogleSyncJob/googleSyncInsert/Delete/
+// Reschedule: Book/Cancel/Reschedule's own enqueue is gated off by googleSyncActive (google.go) for
+// the whole of v5, so these tests schedule the job themselves to keep exercising that dormant, but
+// still fully real, execution logic directly — mirroring TestGoogleSyncDeleteEventTreatsGoneAsSuccess's
+// own "exercised directly on the dormant GoogleSync" precedent (Task 13).
+func scheduleGoogleSyncJob(t *testing.T, ctx context.Context, d *sql.DB, kind, bookingID string) {
+	t.Helper()
+	if err := jobs.Schedule(ctx, d, jobs.ScheduleInput{
+		Kind: "google:sync", RunAt: time.Now(),
+		Payload:     map[string]any{"kind": kind, "bookingId": bookingID},
+		MaxAttempts: 5,
+	}); err != nil {
+		t.Fatalf("schedule google:sync %s job: %v", kind, err)
 	}
 }
 
-// TestRescheduleRejectsSlotBlockedByGoogleFreebusy is I1's own regression coverage for
-// Reschedule's Google Calendar busy merge: the freebusy lookup moved to a read-only prefetch
-// BEFORE Reschedule ever opens its transaction/takes the page lock (bookings.go), so this proves
-// the merge still reaches IsSlotAvailable correctly after that refactor, not just that Book's
-// (sibling, but separately hoisted) prefetch does.
-func TestRescheduleRejectsSlotBlockedByGoogleFreebusy(t *testing.T) {
-	ctx := context.Background()
-	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
-	memberUserID := ownerUserID(t, p.db, p.pageID)
-	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
-
-	original := futureUTCSlot(3, 9, 0)
-	blockedSlot := futureUTCSlot(3, 10, 0)
-	openSlot := futureUTCSlot(3, 11, 0)
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w,
-			`{"calendars":{"primary":{"busy":[{"start":%q,"end":%q}]}}}`,
-			blockedSlot.Format(time.RFC3339), blockedSlot.Add(30*time.Minute).Format(time.RFC3339),
-		)
-	}))
-	withGoogleAPIStub(t, ts)
-	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
-
-	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(original, "a@example.com"))
-	if err != nil {
-		t.Fatalf("Book: %v", err)
-	}
-
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, blockedSlot, false); !errors.Is(err, bookings.ErrSlotTaken) {
-		t.Errorf("reschedule onto Google-busy slot: err = %v, want ErrSlotTaken", err)
-	}
-	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, openSlot, false); err != nil {
-		t.Errorf("reschedule onto an open slot: err = %v, want nil", err)
-	}
-}
-
-func TestBookInsertsGoogleEventAndStoresEventID(t *testing.T) {
+func TestGoogleSyncInsertJobCreatesEventAndStoresEventID(t *testing.T) {
 	ctx := context.Background()
 	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
 	memberUserID := ownerUserID(t, p.db, p.pageID)
@@ -231,8 +175,9 @@ func TestBookInsertsGoogleEventAndStoresEventID(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/freeBusy" {
-			// Book's own pre-insert availability re-check (googleBusyForPage) hits this too —
-			// answer with an empty busy list, this test only cares about the insert call.
+			// Book's own pre-insert availability re-check (googleBusyForPage) is gated off by
+			// googleSyncActive now (fix round 1) and never reaches here — kept only in case that
+			// ever changes, so this stub doesn't have to be revisited.
 			_, _ = w.Write([]byte(`{"calendars":{"primary":{"busy":[]}}}`))
 			return
 		}
@@ -251,9 +196,13 @@ func TestBookInsertsGoogleEventAndStoresEventID(t *testing.T) {
 		t.Fatalf("Book: %v", err)
 	}
 
-	if n := countJobs(t, p.db, "google:sync"); n != 1 {
-		t.Fatalf(`countJobs("google:sync") = %d, want 1`, n)
+	// Book itself enqueues no "google:sync" job while sync is disabled — see
+	// TestBookEnqueuesNoGoogleSyncJobWhileDisabled. Schedule the "insert" job by hand to keep
+	// exercising googleSyncInsert's own (still fully real) logic.
+	if n := countJobs(t, p.db, "google:sync"); n != 0 {
+		t.Fatalf(`countJobs("google:sync") after Book = %d, want 0 (sync disabled)`, n)
 	}
+	scheduleGoogleSyncJob(t, ctx, p.db, "insert", result.BookingID)
 
 	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
 	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
@@ -318,7 +267,7 @@ func TestGoogleSyncRefreshesAccessTokenOn401ThenRetriesOnce(t *testing.T) {
 	}
 }
 
-func TestBookHardGoogleFailureEnqueuesSyncFailedMailJob(t *testing.T) {
+func TestGoogleSyncInsertJobHardFailureEnqueuesSyncFailedMailJob(t *testing.T) {
 	ctx := context.Background()
 	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
 	memberUserID := ownerUserID(t, p.db, p.pageID)
@@ -335,6 +284,9 @@ func TestBookHardGoogleFailureEnqueuesSyncFailedMailJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Book: %v", err)
 	}
+	// Book itself enqueues no "google:sync" job while sync is disabled — schedule the "insert" job
+	// by hand to keep exercising googleSyncInsert's own hard-failure -> sync_failed notice logic.
+	scheduleGoogleSyncJob(t, ctx, p.db, "insert", result.BookingID)
 
 	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
 	// The mailer points at an unreachable host on purpose: a "sync_failed" mail:booking job must
@@ -365,7 +317,7 @@ func TestBookHardGoogleFailureEnqueuesSyncFailedMailJob(t *testing.T) {
 	}
 }
 
-func TestCancelDeletesGoogleEventViaJob(t *testing.T) {
+func TestGoogleSyncDeleteJobDeletesGoogleEvent(t *testing.T) {
 	ctx := context.Background()
 	// GoogleSync starts off so Book doesn't try to insert an event of its own — this booking's
 	// googleEventId is planted directly, simulating one created in an earlier session.
@@ -393,13 +345,15 @@ func TestCancelDeletesGoogleEventViaJob(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	withGoogleAPIStub(t, ts)
-	// Cancel deletes a known event unconditionally, regardless of the page's CURRENT googleSync
-	// toggle (spec finding 7) — SetGoogleSync is enough, the page itself is left with sync off.
 	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
 
 	if err := p.svc.Cancel(ctx, result.BookingID, result.ManageToken, false); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
+	// Cancel itself enqueues no "google:sync" job while sync is disabled — see
+	// TestCancelEnqueuesNoGoogleSyncJobWhileDisabled. Schedule the "delete" job by hand to keep
+	// exercising googleSyncDelete's own (still fully real) cleanup logic.
+	scheduleGoogleSyncJob(t, ctx, p.db, "delete", result.BookingID)
 
 	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
 	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
@@ -429,6 +383,9 @@ func TestGoogleSyncSilentlySkipsWhenMemberHasNoGoogleAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Book: %v", err)
 	}
+	// Book itself enqueues no "google:sync" job while sync is disabled — schedule the "insert" job
+	// by hand to keep exercising googleSyncInsert's own no-account -> silent-skip logic.
+	scheduleGoogleSyncJob(t, ctx, p.db, "insert", result.BookingID)
 
 	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
 	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
@@ -473,6 +430,10 @@ func TestGoogleSyncInsertIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Book: %v", err)
 	}
+	// Book itself enqueues no "google:sync" job while sync is disabled — schedule the FIRST
+	// "insert" job by hand too, so this test can still drive googleSyncInsert's own idempotency
+	// guard with a genuine second job below.
+	scheduleGoogleSyncJob(t, ctx, p.db, "insert", result.BookingID)
 
 	w := jobs.NewWorker(p.db, "test-replica", slog.Default())
 	p.svc.RegisterJobs(w, testBookingMailer("https://whenweall.example"))
@@ -487,13 +448,7 @@ func TestGoogleSyncInsertIsIdempotent(t *testing.T) {
 
 	// A second "insert" job for the SAME booking — a job-system retry, or a duplicate enqueue —
 	// arriving after the first one already succeeded and stored a google_event_id.
-	if err := jobs.Schedule(ctx, p.db, jobs.ScheduleInput{
-		Kind: "google:sync", RunAt: time.Now(),
-		Payload:     map[string]any{"kind": "insert", "bookingId": result.BookingID},
-		MaxAttempts: 5,
-	}); err != nil {
-		t.Fatalf("schedule a second insert job: %v", err)
-	}
+	scheduleGoogleSyncJob(t, ctx, p.db, "insert", result.BookingID)
 	runAllJobs(t, ctx, p.db, w)
 
 	if got := insertCalls.Load(); got != 1 {
@@ -513,8 +468,7 @@ func TestGoogleSyncInsertIsIdempotent(t *testing.T) {
 func TestGoogleSyncRescheduleDeletesThenInserts(t *testing.T) {
 	ctx := context.Background()
 	// GoogleSync off at Book time (so Book itself enqueues no "insert" job to race against the
-	// planted event id below) — turned on via UpdatePage before Reschedule, so Reschedule's own
-	// "reschedule" job is the only "google:sync" job this booking ever gets.
+	// planted event id below) — turned on via UpdatePage before Reschedule.
 	p := setupBookablePage(t, nil)
 	memberUserID := ownerUserID(t, p.db, p.pageID)
 	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
@@ -539,6 +493,10 @@ func TestGoogleSyncRescheduleDeletesThenInserts(t *testing.T) {
 	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
+	// Reschedule itself enqueues no "google:sync" job while sync is disabled — see
+	// TestRescheduleEnqueuesNoGoogleSyncJobWhileDisabled. Schedule the "reschedule" job by hand to
+	// keep exercising googleSyncReschedule's own (still fully real) delete-then-insert sequencing.
+	scheduleGoogleSyncJob(t, ctx, p.db, "reschedule", result.BookingID)
 
 	var deleteCalls, insertCalls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -599,6 +557,9 @@ func TestGoogleSyncRescheduleDeleteFailureSkipsInsert(t *testing.T) {
 	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
 		t.Fatalf("Reschedule: %v", err)
 	}
+	// Reschedule itself enqueues no "google:sync" job while sync is disabled — schedule the
+	// "reschedule" job by hand to keep exercising googleSyncReschedule's own failure-path logic.
+	scheduleGoogleSyncJob(t, ctx, p.db, "reschedule", result.BookingID)
 
 	var insertCalls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -690,5 +651,130 @@ func TestGoogleSyncDeleteEventTreatsGoneAsSuccess(t *testing.T) {
 				t.Fatalf("DeleteEvent(%d) = %v, want nil (already gone counts as deleted)", tc.status, err)
 			}
 		})
+	}
+}
+
+// ---- Fix round 1 (2026-09-04): nothing may make a LIVE Google Calendar call while sync is
+// disabled (user decision 2026-09-03) — not even for a page whose stored google_sync column is
+// still true, and not even when the operator has GOOGLE_CLIENT_ID/SECRET configured (the same pair
+// that still powers "Continue with Google," so s.google is non-nil). Before this fix,
+// PublicAvailability still ran a live freebusy lookup and Book/Cancel/Reschedule still enqueued a
+// real "google:sync" job for exactly this page/booking shape — the precise failure mode (a live
+// call that fails for want of calendar scope, generating a "sync_failed" e-mail per booking) tasks
+// 10-13 exist to eliminate. googleSyncActive (google.go) is the single gate all four cases below
+// prove; every httptest stub here fails the test outright if it is ever hit at all.
+
+func TestPublicAvailabilityMakesNoLiveGoogleCallWhileDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected live Google API call to %s while sync is disabled", r.URL.Path)
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	from := futureUTCSlot(3, 0, 0)
+	to := futureUTCSlot(4, 0, 0)
+	if _, err := p.svc.PublicAvailability(ctx, p.orgSlug, p.slug, from, to); err != nil {
+		t.Fatalf("PublicAvailability: %v", err)
+	}
+}
+
+func TestBookEnqueuesNoGoogleSyncJobWhileDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected live Google API call to %s while sync is disabled", r.URL.Path)
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	start := futureUTCSlot(3, 9, 0)
+	if _, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "ada@example.com")); err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+
+	if n := countJobs(t, p.db, "google:sync"); n != 0 {
+		t.Fatalf(`countJobs("google:sync") after Book = %d, want 0 (sync disabled)`, n)
+	}
+}
+
+func TestCancelEnqueuesNoGoogleSyncJobWhileDisabled(t *testing.T) {
+	ctx := context.Background()
+	// A real google_event_id already on file simulates a booking synced before this decision.
+	p := setupBookablePage(t, func(in *bookings.PageInput) { in.GoogleSync = true })
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "ada@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE bookings SET google_event_id = 'evt-preexisting' WHERE id = $1`, result.BookingID,
+	); err != nil {
+		t.Fatalf("plant google_event_id: %v", err)
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected live Google API call to %s while sync is disabled", r.URL.Path)
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	if err := p.svc.Cancel(ctx, result.BookingID, result.ManageToken, false); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if n := countJobs(t, p.db, "google:sync"); n != 0 {
+		t.Fatalf(`countJobs("google:sync") after Cancel = %d, want 0 (sync disabled)`, n)
+	}
+}
+
+func TestRescheduleEnqueuesNoGoogleSyncJobWhileDisabled(t *testing.T) {
+	ctx := context.Background()
+	// GoogleSync off at Book time so Book's own guard isn't what's under test — only Reschedule's,
+	// given a pre-existing event id AND sync freshly turned on (mirrors
+	// TestGoogleSyncRescheduleDeletesThenInserts's own setup).
+	p := setupBookablePage(t, nil)
+	memberUserID := ownerUserID(t, p.db, p.pageID)
+	insertGoogleAccount(t, p.db, memberUserID, "access-tok", "refresh-tok")
+
+	start := futureUTCSlot(3, 9, 0)
+	result, err := p.svc.Book(ctx, p.orgSlug, p.slug, bookInput(start, "ada@example.com"))
+	if err != nil {
+		t.Fatalf("Book: %v", err)
+	}
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE bookings SET google_event_id = 'evt-preexisting' WHERE id = $1`, result.BookingID,
+	); err != nil {
+		t.Fatalf("plant google_event_id: %v", err)
+	}
+	if _, err := p.svc.UpdatePage(ctx, p.pageID, p.orgID, openPageInput(func(in *bookings.PageInput) {
+		in.GoogleSync = true
+	})); err != nil {
+		t.Fatalf("UpdatePage (turn GoogleSync on): %v", err)
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected live Google API call to %s while sync is disabled", r.URL.Path)
+	}))
+	withGoogleAPIStub(t, ts)
+	p.svc.SetGoogleSync(bookings.NewGoogleSync(testGoogleConfig(), p.db))
+
+	newStart := futureUTCSlot(3, 14, 0)
+	if _, err := p.svc.Reschedule(ctx, result.BookingID, result.ManageToken, newStart, false); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+
+	if n := countJobs(t, p.db, "google:sync"); n != 0 {
+		t.Fatalf(`countJobs("google:sync") after Reschedule = %d, want 0 (sync disabled)`, n)
 	}
 }

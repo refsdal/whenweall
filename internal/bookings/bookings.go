@@ -362,8 +362,10 @@ func (s *Service) Book(ctx context.Context, orgSlug, pageSlug string, in BookInp
 
 	// The Google Calendar event is created post-commit, via a "google:sync" job enqueued in this
 	// same transaction (Task 5) — never inline: an API stall must not fail a booking that already
-	// succeeded. See google.go's package doc comment.
-	if page.GoogleSync {
+	// succeeded. See google.go's package doc comment. googleSyncActive gates this off entirely
+	// while Google Calendar sync is disabled (v5, Plan D tasks 10-13 + fix round 1) — see its own
+	// doc comment (google.go).
+	if googleSyncActive() && page.GoogleSync {
 		if err := enqueueGoogleSync(ctx, tx, "insert", bookingID); err != nil {
 			return nil, err
 		}
@@ -448,11 +450,13 @@ func (s *Service) Cancel(ctx context.Context, bookingID, manageToken string, byO
 		return err
 	}
 
-	// A known Google Calendar event is always cleaned up, regardless of the page's CURRENT
+	// A known Google Calendar event would always be cleaned up, regardless of the page's CURRENT
 	// googleSync toggle (spec finding 7, ported from google-sync.ts's own comment): the event was
-	// created while sync was on, so it still needs deleting even if sync has since been turned
-	// off.
-	if booking.GoogleEventID.Valid {
+	// created while sync was on, so it would still need deleting even if sync has since been
+	// turned off. googleSyncActive (google.go) gates this off entirely while Google Calendar sync
+	// is disabled (v5, Plan D tasks 10-13 + fix round 1): no live delete call is attempted at all
+	// right now, even for an event created before that decision — see its own doc comment.
+	if googleSyncActive() && booking.GoogleEventID.Valid {
 		if err := enqueueGoogleSync(ctx, tx, "delete", bookingID); err != nil {
 			return err
 		}
@@ -602,10 +606,12 @@ func (s *Service) Reschedule(ctx context.Context, bookingID, manageToken string,
 	}
 
 	// Google Calendar delete-then-recreate, post-commit, via one "reschedule" google:sync job
-	// (Task 5) — see googleSyncReschedule's own doc comment for the sequencing contract. Enqueued
-	// whenever there's a known event to clean up OR sync is (now) on; a no-op job (neither) is
-	// skipped rather than scheduled for nothing.
-	if booking.GoogleEventID.Valid || page.GoogleSync {
+	// (Task 5) — see googleSyncReschedule's own doc comment for the sequencing contract. Would be
+	// enqueued whenever there's a known event to clean up OR sync is (now) on; a no-op job
+	// (neither) is skipped rather than scheduled for nothing. googleSyncActive (google.go) gates
+	// the whole thing off entirely while Google Calendar sync is disabled (v5, Plan D tasks 10-13
+	// + fix round 1) — see its own doc comment.
+	if googleSyncActive() && (booking.GoogleEventID.Valid || page.GoogleSync) {
 		if err := enqueueGoogleSync(ctx, tx, "reschedule", bookingID); err != nil {
 			return nil, err
 		}

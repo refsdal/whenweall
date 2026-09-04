@@ -338,6 +338,17 @@ func TestHandlerCreatePage(t *testing.T) {
 		if errCode(t, rec) != "google_sync_unavailable" {
 			t.Errorf("code = %q, want google_sync_unavailable", errCode(t, rec))
 		}
+		// DB-level: rejectGoogleSync fires before CreatePage ever runs — no row for this slug was
+		// written at all, not merely one the response happens not to mention.
+		var count int
+		if err := d.QueryRowContext(context.Background(),
+			`SELECT count(*) FROM booking_pages WHERE slug = $1`, "synced-call",
+		).Scan(&count); err != nil {
+			t.Fatalf("count booking_pages(slug=synced-call): %v", err)
+		}
+		if count != 0 {
+			t.Errorf("booking_pages rows with slug=synced-call = %d, want 0 (rejected request must create nothing)", count)
+		}
 	})
 }
 
@@ -512,6 +523,16 @@ func TestHandlerUpdatePage(t *testing.T) {
 	})
 
 	t.Run("400 google_sync_unavailable when googleSync is true (sync disabled in v5)", func(t *testing.T) {
+		// DB-level: rejectGoogleSync fires before UpdatePage ever runs — capture updated_at first,
+		// so the check below proves the row was not touched at all, not merely that the response
+		// happens not to mention googleSync.
+		var updatedAtBefore time.Time
+		if err := p.d.QueryRowContext(context.Background(),
+			`SELECT updated_at FROM booking_pages WHERE id = $1`, p.pageID,
+		).Scan(&updatedAtBefore); err != nil {
+			t.Fatalf("read updated_at before: %v", err)
+		}
+
 		withSync := map[string]any{}
 		for k, v := range body {
 			withSync[k] = v
@@ -527,6 +548,16 @@ func TestHandlerUpdatePage(t *testing.T) {
 		view := decodeBody[bookings.PageView](t, doRequest(t, p.h, "GET", "/api/v1/booking-pages/"+p.pageID, nil, sessHeader(p.ownerID)))
 		if view.GoogleSync {
 			t.Errorf("GoogleSync = true after a rejected PATCH, want false")
+		}
+
+		var updatedAtAfter time.Time
+		if err := p.d.QueryRowContext(context.Background(),
+			`SELECT updated_at FROM booking_pages WHERE id = $1`, p.pageID,
+		).Scan(&updatedAtAfter); err != nil {
+			t.Fatalf("read updated_at after: %v", err)
+		}
+		if !updatedAtAfter.Equal(updatedAtBefore) {
+			t.Errorf("updated_at changed from %v to %v — a rejected PATCH must write nothing", updatedAtBefore, updatedAtAfter)
 		}
 	})
 }

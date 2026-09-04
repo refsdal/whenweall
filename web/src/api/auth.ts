@@ -170,7 +170,12 @@ export async function oauthAuthorizeUrl(provider: string, redirectUri?: string):
 /** `GET /oauth/:provider/link` — links a second sign-in provider to an already-signed-in caller
  * (protected). Limen's handler reads only `redirect_uri`/`error_redirect_uri` and always requests
  * the provider's fixed default scopes (openid/email/profile for Google): there is no incremental
- * consent here, which is why Google Calendar sync is disabled in v5. */
+ * consent here, which is why Google Calendar sync is disabled in v5.
+ *
+ * Currently has NO callers — the Google card that used to call this (with a `scopes` option that
+ * Limen ignored) was removed in Task 11. Kept deliberately, not dead code to delete: a future
+ * incremental-consent flow reviving Google Calendar sync will want exactly this "link a provider
+ * to the signed-in caller" primitive again. */
 export async function oauthLinkUrl(provider: string, opts?: { redirectUri?: string }): Promise<string> {
   const { url } = await api<AuthorizeResponse>(
     'GET',

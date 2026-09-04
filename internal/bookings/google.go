@@ -414,14 +414,44 @@ func (s *Service) DisconnectGoogleSync(ctx context.Context, userID string) error
 
 // --- Composition with Book/PublicAvailability/Reschedule (bookings.go) --------------------------
 
+// googleSyncActive is the single choke point every LIVE Google Calendar call in this package must
+// pass through before acting on a page's or booking's Google state: googleBusyForPage's freebusy
+// merge just below, and all three "google:sync" job enqueues — Book, Cancel, Reschedule
+// (bookings.go). None of those call sites may act on page.GoogleSync (or, for Cancel,
+// booking.GoogleEventID) to decide whether to make a live call while this returns false.
+//
+// Hard-coded false for the whole of v5 (user decision 2026-09-03, Plan D fix round 1): Limen's own
+// /oauth/google/link route ignores requested calendar scopes (handlers.go's rejectGoogleSync doc
+// comment), so no organiser can ever hold a token good for Busy/InsertEvent/DeleteEvent. Before
+// this gate existed, a page whose stored google_sync column was still true from before this
+// decision — combined with an operator who has GOOGLE_CLIENT_ID/SECRET configured (the same pair
+// that powers the still-recommended "Continue with Google," which is enough to make
+// NewGoogleSync return non-nil) — would still make a live call that fails for want of scope and
+// enqueues a "sync_failed" notice per booking: exactly the failure mode tasks 10-13 exist to
+// eliminate.
+//
+// The stored booking_pages.google_sync column and the googleSync client (google.go) are both left
+// completely alone by this gate: GetOwnedPage/ListMyPages still read the column back verbatim, and
+// google_test.go still drives the client's Busy/InsertEvent/DeleteEvent — and the "google:sync"
+// job handler itself (handleGoogleSyncJob and friends, below) — directly, by scheduling a job row
+// without going through Book/Cancel/Reschedule's own gated enqueue. This function is the ONLY
+// thing standing between a page's stored value and a LIVE network call reached through the normal
+// booking lifecycle. A future plan restoring the feature replaces this one function's body (with
+// the real per-page check its own consent-flow design calls for) rather than touching any of its
+// four call sites.
+func googleSyncActive() bool {
+	return false
+}
+
 // googleBusyForPage best-effort merges page's own Google Calendar freebusy over [from, to) into
 // existing — ports computeBusy's Google half (bookings.functions.ts). A no-op (no network call at
-// all) unless google is wired, the page has sync on, and it has an assigned member — and any Busy
+// all) unless google is wired, sync is active (googleSyncActive — hard-coded false throughout v5,
+// see its own doc comment), the page has sync on, and it has an assigned member — and any Busy
 // error past that (no connection, a hard API failure) degrades silently to existing alone: Google
 // Calendar availability is always best-effort, never something that can block a booking or its
 // own availability display.
 func googleBusyForPage(ctx context.Context, google GoogleSync, page queries.BookingPage, from, to time.Time, existing []Interval) []Interval {
-	if google == nil || !page.GoogleSync || !page.MemberUserID.Valid {
+	if google == nil || !googleSyncActive() || !page.GoogleSync || !page.MemberUserID.Valid {
 		return existing
 	}
 	extra, err := google.Busy(ctx, strconv.FormatInt(page.MemberUserID.Int64, 10), from, to)
