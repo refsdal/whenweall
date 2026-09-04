@@ -4,16 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/thecodearcher/limen"
 
 	"github.com/refsdal/whenweall/internal/mailer"
 )
-
-// localeCookieName is paraglide's cookie (web/src/paraglide/runtime.js: cookieName) — the SPA sets
-// it on every locale switch, so a guest who picked Norwegian before signing up carries it here.
-const localeCookieName = "whenweall_locale"
 
 // pendingSignupProfile is one entry of Service.pendingSignupProfiles — see that field's doc
 // comment (auth.go) for what this does and does not guarantee.
@@ -120,38 +115,14 @@ func signupProfileFromRequest(hc *limen.HookContext) (name *string, locale strin
 	return name, requestLocale(hc.Request(), hc.GetJSONBodyValue("locale"))
 }
 
-// requestLocale picks the signup's locale: an explicit supported `locale` body value first, then
-// the whenweall_locale cookie, then the first supported language in Accept-Language (base tag,
-// so "nb-NO" counts as "nb"), else "en". Only exact members of mailer.SupportedLocales are ever
-// returned.
+// requestLocale picks the signup's locale: an explicit supported `locale` body value first, else
+// mailer.RequestLocale's cookie/Accept-Language resolution over r (the whenweall_locale cookie,
+// then the best Accept-Language match), which is the SAME resolution the roster-CSV route uses —
+// see mailer.RequestLocale's own doc comment for why that used to be two divergent
+// implementations. Only exact members of mailer.SupportedLocales are ever returned.
 func requestLocale(r *http.Request, bodyLocale any) string {
 	if l, ok := bodyLocale.(string); ok && mailer.IsSupportedLocale(l) {
 		return l
 	}
-	if r != nil {
-		if c, err := r.Cookie(localeCookieName); err == nil && mailer.IsSupportedLocale(c.Value) {
-			return c.Value
-		}
-		if l := acceptLanguageLocale(r.Header.Get("Accept-Language")); l != "" {
-			return l
-		}
-	}
-	return "en"
-}
-
-// acceptLanguageLocale returns the first supported base language in an Accept-Language header
-// ("nb-NO,nb;q=0.9,en;q=0.8" -> "nb"), or "" when none is supported. Quality values are ignored
-// beyond list order, which is how browsers order the list anyway.
-func acceptLanguageLocale(header string) string {
-	for _, part := range strings.Split(header, ",") {
-		tag := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
-		if tag == "" || tag == "*" {
-			continue
-		}
-		base := strings.ToLower(strings.SplitN(tag, "-", 2)[0])
-		if mailer.IsSupportedLocale(base) {
-			return base
-		}
-	}
-	return ""
+	return mailer.RequestLocale(r)
 }

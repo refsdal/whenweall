@@ -22,6 +22,7 @@ import (
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
 	"github.com/refsdal/whenweall/internal/httpserver"
+	"github.com/refsdal/whenweall/internal/mailer"
 	"github.com/refsdal/whenweall/internal/polls"
 	"github.com/refsdal/whenweall/internal/testdb"
 )
@@ -1390,7 +1391,7 @@ func TestHandlerRosterCSVUsesRequestLocale(t *testing.T) {
 
 	t.Run("locale cookie wins over Accept-Language", func(t *testing.T) {
 		rec := doRequest(t, h, "GET", path, nil, map[string]string{
-			"X-Test-Session": ownerID, "Accept-Language": "nb", "Cookie": httpserver.LocaleCookieName + "=en",
+			"X-Test-Session": ownerID, "Accept-Language": "nb", "Cookie": mailer.LocaleCookieName + "=en",
 		})
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), wantLabelEN) {
 			t.Errorf("status = %d, body = %q; want 200 containing %q", rec.Code, rec.Body.String(), wantLabelEN)

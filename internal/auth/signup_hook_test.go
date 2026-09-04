@@ -194,6 +194,14 @@ func TestRequestLocaleParsing(t *testing.T) {
 		{nil, "", " fr , nb ;q=0.2", "nb"},
 		{nil, "", "*", "en"},
 		{42, "", "", "en"},
+		// Pins the exact divergence a whole-plan review found between this path and
+		// httpserver's roster-CSV locale resolution (now unified in mailer.RequestLocale):
+		// header order puts "en" first, but its q=0.5 is lower than "nb"'s q=0.9, so the
+		// q-ordered winner is "nb" — not "en", which a header-order-only reader would pick.
+		{nil, "", "en;q=0.5, nb;q=0.9", "nb"},
+		// mailer.RequestLocale matches the cookie case-insensitively, unlike this path's old
+		// exact-match-only cookie check.
+		{nil, "NB", "", "nb"},
 	}
 	for _, tc := range cases {
 		if got := requestLocale(mk(tc.cookie, tc.accept), tc.body); got != tc.want {

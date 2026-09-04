@@ -4,7 +4,7 @@ package polls
 // sheet (one row per claim, plus a single zero-claim row for a still-open slot).
 //
 // Labels render through optionLabelText (timers.go) in the caller's locale — the roster route's
-// getLocale() in the TS source becomes httpserver.RequestLocale at the handler.
+// getLocale() in the TS source becomes mailer.RequestLocale at the handler.
 import (
 	"context"
 	"database/sql"

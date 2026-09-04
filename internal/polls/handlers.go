@@ -1026,7 +1026,7 @@ func (s *Service) handleRosterCSV(w http.ResponseWriter, r *http.Request, sess *
 		writeServiceError(w, err)
 		return
 	}
-	csv, err := s.BuildRosterCSV(r.Context(), pollID, httpserver.RequestLocale(r, mailer.SupportedLocales))
+	csv, err := s.BuildRosterCSV(r.Context(), pollID, mailer.RequestLocale(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
