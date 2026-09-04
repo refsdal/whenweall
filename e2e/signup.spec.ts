@@ -1,8 +1,8 @@
-import { expect, signIn, test, waitForHydration, waitForTurnstile } from './fixtures'
+import { expect, signIn, test, waitForHydration } from './fixtures'
 
 /**
  * Claims a slot for a fresh guest page: opens the identity sheet on first claim, fills the name,
- * waits out the Turnstile test widget, and submits. Mirrors the flow a real guest goes through
+ * and submits. Mirrors the flow a real guest goes through
  * the first time they press "Claim spot" on a sign-up sheet — see `IdentitySheet.tsx`.
  */
 async function claimSlotAsNewGuest(
@@ -16,7 +16,6 @@ async function claimSlotAsNewGuest(
   const identityDialog = page.getByRole('dialog', { name: "Who's taking the slot?" })
   await expect(identityDialog).toBeVisible()
   await identityDialog.getByLabel('Your name').fill(name)
-  await waitForTurnstile(page)
   await identityDialog.getByRole('button', { name: 'Sign me up' }).click()
   await expect(identityDialog).toBeHidden()
 }
@@ -27,9 +26,11 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   browser,
   userWithSignup,
 }) => {
-  test.skip(!userWithSignup.pollId, 'seed route did not return a pollId')
-  const pollId = userWithSignup.pollId!
+  const { pollId } = userWithSignup
   const pollPath = `/p/${pollId}`
+  // The roster download lives under the API surface, not the SPA route — web/src/api/polls.ts's
+  // `pollRosterCSVUrl` builds this same path, not `/p/{id}/roster.csv`.
+  const rosterPath = `/api/v1/polls/${pollId}/roster.csv`
 
   // Context A: guest A, a fresh unauthenticated browser context.
   const contextA = await browser.newContext()
@@ -74,7 +75,7 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
 
   // --- the owner downloads the roster: both names, as CSV, with their own session cookies ---
   await signIn(page, userWithSignup)
-  const roster = await page.context().request.get(`${pollPath}/roster.csv`)
+  const roster = await page.context().request.get(rosterPath)
   expect(roster.status()).toBe(200)
   expect(roster.headers()['content-type']).toContain('text/csv')
   const csv = await roster.text()
@@ -82,6 +83,6 @@ test('guest claims a slot, a second guest fills it and claims the other, owner d
   expect(csv).toContain('Guest B')
 
   // --- anonymous access to the same roster is rejected (401: no session at all) ---
-  const anonymousRoster = await request.get(`${pollPath}/roster.csv`)
+  const anonymousRoster = await request.get(rosterPath)
   expect(anonymousRoster.status()).toBe(401)
 })

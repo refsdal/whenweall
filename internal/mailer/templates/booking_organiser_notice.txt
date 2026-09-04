@@ -1,0 +1,8 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_booking_organiser_heading"}}
+
+{{.PageTitle}}
+{{t $locale "email_booking_organiser_body" "name" .VisitorName "email" .VisitorEmail "when" .When}}
+{{if .Location}}{{t $locale "email_booking_location" "location" .Location}}
+{{end}}{{if .VisitorNote}}{{t $locale "email_booking_organiser_note" "note" .VisitorNote}}
+{{end}}
+{{t $locale "email_booking_organiser_cta"}}: {{.ViewURL}}

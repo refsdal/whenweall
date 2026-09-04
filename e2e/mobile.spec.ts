@@ -1,4 +1,4 @@
-import { expect, test, waitForHydration, waitForTurnstile } from './fixtures'
+import { expect, test, waitForHydration } from './fixtures'
 
 /**
  * The poll page on a phone, where the grid is replaced by a list of dates.
@@ -15,8 +15,7 @@ test.describe('poll on a phone', () => {
     page,
     userWithPoll,
   }) => {
-    test.skip(!userWithPoll.pollId, 'seed route did not return a pollId')
-    const pollId = userWithPoll.pollId!
+    const { pollId } = userWithPoll
 
     await page.goto(`/p/${pollId}`)
     await waitForHydration(page)
@@ -59,7 +58,6 @@ test.describe('poll on a phone', () => {
     // `getByLabel` does not filter on visibility the way the role engine does.
     const guestName = `Phone guest ${Date.now()}`
     await page.locator('#poll-your-name').fill(guestName)
-    await waitForTurnstile(page)
     await saveBar.getByRole('button', { name: /save my answer/i }).click()
 
     // Saved: the visitor is now a row on the sheet, and the list says so.

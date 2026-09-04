@@ -1,0 +1,113 @@
+package httpserver_test
+
+// Ports src/server/http/__tests__/turnstile.workers.test.ts's verifyTurnstile cases (succeeds/
+// fails/no-token-no-request, forwards remoteip) onto VerifyTurnstile, plus the task brief's own
+// required timeout->fail-closed case (not present in the TS suite, which runs against a mocked
+// network with no real timeout to hit). requireTurnstile's CAPTCHA_FAILED behavior is exercised
+// against requireCaptchaIfAnon (internal/polls/handlers_test.go) instead of a middleware here —
+// see turnstile.go's package doc comment for why.
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"testing"
+	"time"
+
+	"github.com/refsdal/whenweall/internal/httpserver"
+)
+
+// withSiteverifyStub points httpserver.TurnstileSiteverifyURL at ts's URL for the duration of the
+// test, restoring the real Cloudflare endpoint on cleanup — TurnstileSiteverifyURL exists
+// specifically so an external test package (this one) has somewhere to inject a stub.
+func withSiteverifyStub(t *testing.T, ts *httptest.Server) {
+	t.Helper()
+	orig := httpserver.TurnstileSiteverifyURL
+	httpserver.TurnstileSiteverifyURL = ts.URL
+	t.Cleanup(func() {
+		httpserver.TurnstileSiteverifyURL = orig
+		ts.Close()
+	})
+}
+
+func jsonSuccess(success bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": success})
+	}
+}
+
+func TestVerifyTurnstileSucceeds(t *testing.T) {
+	ts := httptest.NewServer(jsonSuccess(true))
+	withSiteverifyStub(t, ts)
+
+	if err := httpserver.VerifyTurnstile(context.Background(), "secret", "tok", ""); err != nil {
+		t.Errorf("VerifyTurnstile = %v, want nil", err)
+	}
+}
+
+func TestVerifyTurnstileFails(t *testing.T) {
+	ts := httptest.NewServer(jsonSuccess(false))
+	withSiteverifyStub(t, ts)
+
+	if err := httpserver.VerifyTurnstile(context.Background(), "secret", "tok", ""); err == nil {
+		t.Error("VerifyTurnstile = nil, want an error for success:false")
+	}
+}
+
+func TestVerifyTurnstileNoTokenSkipsRequest(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		jsonSuccess(true)(w, r)
+	}))
+	withSiteverifyStub(t, ts)
+
+	if err := httpserver.VerifyTurnstile(context.Background(), "secret", "", ""); err == nil {
+		t.Error("VerifyTurnstile = nil, want an error for an empty token")
+	}
+	if called {
+		t.Error("siteverify was called despite an empty token")
+	}
+}
+
+func TestVerifyTurnstileForwardsRemoteIP(t *testing.T) {
+	var body url.Values
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body, _ = url.ParseQuery(string(raw))
+		jsonSuccess(true)(w, r)
+	}))
+	withSiteverifyStub(t, ts)
+
+	if err := httpserver.VerifyTurnstile(context.Background(), "secret", "tok", "203.0.113.9"); err != nil {
+		t.Fatalf("VerifyTurnstile: %v", err)
+	}
+	if got := body.Get("remoteip"); got != "203.0.113.9" {
+		t.Errorf("remoteip = %q, want %q", got, "203.0.113.9")
+	}
+	if got := body.Get("secret"); got != "secret" {
+		t.Errorf("secret = %q, want %q", got, "secret")
+	}
+	if got := body.Get("response"); got != "tok" {
+		t.Errorf("response = %q, want %q", got, "tok")
+	}
+}
+
+func TestVerifyTurnstileTimeoutFailsClosed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		jsonSuccess(true)(w, r)
+	}))
+	withSiteverifyStub(t, ts)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	if err := httpserver.VerifyTurnstile(ctx, "secret", "tok", ""); err == nil {
+		t.Error("VerifyTurnstile = nil, want an error when siteverify times out")
+	}
+}

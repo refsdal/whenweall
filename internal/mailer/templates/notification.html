@@ -1,0 +1,10 @@
+{{/* Ported from emails/Notification.tsx. Data: Event, Title, URL, Detail (optional — only used
+     by the booking.* events). poll.closed is out of scope here on purpose: it has its own
+     dedicated "closed" template. */}}
+{{define "subject"}}{{$locale := or .Locale "en"}}{{notifSubject $locale .Event .Title}}{{end}}
+{{define "content"}}{{$locale := or .Locale "en"}}
+<h1 style="font-size:20px;margin:0 0 16px;color:#18181b;">{{.Title}}</h1>
+<p style="font-size:14px;line-height:22px;color:#3f3f46;margin:0 0 16px;">{{notifBody $locale .Event .Title (or .Detail "")}}</p>
+<a href="{{.URL}}" style="background-color:#e8572a;color:#ffffff;padding:12px 20px;border-radius:8px;font-size:14px;font-weight:bold;text-decoration:none;display:inline-block;">{{t $locale "email_notification_cta"}}</a>
+<p style="font-size:12px;color:#71717a;word-break:break-all;margin:16px 0 0;">{{.URL}}</p>
+{{end}}

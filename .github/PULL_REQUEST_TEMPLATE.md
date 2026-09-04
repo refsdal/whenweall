@@ -8,7 +8,6 @@
 
 ## Test plan
 
-- [ ] Unit tests (`bun run test:unit`)
-- [ ] Workers tests (`bun run test:workers`)
-- [ ] End-to-end tests (`bun run test:e2e`)
-- [ ] Typecheck (`bun run typecheck`)
+- [ ] Go: `go test ./... && go vet ./... && golangci-lint run ./... && sqlc diff`
+- [ ] Web: `cd web && bun run typecheck && bun run lint && bunx vitest run`
+- [ ] End-to-end (for user-visible changes): `bunx playwright test`

@@ -1,0 +1,48 @@
+{{/* layout.html — the visual shell every HTML template renders inside, ported from
+     emails/_Layout.tsx. Table-based, inline styles only, no external CSS or fonts: the only
+     markup an email client can be trusted to render consistently. Each <name>.html defines
+     "subject" (the plain subject line, rendered separately by Render) and "content" (this
+     template's body, dropped into the middle row below). */}}
+{{$locale := or .Locale "en"}}<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body style="margin:0;padding:0;background-color:#f4f4f5;font-family:Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="480" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff;max-width:480px;width:100%;">
+            <tr>
+              <td style="padding:32px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="padding:0 0 24px;">
+                      <a href="{{.AppURL}}" style="color:#e8572a;font-size:20px;font-weight:bold;text-decoration:none;">whenweall</a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      {{template "content" .}}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:32px 0 16px;">
+                      <hr style="border:none;border-top:1px solid #e4e4e7;margin:0;">
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <p id="wwa-footer" style="color:#71717a;font-size:12px;line-height:18px;margin:0;">{{t $locale "email_footer" "name" "whenweall"}} &middot; hello@whenweall.com</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

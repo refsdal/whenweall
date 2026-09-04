@@ -1,10 +1,9 @@
 import {
   expect,
-  pickFirstEnabledDay,
+  pickFirstEnabledDayNotToday,
   signIn,
   test,
   waitForHydration,
-  waitForTurnstile,
 } from './fixtures'
 
 test('a visitor books the first open slot, the owner sees it, and cancelling frees it live', async ({
@@ -13,10 +12,7 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
   request,
   userWithBookingPage,
 }) => {
-  test.skip(!userWithBookingPage.pageId, 'seed route did not return a pageId')
-  const pageId = userWithBookingPage.pageId!
-  const handle = userWithBookingPage.handle!
-  const slug = userWithBookingPage.slug!
+  const { pageId, handle, slug } = userWithBookingPage
   const bookPath = `/book/${handle}/${slug}`
 
   // Context A: the visitor who is about to book.
@@ -31,12 +27,12 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     await visitorPage.goto(bookPath)
     await waitForHydration(visitorPage)
     await expect(visitorPage.getByTestId('booking-page')).toBeVisible()
-    await pickFirstEnabledDay(visitorPage)
+    await pickFirstEnabledDayNotToday(visitorPage)
 
     await watcherPage.goto(bookPath)
     await waitForHydration(watcherPage)
     await expect(watcherPage.getByTestId('booking-page')).toBeVisible()
-    await pickFirstEnabledDay(watcherPage)
+    await pickFirstEnabledDayNotToday(watcherPage)
 
     const visitorSlotList = visitorPage.getByTestId('slot-list')
     await expect(visitorSlotList).toBeVisible()
@@ -60,7 +56,6 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     await expect(dialog).toBeVisible()
     await visitorPage.locator('#booking-name').fill('Visitor One')
     await visitorPage.locator('#booking-email').fill('visitor-one@example.com')
-    await waitForTurnstile(visitorPage)
     await visitorPage.getByRole('button', { name: 'Confirm booking' }).click()
 
     const confirmed = visitorPage.getByTestId('booking-confirmed')
@@ -75,11 +70,15 @@ test('a visitor books the first open slot, the owner sees it, and cancelling fre
     const manageToken = decodeURIComponent(match![2]!)
 
     // --- the .ics for the fresh booking is a real calendar file ---
+    // Downloads live under the API surface, not the SPA route — web/src/api/bookings.ts's
+    // `bookingCalendarICSUrl` builds this same path, mirroring polls' own
+    // `pollCalendarICSUrl`/`/api/v1/polls/{id}/calendar.ics` (poll-flow.spec.ts).
     const ics = await request.get(
-      `/booking/${bookingId}/calendar.ics?t=${encodeURIComponent(manageToken)}`,
+      `/api/v1/bookings/${bookingId}/calendar.ics?t=${encodeURIComponent(manageToken)}`,
     )
     expect(ics.status()).toBe(200)
     expect(ics.headers()['content-type']).toContain('text/calendar')
+    expect(await ics.text()).toContain('BEGIN:VCALENDAR')
 
     // --- the watcher sees the booked slot chip disappear live, within 10s, without a reload ---
     await expect(slotByLabel(watcherPage)).toHaveCount(0, { timeout: 10_000 })

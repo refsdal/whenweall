@@ -1,0 +1,5 @@
+{{$locale := or .Locale "en"}}{{.PollTitle}}
+
+{{t $locale "email_closed_body"}}
+
+{{t $locale "email_closed_cta"}}: {{.PollURL}}

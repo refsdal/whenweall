@@ -1,0 +1,20 @@
+version: '2'
+sql:
+  - engine: postgresql
+    schema: migrations
+    queries: internal/polls/queries
+    gen:
+      go:
+        package: queries
+        out: internal/polls/queries
+        sql_package: database/sql
+        emit_interface: true
+  - engine: postgresql
+    schema: migrations
+    queries: internal/bookings/queries
+    gen:
+      go:
+        package: queries
+        out: internal/bookings/queries
+        sql_package: database/sql
+        emit_interface: true

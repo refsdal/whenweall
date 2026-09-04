@@ -1,0 +1,6 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_digest_heading"}}
+
+{{.PollTitle}}
+{{range .Lines}}{{digestLine $locale .Event .Count}}{{if .Names}} - {{join .Names ", "}}{{end}}
+{{end}}
+{{t $locale "email_digest_cta"}}: {{.PollURL}}

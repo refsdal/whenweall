@@ -1,26 +1,26 @@
 node_modules
 .DS_Store
 dist
-dist-ssr
 *.local
 .env
-.nitro
-.tanstack
-.wrangler
-.output
-.vinxi
-__unconfig*
 todos.json
 
 test-results
 playwright-report
 blob-report
+# Written by e2e/run-server.sh for the run that started containers; removed by global-teardown.ts.
+e2e/.run-server-marker.json
+docs/screenshots/*.png
 
-.dev.vars*
-!.dev.vars.example
 !.env.example
-
-src/paraglide
 
 # local scratch (SDD ledgers, briefs, reports)
 .superpowers/
+
+# Go
+dist-go/
+.limen/
+
+# The embedded SPA build output overwrites this dir; only the placeholder index.html and its
+# own .gitignore (which ignores everything else here) are committed.
+!internal/httpserver/dist/

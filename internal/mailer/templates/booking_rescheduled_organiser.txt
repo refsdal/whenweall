@@ -1,0 +1,7 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_booking_rescheduled_org_heading"}}
+
+{{.PageTitle}}
+{{t $locale "email_booking_rescheduled_org_body" "name" .VisitorName "previousWhen" .PreviousWhen "when" .When}}
+{{if .Location}}{{t $locale "email_booking_location" "location" .Location}}
+{{end}}
+{{t $locale "email_booking_rescheduled_org_cta"}}: {{.ViewURL}}

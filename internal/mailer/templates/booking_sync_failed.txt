@@ -1,0 +1,3 @@
+{{$locale := or .Locale "en"}}{{t $locale "email_booking_sync_failed_heading"}}
+
+{{t $locale "email_booking_sync_failed_body" "title" .PageTitle}}

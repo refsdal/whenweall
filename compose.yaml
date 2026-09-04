@@ -1,0 +1,91 @@
+# Self-hosting whenweall: one app container and one database. Postgres carries everything a
+# cache/broker would otherwise be needed for — LISTEN/NOTIFY for websocket fan-out across
+# replicas, presence and rate-limit tables, and `scheduled_jobs` for timers and the mail queue —
+# so there is exactly one stateful service to back up.
+
+name: whenweall
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: whenweall
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD - generate with `openssl rand -base64 24`}
+      POSTGRES_DB: whenweall
+    volumes:
+      # Postgres 18+ images store data in a major-version subdirectory and reject a volume mounted
+      # directly at .../data. The mount goes one level up, at /var/lib/postgresql.
+      - db-data:/var/lib/postgresql
+    ports:
+      # Host port 5433 so this never collides with a Postgres already running on the host. Bound
+      # to loopback only: this is a database with a generated password, not something that should
+      # be reachable from other machines on the network by default.
+      - '127.0.0.1:${POSTGRES_PORT:-5433}:5432'
+    healthcheck:
+      # `-d` matters: without it pg_isready probes the default database and reports ready before
+      # POSTGRES_DB exists, so the app would start against a database that is not there yet.
+      test: ['CMD-SHELL', 'pg_isready -U whenweall -d whenweall']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  app:
+    # Pulled from the registry .github/workflows/release.yml publishes — `docker compose pull app`
+    # is the upgrade path (README "Ops"). `build:` stays so `docker compose up --build` still
+    # produces the same image from a source checkout.
+    image: ghcr.io/refsdal/whenweall:latest
+    build:
+      context: .
+    # On SIGTERM the app closes every WebSocket with a GoingAway frame, clears its presence rows
+    # and drains in-flight requests (up to 10 s). compose's default 10 s would SIGKILL mid-drain.
+    stop_grace_period: 20s
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      APP_ENV: ${APP_ENV:-production}
+      PORT: 3000
+      DATABASE_URL: postgres://whenweall:${POSTGRES_PASSWORD}@db:5432/whenweall
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET - generate with `openssl rand -base64 32`}
+      # Mail is required: whenweall's confirmations, .ics attachments and digests are the product.
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST - whenweall cannot function without e-mail}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      EMAIL_FROM: ${EMAIL_FROM:-whenweall <no-reply@localhost>}
+      # Optional. Each is off unless fully configured; see internal/config.
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_NAME: ${OIDC_NAME:-sso}
+      # Escape hatch (spec §6): set false to run `whenweall migrate` yourself instead.
+      MIGRATE_ON_BOOT: ${MIGRATE_ON_BOOT:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # Uncomment for a local smoke test: a real SMTP sink with a web UI at http://localhost:8025 to
+  # read whatever whenweall sends, no external network or real mail provider required. Point the
+  # `app` service at it with SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_SECURE=false.
+  # mailpit:
+  #   image: axllent/mailpit:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - '127.0.0.1:8025:8025' # web UI
+  #     - '127.0.0.1:1025:1025' # SMTP
+
+volumes:
+  db-data:

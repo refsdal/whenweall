@@ -1,0 +1,499 @@
+package admin
+
+// Ports src/server/admin/users.ts (listAdminUsers/getAdminUserDetail) plus the mutations that TS
+// source never had — TS's lock/unlock is Better-Auth's admin plugin banUser/unbanUser (against
+// `user.banned`/`user.banReason`, added by that plugin, not this codebase's own schema) and its
+// delete is the raw `auth.api.deleteUser` call exercised by user-delete.workers.test.ts, whose
+// cascade behavior lives in src/server/auth/personal-org.ts's deleteOrphanedOwnerOrganizations —
+// this file ports that cascade by hand against Limen's organization/member schema (there is no
+// Go analogue of a Better-Auth `databaseHooks.user.delete.before`).
+//
+// Limen's users table (migrations/00002_auth.sql) has no banned/locked column of its own — see
+// migrations/00007_admin_locks.sql's own doc comment for why locking is instead a standalone
+// `locked_users` table, enforced at the auth seam (internal/auth's resolveSession).
+
+import (
+	"context"
+	"database/sql"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/refsdal/whenweall/internal/auth"
+	"github.com/refsdal/whenweall/internal/db"
+)
+
+// defaultUserListLimit/maxUserListLimit mirror audit.go's own list-limit convention (there is no
+// TS analogue to port — listAdminUsers took a raw offset/limit pair with no cap of its own).
+const (
+	defaultUserListLimit = 50
+	maxUserListLimit     = 200
+)
+
+// UserFilter narrows SearchUsers' result set. Query matches (case-insensitively) against the
+// user's email or their first/last name; Cursor is opaque, always the next value a previous
+// SearchUsers call returned; Limit <= 0 uses defaultUserListLimit, and anything over
+// maxUserListLimit is clamped to it.
+type UserFilter struct {
+	Query  string
+	Cursor string
+	Limit  int
+}
+
+// AdminUserRow is one row of a SearchUsers page — the support console's find-a-person list.
+// Mirrors AdminUserSummary (users.ts), minus `role` (TS's Better-Auth admin-plugin field): Staff
+// plays that role here, sourced from staff_users the same way resolveSession's own Session.Staff
+// is (session.go).
+type AdminUserRow struct {
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	Name          string `json:"name"`
+	EmailVerified bool   `json:"emailVerified"`
+	Staff         bool   `json:"staff"`
+	Locked        bool   `json:"locked"`
+	CreatedAt     string `json:"createdAt"`
+}
+
+// OrgMembership is one of AdminUserDetail's Orgs entries.
+type OrgMembership struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Slug  string   `json:"slug"`
+	Roles []string `json:"roles"`
+}
+
+// UserCounts mirrors AdminUserDetail's `counts` block (users.ts).
+type UserCounts struct {
+	Polls        int64 `json:"polls"`
+	BookingPages int64 `json:"bookingPages"`
+	Bookings     int64 `json:"bookings"`
+}
+
+// AdminUserDetail mirrors AdminUserDetail (users.ts): a user's summary row, plus the orgs they
+// belong to, what they've created, and (if locked) why. RecentActions is dropped here — the
+// console reads that from admin.List directly (audit.go), scoped to targetType "user"/targetId,
+// rather than UserDetail re-deriving it.
+type AdminUserDetail struct {
+	AdminUserRow
+	LockReason *string         `json:"lockReason"`
+	Orgs       []OrgMembership `json:"orgs"`
+	Counts     UserCounts      `json:"counts"`
+}
+
+// userSelectColumns is shared by SearchUsers and UserDetail: the row shape, minus filters/limits.
+// Never widen this to `SELECT *` — users.password is credential material with no business
+// reaching an admin console screen (users.ts's own SUMMARY_COLUMNS doc comment, ported verbatim).
+const userSelectColumns = `
+	id, email, first_name, last_name, email_verified_at, created_at,
+	EXISTS(SELECT 1 FROM staff_users s WHERE s.user_id = users.id) AS staff,
+	EXISTS(SELECT 1 FROM locked_users l WHERE l.user_id = users.id) AS locked
+`
+
+// scanUserRow scans one userSelectColumns row and returns both its viewmodel and the raw
+// created_at (needed, un-rounded, for SearchUsers' own cursor — see its doc comment on why
+// round-tripping through the ISO-formatted, millisecond-truncated CreatedAt string instead would
+// risk silently dropping a row).
+func scanUserRow(scan func(dest ...any) error) (AdminUserRow, time.Time, error) {
+	var (
+		id                  int64
+		email               string
+		firstName, lastName sql.NullString
+		emailVerifiedAt     sql.NullTime
+		createdAt           time.Time
+		staff, locked       bool
+	)
+	if err := scan(&id, &email, &firstName, &lastName, &emailVerifiedAt, &createdAt, &staff, &locked); err != nil {
+		return AdminUserRow{}, time.Time{}, err
+	}
+	return AdminUserRow{
+		ID:            strconv.FormatInt(id, 10),
+		Email:         email,
+		Name:          composeUserName(firstName, lastName, email),
+		EmailVerified: emailVerifiedAt.Valid,
+		Staff:         staff,
+		Locked:        locked,
+		CreatedAt:     formatISO(createdAt),
+	}, createdAt, nil
+}
+
+// composeUserName builds a display name from Limen's nullable first_name/last_name (there is no
+// single `name` column, unlike Better-Auth's `user.name` — same gap internal/polls/notifications.go
+// and internal/bookings/emails.go's own displayName helpers fill for mail recipients). Falls back
+// to the email's local part, then the raw email, if both are blank.
+func composeUserName(firstName, lastName sql.NullString, email string) string {
+	first := strings.TrimSpace(firstName.String)
+	last := strings.TrimSpace(lastName.String)
+	name := strings.TrimSpace(strings.TrimSpace(first + " " + last))
+	if name != "" {
+		return name
+	}
+	if i := strings.IndexByte(email, '@'); i > 0 {
+		return email[:i]
+	}
+	return email
+}
+
+// userWhereConditions builds the WHERE conditions SearchUsers and CountUsers share — UserFilter's
+// Query field, the only one either query filters on (Cursor is SearchUsers-only, Limit isn't a
+// WHERE condition). Mirrors audit.go's own auditWhereConditions.
+func userWhereConditions(f UserFilter) (where []string, args []any) {
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		term := "%" + q + "%"
+		placeholder := arg(term)
+		where = append(where, fmt.Sprintf(
+			"(email ILIKE %s OR (coalesce(first_name, '') || ' ' || coalesce(last_name, '')) ILIKE %s)",
+			placeholder, placeholder,
+		))
+	}
+	return where, args
+}
+
+// SearchUsers is the support console's find-a-person query: a substring match on email or name
+// (both ILIKE, so it's case-insensitive without needing to lower-case either side), newest first,
+// walked as a (created_at, id) keyset exactly like admin.List (audit.go) — see that function's own
+// doc comment for why a keyset beats OFFSET here, and for why this fetches limit+1 rows and trims
+// rather than treating "got exactly limit rows" as "there's a next page" (the same
+// exact-boundary-page bug that comment describes). nextCursor is "" once the last page is reached.
+func SearchUsers(ctx context.Context, tx db.DBTX, f UserFilter) ([]AdminUserRow, string, error) {
+	limit := f.Limit
+	switch {
+	case limit <= 0:
+		limit = defaultUserListLimit
+	case limit > maxUserListLimit:
+		limit = maxUserListLimit
+	}
+
+	where, args := userWhereConditions(f)
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if f.Cursor != "" {
+		cursorCreatedAt, cursorID, err := decodeUserCursor(f.Cursor)
+		if err != nil {
+			return nil, "", fmt.Errorf("admin: invalid user cursor: %w", err)
+		}
+		where = append(where, fmt.Sprintf("(created_at, id) < (%s, %s)", arg(cursorCreatedAt), arg(cursorID)))
+	}
+
+	query := "SELECT " + userSelectColumns + " FROM users"
+	if len(where) > 0 {
+		query += "\nWHERE " + strings.Join(where, " AND ")
+	}
+	query += fmt.Sprintf("\nORDER BY created_at DESC, id DESC LIMIT %s", arg(limit+1))
+
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = rows.Close() }()
+
+	users := make([]AdminUserRow, 0, limit+1)
+	createdAts := make([]time.Time, 0, limit+1)
+	for rows.Next() {
+		u, createdAt, err := scanUserRow(rows.Scan)
+		if err != nil {
+			return nil, "", err
+		}
+		users = append(users, u)
+		createdAts = append(createdAts, createdAt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	nextCursor := ""
+	if len(users) > limit {
+		users = users[:limit]
+		createdAts = createdAts[:limit]
+		nextCursor = encodeUserCursor(createdAts[limit-1], users[limit-1].ID)
+	}
+	return users, nextCursor, nil
+}
+
+// CountUsers reports how many rows f's filter matches (Cursor/Limit ignored, same contract as
+// audit.go's Count) — the support console's "N results" alongside a cursor-paginated SearchUsers.
+func CountUsers(ctx context.Context, tx db.DBTX, f UserFilter) (int64, error) {
+	where, args := userWhereConditions(f)
+
+	query := "SELECT count(*) FROM users"
+	if len(where) > 0 {
+		query += "\nWHERE " + strings.Join(where, " AND ")
+	}
+
+	var total int64
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&total)
+	return total, err
+}
+
+// encodeUserCursor/decodeUserCursor mirror audit.go's encodeCursor/decodeCursor, keyed on a bigint
+// user id rather than a text nanoid.
+func encodeUserCursor(createdAt time.Time, id string) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeUserCursor(cursor string) (time.Time, int64, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, 0, errors.New("malformed cursor")
+	}
+	t, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	return t, id, nil
+}
+
+// UserDetail returns nil (not an error) for an unknown or malformed id — a stale link in a ticket
+// is an ordinary occurrence, not an exceptional one (ports getAdminUserDetail's own doc comment).
+func UserDetail(ctx context.Context, tx db.DBTX, userID string) (*AdminUserDetail, error) {
+	uid, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return nil, nil
+	}
+
+	row := tx.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE id = $1", uid)
+	summary, _, err := scanUserRow(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("admin: loading user %s: %w", userID, err)
+	}
+
+	var lockReason sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT reason FROM locked_users WHERE user_id = $1", uid).Scan(&lockReason); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("admin: loading lock reason for user %s: %w", userID, err)
+	}
+
+	orgRows, err := tx.QueryContext(ctx, `
+		SELECT o.id, o.name, o.slug,
+			coalesce(string_agg(DISTINCT mr.role, ',' ORDER BY mr.role) FILTER (WHERE mr.role IS NOT NULL), '')
+		FROM organization_members m
+		JOIN organizations o ON o.id = m.organization_id
+		LEFT JOIN organization_member_roles mr ON mr.member_id = m.id
+		WHERE m.user_id = $1
+		GROUP BY o.id, o.name, o.slug
+		ORDER BY o.name, o.id
+	`, uid)
+	if err != nil {
+		return nil, fmt.Errorf("admin: loading orgs for user %s: %w", userID, err)
+	}
+	defer func() { _ = orgRows.Close() }()
+
+	orgs := make([]OrgMembership, 0)
+	for orgRows.Next() {
+		var (
+			orgID    int64
+			name     string
+			slug     string
+			rolesCSV string
+		)
+		if err := orgRows.Scan(&orgID, &name, &slug, &rolesCSV); err != nil {
+			return nil, fmt.Errorf("admin: scanning org row for user %s: %w", userID, err)
+		}
+		// Never nil — an empty JSON array ([]), not a JSON null, for a member with no role rows
+		// (a plain member, e.g. seedMember's own no-roles case in users_test.go): the frontend
+		// reads Roles as an array unconditionally, and encoding/json renders a nil slice as null.
+		roles := []string{}
+		if rolesCSV != "" {
+			roles = strings.Split(rolesCSV, ",")
+		}
+		orgs = append(orgs, OrgMembership{ID: strconv.FormatInt(orgID, 10), Name: name, Slug: slug, Roles: roles})
+	}
+	if err := orgRows.Err(); err != nil {
+		return nil, fmt.Errorf("admin: reading orgs for user %s: %w", userID, err)
+	}
+
+	var counts UserCounts
+	if err := tx.QueryRowContext(ctx,
+		"SELECT count(*) FROM polls WHERE created_by = $1 AND deleted_at IS NULL", uid,
+	).Scan(&counts.Polls); err != nil {
+		return nil, fmt.Errorf("admin: counting polls for user %s: %w", userID, err)
+	}
+	if err := tx.QueryRowContext(ctx,
+		"SELECT count(*) FROM booking_pages WHERE created_by = $1 AND deleted_at IS NULL", uid,
+	).Scan(&counts.BookingPages); err != nil {
+		return nil, fmt.Errorf("admin: counting booking pages for user %s: %w", userID, err)
+	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(*) FROM bookings b JOIN booking_pages bp ON bp.id = b.page_id WHERE bp.created_by = $1
+	`, uid).Scan(&counts.Bookings); err != nil {
+		return nil, fmt.Errorf("admin: counting bookings for user %s: %w", userID, err)
+	}
+
+	detail := &AdminUserDetail{AdminUserRow: summary, Orgs: orgs, Counts: counts}
+	if lockReason.Valid {
+		detail.LockReason = &lockReason.String
+	}
+	return detail, nil
+}
+
+// ErrSelfTarget is returned by LockUser/DeleteUser when actor's own account is the target — see
+// writeCannotTargetSelf (handlers.go) for why the HTTP layer turns this into a 400 "invalid"
+// rather than a 403. Living here, on the service funcs themselves (M4), rather than only as a
+// string comparison in the HTTP handler, means a caller that reaches LockUser/DeleteUser directly
+// (any future one — today's handlers.go is the only caller) still gets the guard, not just the
+// one call site that happens to check it first.
+var ErrSelfTarget = errors.New("admin: actor cannot target their own account")
+
+// sameUserID reports whether a and b — both stringified bigint user ids (an auth.Session.UserID
+// or a path {id} value) — refer to the same underlying id once parsed, rather than comparing the
+// strings byte-for-byte. A byte-for-byte compare is what the self-target guard used before this
+// (M4's own bug): net/http's ServeMux never normalizes a {id} wildcard's value, and
+// strconv.ParseInt(..., 10, 64) is perfectly happy to accept a leading zero, so a staff member
+// could self-target by padding their own id ("007" for actor id "7") — same underlying user,
+// different string, the old guard silently skipped. An id that fails to parse is never treated as
+// a self-match (conservative: an unparseable id 404s further down in requireExistingUser instead
+// of being waved through here as "obviously not a self-match").
+func sameUserID(a, b string) bool {
+	aID, aErr := strconv.ParseInt(a, 10, 64)
+	if aErr != nil {
+		return false
+	}
+	bID, bErr := strconv.ParseInt(b, 10, 64)
+	if bErr != nil {
+		return false
+	}
+	return aID == bID
+}
+
+// LockUser flags userID as locked (audited, in the same tx) and then revokes their existing Limen
+// sessions through the auth seam — see migrations/00007_admin_locks.sql's doc comment for why both
+// halves matter. authSvc may be nil in a test that only cares about the lock/audit row itself; a
+// nil authSvc simply skips the revoke.
+func LockUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *auth.Session, userID, reason string) error {
+	if actor == nil {
+		return errors.New("admin: LockUser requires a non-nil actor session")
+	}
+	if sameUserID(actor.UserID, userID) {
+		return ErrSelfTarget
+	}
+
+	uid, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("admin: invalid user id %q: %w", userID, err)
+	}
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("admin: begin lock-user tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO locked_users (user_id, reason, created_at) VALUES ($1, NULLIF($2, ''), now())
+		ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason
+	`, uid, reason); err != nil {
+		return fmt.Errorf("admin: locking user %s: %w", userID, err)
+	}
+
+	if err := Record(ctx, tx, actor, ActionLockUser, "user", userID, reason, nil); err != nil {
+		return fmt.Errorf("admin: recording audit for lock-user: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("admin: commit lock-user tx: %w", err)
+	}
+
+	// Deliberately after the commit, and deliberately log-and-continue rather than returning the
+	// error: the lock itself (and resolveSession's own locked_users check) is already the
+	// enforcement point the moment the row above is durable, so a revoke failure here can't leave
+	// a locked user able to keep using the app — it only means their (now-useless) session rows
+	// linger in Limen's sessions table a little longer than necessary. Surfacing this as LockUser's
+	// own error would wrongly read as "the lock didn't take" to a caller, when it did.
+	if authSvc != nil {
+		if err := authSvc.RevokeUserSessions(ctx, userID); err != nil {
+			slog.Default().Error("admin: revoking sessions for locked user failed", "user_id", userID, "error", err)
+		}
+	}
+	return nil
+}
+
+// UnlockUser clears userID's lock (audited, in the same tx). Unlike LockUser there is nothing to
+// revoke — removing a restriction never needs to invalidate anything the user already holds.
+func UnlockUser(ctx context.Context, sqlDB *sql.DB, actor *auth.Session, userID, reason string) error {
+	uid, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("admin: invalid user id %q: %w", userID, err)
+	}
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("admin: begin unlock-user tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM locked_users WHERE user_id = $1`, uid); err != nil {
+		return fmt.Errorf("admin: unlocking user %s: %w", userID, err)
+	}
+
+	if err := Record(ctx, tx, actor, ActionUnlockUser, "user", userID, reason, nil); err != nil {
+		return fmt.Errorf("admin: recording audit for unlock-user: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// DeleteUser ports user-delete.workers.test.ts's semantics against Limen's organization/member
+// schema. The cascade lives in internal/auth.CascadeDeleteUser; see its doc comment for the exact
+// semantics.
+func DeleteUser(ctx context.Context, sqlDB *sql.DB, authSvc *auth.Service, actor *auth.Session, userID, reason string) error {
+	if actor == nil {
+		return errors.New("admin: DeleteUser requires a non-nil actor session")
+	}
+	if sameUserID(actor.UserID, userID) {
+		return ErrSelfTarget
+	}
+
+	if _, err := strconv.ParseInt(userID, 10, 64); err != nil {
+		return fmt.Errorf("admin: invalid user id %q: %w", userID, err)
+	}
+
+	// Best-effort, before the tx below: reaches whatever Limen-side session bookkeeping lives
+	// beyond the raw `sessions` table (see RevokeUserSessions' own doc comment). Not required for
+	// correctness — CascadeDeleteUser's own DELETE FROM sessions is what actually satisfies
+	// sessions.user_id's ON DELETE RESTRICT — so a failure here is not fatal to the delete.
+	if authSvc != nil {
+		_ = authSvc.RevokeUserSessions(ctx, userID)
+	}
+
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("admin: begin delete-user tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The cascade itself (orphaned-owner orgs, dependent rows, the users row) is shared with the
+	// self-service path — internal/auth.CascadeDeleteUser — so staff deletion and "delete my
+	// account" can never disagree about what deleting a user means.
+	if err := auth.CascadeDeleteUser(ctx, tx, userID); err != nil {
+		if errors.Is(err, auth.ErrNoSuchUser) {
+			return fmt.Errorf("admin: no user with id %q", userID)
+		}
+		return err
+	}
+
+	if err := Record(ctx, tx, actor, ActionDeleteUser, "user", userID, reason, nil); err != nil {
+		return fmt.Errorf("admin: recording audit for delete-user: %w", err)
+	}
+
+	return tx.Commit()
+}

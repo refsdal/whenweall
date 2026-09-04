@@ -1,0 +1,49 @@
+# Overlay for running the Playwright suite against the BUILT image with compose's hardening flags —
+# what CI's `e2e-image` job does, and what `E2E_SERVER=image bunx playwright test` expects locally:
+#
+#   docker build -t whenweall:e2e .
+#   e2e/compose-e2e.sh up -d --wait          # = docker compose --env-file e2e/compose.e2e.env \
+#                                            #     -f compose.yaml -f compose.e2e.yaml up -d --wait
+#   e2e/assert-hardening.sh                  # read_only / cap_drop / no-new-privileges / user / healthy
+#   E2E_SERVER=image bunx playwright test
+#   e2e/compose-e2e.sh down -v
+#
+# Everything security-relevant (read_only, cap_drop ALL, no-new-privileges, the scratch image's
+# USER) is inherited from compose.yaml on purpose: this file must never weaken it, only add the
+# test-only pieces — the seed route, a Mailpit sink, the prebuilt local image, and an explicit
+# `user` as belt-and-braces so the app never runs as root even if the image regresses. That
+# override means assert-hardening.sh's container-level User check would keep reporting
+# 65532:65532 even if the Dockerfile's own USER were dropped — it now ALSO inspects the built
+# image's own Config.User directly, bypassing this override, so a dropped Dockerfile USER still
+# fails the script. Ports/credentials come from e2e/compose.e2e.env.
+services:
+  db:
+    # Nothing to override: a throwaway database per run — `down -v` removes the volume.
+    image: postgres:18-alpine
+
+  mailpit:
+    # Same pinned tag as e2e/e2e-env.ts's MAILPIT_IMAGE; keep them in sync.
+    image: axllent/mailpit:v1.31.0
+    ports:
+      - '127.0.0.1:1026:1025' # SMTP (the app talks to it as mailpit:1025 inside the network)
+      - '127.0.0.1:8026:8025' # HTTP API, read by e2e/mailpit.ts
+
+  app:
+    # The image the CI job (or you) just built — never pulled from ghcr, never rebuilt here.
+    image: whenweall:e2e
+    pull_policy: never
+    # Belt-and-braces alongside the Dockerfile's own USER 65532:65532.
+    user: '65532:65532'
+    # A crash should fail the run loudly, not restart into a green-looking healthcheck.
+    restart: 'no'
+    depends_on:
+      mailpit:
+        condition: service_started
+    environment:
+      # The one test-only switch: mounts POST /api/test/seed. config.Load refuses it alongside
+      # APP_ENV=production, which is why compose.e2e.env sets APP_ENV=test.
+      ENABLE_TEST_ROUTES: 'true'
+      # Explicitly off (compose.yaml would also leave them empty): the suite covers the documented
+      # captcha-off default and must not reach challenges.cloudflare.com.
+      TURNSTILE_SITE_KEY: ''
+      TURNSTILE_SECRET_KEY: ''
