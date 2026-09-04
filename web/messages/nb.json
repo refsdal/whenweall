@@ -802,5 +802,18 @@
   "admin_toast_locked": "Kontoen er låst.",
   "admin_toast_unlocked": "Kontoen er låst opp.",
   "admin_toast_deleted": "Kontoen er slettet.",
-  "admin_action_failed": "Det gikk ikke gjennom: {message}"
+  "admin_action_failed": "Det gikk ikke gjennom: {message}",
+  "admin_nav_jobs": "Mislykkede jobber",
+  "admin_jobs_intro": "Jobber som har brukt opp alle forsøk – e-post som aldri gikk ut, påminnelser som aldri ble sendt. «Prøv igjen» legger jobben i kø for å kjøre straks; revisjonsloggen registrerer hvem som gjorde det.",
+  "admin_jobs_empty": "Ingen mislykkede jobber. Alt som er lagt i kø har enten kjørt eller prøver fortsatt.",
+  "admin_jobs_col_kind": "Type",
+  "admin_jobs_col_attempts": "Forsøk",
+  "admin_jobs_col_error": "Siste feil",
+  "admin_jobs_col_run_at": "Sist kjørt",
+  "admin_jobs_col_actions": "Handlinger",
+  "admin_jobs_retry": "Prøv igjen",
+  "admin_jobs_payload_expired": "Innholdet er slettet – kan ikke prøves igjen",
+  "admin_jobs_toast_retried": "Jobben er lagt i kø igjen.",
+  "admin_jobs_retry_failed": "Kunne ikke prøve igjen: {message}",
+  "admin_mail_view_failed": "Se mislykkede jobber"
 }

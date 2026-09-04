@@ -802,5 +802,18 @@
   "admin_toast_locked": "Account locked.",
   "admin_toast_unlocked": "Account unlocked.",
   "admin_toast_deleted": "Account deleted.",
-  "admin_action_failed": "That didn't go through: {message}"
+  "admin_action_failed": "That didn't go through: {message}",
+  "admin_nav_jobs": "Failed jobs",
+  "admin_jobs_intro": "Jobs that used up every retry — mail that never left, reminders that never fired. Retry queues a job to run again right away; the audit log records who did it.",
+  "admin_jobs_empty": "No failed jobs. Everything queued has either run or is still retrying.",
+  "admin_jobs_col_kind": "Kind",
+  "admin_jobs_col_attempts": "Attempts",
+  "admin_jobs_col_error": "Last error",
+  "admin_jobs_col_run_at": "Last run",
+  "admin_jobs_col_actions": "Actions",
+  "admin_jobs_retry": "Retry",
+  "admin_jobs_payload_expired": "Payload purged — can't be retried",
+  "admin_jobs_toast_retried": "Job queued to run again.",
+  "admin_jobs_retry_failed": "Retry failed: {message}",
+  "admin_mail_view_failed": "View failed jobs"
 }
