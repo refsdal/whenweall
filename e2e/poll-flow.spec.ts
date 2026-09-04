@@ -5,6 +5,7 @@ import {
   test,
   waitForHydration,
 } from './fixtures'
+import { waitForMail } from './mailpit'
 
 test('create a poll, guest votes, edits their answer, owner finalizes, .ics downloads', async ({
   page,
@@ -51,7 +52,9 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
     await expect(guestPage.getByTestId('vote-grid')).toBeVisible()
 
     const guestName = `Guest ${Date.now()}`
+    const guestEmail = `guest-${Date.now()}@example.com`
     await guestPage.getByTestId('add-yourself-row').getByLabel('Your name').fill(guestName)
+    await guestPage.getByRole('textbox', { name: 'Email' }).fill(guestEmail)
     const guestCells = guestPage.locator('[data-testid="add-yourself-row"] button[data-answer]')
     await expect(guestCells).toHaveCount(2)
     await guestCells.nth(0).click()
@@ -83,12 +86,24 @@ test('create a poll, guest votes, edits their answer, owner finalizes, .ics down
     await finalizeDialog.getByRole('button', { name: 'Confirm the pick' }).click()
     await expect(finalizeDialog).toBeHidden()
 
+    // Plan C: the response carries `sent` (unique recipients enqueued) and the toast prints it.
+    // The guest left an address, so at least one person was notified — never "undefined".
+    const toast = page.getByText(/^Decided\. \d+ people were notified\.$/)
+    await expect(toast).toBeVisible()
+    const notified = Number(/\d+/.exec((await toast.textContent()) ?? '')?.[0])
+    expect(notified).toBeGreaterThanOrEqual(1)
+
     const ownerBanner = page.getByTestId('finalized-banner')
     await expect(ownerBanner).toBeVisible()
 
     // --- guest sees the same decision after reloading ---
     await guestPage.reload()
     await expect(guestPage.getByTestId('finalized-banner')).toBeVisible()
+
+    // The guest's "decided" mail is really sent, with the poll's title in the subject.
+    const decided = await waitForMail(request, guestEmail, { subject: /is decided$/ })
+    expect(decided.Subject).toBe(`${title} is decided`)
+    expect(decided.Text).toContain(guestName)
   } finally {
     await guestContext.close()
   }
