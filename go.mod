@@ -9,13 +9,13 @@ require (
 	github.com/sqlc-dev/pqtype v0.3.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
-	github.com/thecodearcher/limen v0.2.2-0.20260813001613-c6a34aa6dcb4
-	github.com/thecodearcher/limen/adapters/sql v0.2.1-0.20260813001613-c6a34aa6dcb4
-	github.com/thecodearcher/limen/plugins/credential-password v0.2.1-0.20260813001613-c6a34aa6dcb4
-	github.com/thecodearcher/limen/plugins/oauth v0.2.1-0.20260813001613-c6a34aa6dcb4
-	github.com/thecodearcher/limen/plugins/oauth-generic v0.2.1-0.20260813001613-c6a34aa6dcb4
-	github.com/thecodearcher/limen/plugins/oauth-google v0.2.1-0.20260813001613-c6a34aa6dcb4
-	github.com/thecodearcher/limen/plugins/organization v0.1.1-0.20260813001613-c6a34aa6dcb4
+	github.com/thecodearcher/limen v0.2.2
+	github.com/thecodearcher/limen/adapters/sql v0.2.1
+	github.com/thecodearcher/limen/plugins/credential-password v0.2.1
+	github.com/thecodearcher/limen/plugins/oauth v0.2.1
+	github.com/thecodearcher/limen/plugins/oauth-generic v0.2.1
+	github.com/thecodearcher/limen/plugins/oauth-google v0.2.1
+	github.com/thecodearcher/limen/plugins/organization v0.1.1
 	github.com/wneessen/go-mail v0.8.1
 	golang.org/x/net v0.59.0
 	golang.org/x/oauth2 v0.37.0
