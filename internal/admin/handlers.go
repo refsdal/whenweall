@@ -31,6 +31,11 @@
 //	                            read off the underlying jobs.Job at all (see FailedJobView's own
 //	                            doc comment), since a dead-lettered mail job's payload can carry a
 //	                            recipient address or an unsubscribe/verification token.
+//	GET  content?q=          -> ContentItem, unwrapped (404 "not_found" when q names nothing) — q
+//	                            is a poll/booking link or a bare id (content.go's LookupContent)
+//	POST content/{kind}/{id}/suspend, .../unsuspend
+//	                         -> {"ok": true} (404 "not_found" for an unknown kind/id, 409
+//	                            "conflict" when already in that state); reason required
 //	POST jobs/{id}/retry     -> {"ok": true} (404 "not_found" for an unknown job id, 409
 //	                            "conflict" for one that exists but isn't dead-lettered yet, 409
 //	                            "payload_expired" for a dead mail job whose payload
@@ -70,6 +75,9 @@ func Register(mux *http.ServeMux, a *auth.Service, sqlDB *sql.DB) {
 	mux.HandleFunc("GET /api/v1/admin/audit", a.RequireStaff(handleAuditList(sqlDB)))
 	mux.HandleFunc("GET /api/v1/admin/jobs/failed", a.RequireStaff(handleFailedJobs(sqlDB)))
 	mux.HandleFunc("POST /api/v1/admin/jobs/{id}/retry", a.RequireStaff(handleRetryJob(sqlDB)))
+	mux.HandleFunc("GET /api/v1/admin/content", a.RequireStaff(handleContentLookup(sqlDB)))
+	mux.HandleFunc("POST /api/v1/admin/content/{kind}/{id}/suspend", a.RequireStaff(handleSetContentSuspended(sqlDB, true)))
+	mux.HandleFunc("POST /api/v1/admin/content/{kind}/{id}/unsuspend", a.RequireStaff(handleSetContentSuspended(sqlDB, false)))
 }
 
 // writeInternalError logs err (unrecognized-by-design here — this package has no domain sentinel
@@ -441,5 +449,44 @@ func handleRetryJob(sqlDB *sql.DB) http.HandlerFunc {
 			return
 		}
 		httpserver.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func handleContentLookup(sqlDB *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		item, err := LookupContent(r.Context(), sqlDB, r.URL.Query().Get("q"))
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		if item == nil {
+			httpserver.Err(w, http.StatusNotFound, "not_found", "no poll or booking page matches that", nil)
+			return
+		}
+		httpserver.JSON(w, http.StatusOK, item)
+	}
+}
+
+func handleSetContentSuspended(sqlDB *sql.DB, suspend bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := requireActor(w, r)
+		if !ok {
+			return
+		}
+		reason, ok := decodeReason(w, r)
+		if !ok {
+			return
+		}
+		err := SetContentSuspended(r.Context(), sqlDB, actor, r.PathValue("kind"), r.PathValue("id"), suspend, reason)
+		switch {
+		case errors.Is(err, ErrContentNotFound):
+			httpserver.Err(w, http.StatusNotFound, "not_found", "content not found", nil)
+		case errors.Is(err, ErrContentUnchanged):
+			httpserver.Err(w, http.StatusConflict, "conflict", "already in that state", nil)
+		case err != nil:
+			writeInternalError(w, err)
+		default:
+			httpserver.JSON(w, http.StatusOK, map[string]any{"ok": true})
+		}
 	}
 }

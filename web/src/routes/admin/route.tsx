@@ -27,6 +27,7 @@ const TABS = [
   { to: '/admin', label: () => m.admin_nav_dashboard(), exact: true },
   { to: '/admin/users', label: () => m.admin_nav_users(), exact: false },
   { to: '/admin/jobs', label: () => m.admin_nav_jobs(), exact: false },
+  { to: '/admin/content', label: () => m.admin_nav_content(), exact: false },
   { to: '/admin/audit', label: () => m.admin_nav_audit(), exact: false },
 ] as const
 

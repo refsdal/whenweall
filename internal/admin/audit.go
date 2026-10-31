@@ -60,6 +60,11 @@ const (
 	ActionUnlockUser = "unlock-user"
 	ActionDeleteUser = "delete-user"
 	ActionJobRetry   = "job.retry"
+
+	// Content moderation (content.go, #48): target_type is the content kind ("poll" or
+	// "booking-page"), target_id its id. Hyphenated like the user actions.
+	ActionSuspendContent   = "suspend-content"
+	ActionUnsuspendContent = "unsuspend-content"
 )
 
 // Record writes one audit row in the same transaction as the action it records — see the
