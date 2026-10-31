@@ -237,3 +237,31 @@ func TestSoftDeletePurgeReschedulesItself(t *testing.T) {
 		t.Errorf("run_at = %v, want in the future (rescheduled)", runAt)
 	}
 }
+
+// TestSoftDeletePurgeKeepsSuspendedContent (#48): content staff have suspended is kept as
+// evidence, so an owner deleting it after a report must not let the 30-day sweep erase it.
+func TestSoftDeletePurgeKeepsSuspendedContent(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	org := seedPurgeOrg(t, d)
+	poll := seedPurgePoll(t, d, org, "31 days")
+	page := seedPurgePage(t, d, org, "31 days")
+	if _, err := d.ExecContext(ctx, `UPDATE polls SET suspended_at = now() WHERE id = $1`, poll); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, `UPDATE booking_pages SET suspended_at = now() WHERE id = $1`, page); err != nil {
+		t.Fatal(err)
+	}
+
+	runSoftDeletePurge(t, d)
+
+	if got := countRows(t, d, `SELECT count(*) FROM polls WHERE id = $1`, poll); got != 1 {
+		t.Errorf("suspended, deleted poll purged; want kept as evidence")
+	}
+	if got := countRows(t, d, `SELECT count(*) FROM comments WHERE poll_id = $1`, poll); got != 1 {
+		t.Errorf("suspended poll's comments = %d, want 1 kept", got)
+	}
+	if got := countRows(t, d, `SELECT count(*) FROM booking_pages WHERE id = $1`, page); got != 1 {
+		t.Errorf("suspended, deleted booking page purged; want kept as evidence")
+	}
+}

@@ -149,14 +149,23 @@ func RegisterHousekeeping(w *Worker, sqlDB *sql.DB, broadcastPresence broadcastP
 // the soft delete, and every job handler that might still name a purged id (poll digests, booking
 // reminders, mail:poll, mail:booking) already treats sql.ErrNoRows as "nothing to do".
 //
+// A poll or booking page staff have suspended (#48) is skipped even when its owner has deleted it:
+// suspension keeps it as evidence until staff lift it (docs/abuse-reports.md).
+//
 // Each table drains in purgeBatchSize batches until a pass deletes nothing.
 func purgeSoftDeleted(ctx context.Context, sqlDB *sql.DB) error {
-	for _, table := range []string{"polls", "booking_pages", "comments"} {
+	for _, t := range []struct{ table, keep string }{
+		{"polls", "AND suspended_at IS NULL"},
+		{"booking_pages", "AND suspended_at IS NULL"},
+		// A comment on a suspended poll needs no rule of its own: the poll row is never purged
+		// while suspended, and a comment the author deleted before the report is not evidence.
+		{"comments", ""},
+	} {
 		for {
 			res, err := sqlDB.ExecContext(ctx, `
-				DELETE FROM `+table+` WHERE id IN (
-					SELECT id FROM `+table+`
-					WHERE deleted_at < now() - `+softdeleteGracePeriod+`
+				DELETE FROM `+t.table+` WHERE id IN (
+					SELECT id FROM `+t.table+`
+					WHERE deleted_at < now() - `+softdeleteGracePeriod+` `+t.keep+`
 					LIMIT $1
 				)`, purgeBatchSize)
 			if err != nil {

@@ -156,7 +156,8 @@ a fresh 24 hours.
 Deleting a poll, sign-up sheet, booking page or comment in the app only marks it deleted
 (`deleted_at`); it vanishes from every screen and link at once. A housekeeping job
 (`softdelete:purge`, every six hours) then **hard-deletes** anything marked deleted more
-than **30 days** ago, and the database's foreign-key cascades take every participant,
+than **30 days** ago — except a poll or booking page staff have suspended, which is kept as
+evidence until the suspension is lifted ([abuse-reports.md](./abuse-reports.md)) — and the database's foreign-key cascades take every participant,
 vote, comment and booking with it. The privacy policy (`privacy_retention_body`) states
 the 30 days, so change both together.
 

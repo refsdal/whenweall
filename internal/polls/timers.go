@@ -303,6 +303,9 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m MailSender) {
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
 			return fmt.Errorf("polls: decode poll.deadline payload: %w", err)
 		}
+		if deferred, err := s.deferDeadlineIfSuspended(ctx, p.PollID); err != nil || deferred {
+			return err
+		}
 		return s.handleDeadlineJob(ctx, p.PollID)
 	})
 
@@ -326,6 +329,36 @@ func (s *Service) RegisterJobs(w *jobs.Worker, m MailSender) {
 
 	w.Register(jobKindMailPoll, func(ctx context.Context, job jobs.Job) error {
 		return s.handleMailPollJob(ctx, m, job)
+	})
+}
+
+// suspendedDeadlineRecheck is how long a poll.deadline job that comes due on a suspended poll
+// waits before looking again.
+const suspendedDeadlineRecheck = time.Hour
+
+// deferDeadlineIfSuspended re-arms pollID's deadline job suspendedDeadlineRecheck from now, and
+// reports true, when staff have suspended the poll (#48). The job is one-shot and GetPoll cannot
+// see a suspended poll, so handleDeadlineJob would otherwise consume it as "nothing to do" — and
+// once the suspension was lifted the poll would stay open, and keep taking votes, past its
+// deadline forever. Deferring instead closes it on the first check after the suspension ends.
+//
+// The 24h "closes soon" reminder is deliberately NOT deferred the same way: one that comes due
+// during a suspension is simply skipped, since sent late it would announce a deadline that has
+// already passed.
+//
+// Schedule's upsert swaps in a new job id (see rescheduleHousekeeping in internal/jobs for the
+// same pattern), so the worker's Complete of the id it claimed no longer matches the re-armed row.
+func (s *Service) deferDeadlineIfSuspended(ctx context.Context, pollID string) (bool, error) {
+	suspended, err := s.q.PollSuspended(ctx, pollID)
+	if err != nil || !suspended {
+		return false, err
+	}
+	roomKey := "poll:" + pollID
+	return true, jobs.Schedule(ctx, s.db, jobs.ScheduleInput{
+		Kind:    jobKindDeadline,
+		RoomKey: &roomKey,
+		RunAt:   time.Now().Add(suspendedDeadlineRecheck),
+		Payload: map[string]any{"pollId": pollID},
 	})
 }
 

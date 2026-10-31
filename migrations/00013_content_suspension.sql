@@ -5,9 +5,9 @@
 -- A row with suspended_at set is treated as gone by every read the app makes — the public page,
 -- the organiser's dashboard and editor, the WebSocket room, every mail job — exactly as if it were
 -- soft-deleted, except that the public page says it was removed rather than that it never
--- existed. Unlike deleted_at it is never purged (softdelete:purge only looks at deleted_at), so
--- the evidence is kept and clearing the column undoes the takedown completely. See
--- docs/abuse-reports.md for when and how staff set it.
+-- existed. softdelete:purge skips a suspended row even after its owner deletes it, so the
+-- evidence is kept, and clearing the column brings the content back. See docs/abuse-reports.md
+-- for when and how staff set it, and what does not come back (mail that fell due meanwhile).
 ALTER TABLE polls ADD COLUMN suspended_at timestamptz;
 ALTER TABLE booking_pages ADD COLUMN suspended_at timestamptz;
 

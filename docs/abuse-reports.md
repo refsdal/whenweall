@@ -42,9 +42,12 @@ the rest of the account. A suspended item:
   than "not found";
 - disappears from the organiser's dashboard and can no longer be edited, voted on, booked or
   commented on;
-- sends no more mail (deadline reminders, digests, booking reminders all skip it);
-- is **kept in full** — participants, votes, comments, bookings — as evidence, and is never
-  purged by the 30-day soft-delete sweep (that only looks at `deleted_at`).
+- sends no more mail (digests, "closes soon" reminders and booking reminders that come due
+  during the suspension are skipped, not sent later);
+- is **kept in full** — participants, votes, comments, bookings — as evidence. The 30-day
+  soft-delete sweep skips it even if the owner deletes it after the report. Deleting the
+  owner's **account** (by them, or from the admin console) still removes it immediately, like
+  everything else they own.
 
 The id is the one in the report's subject (the `<id>` in `/p/<id>`; for a booking page, the id in
 the report, not the slug in its URL).
@@ -59,10 +62,18 @@ docker compose exec db psql -U whenweall -d whenweall -c \
   "update booking_pages set suspended_at = now() where id = '<id>' and suspended_at is null"
 ```
 
-`UPDATE 1` means it worked; `UPDATE 0` means the id is wrong or it was already suspended.
+`UPDATE 1` means it worked; `UPDATE 0` means the id is wrong or it was already suspended. If
+the owner has already deleted it, the update still succeeds and keeps it from being purged —
+worth doing when the report may need evidence.
 
 To **undo** a suspension (the report was wrong, or the organiser fixed the problem), set the
-column back to `NULL` the same way; everything comes back exactly as it was.
+column back to `NULL` the same way. The content comes back as it was, with three things to know:
+
+- A poll whose deadline passed during the suspension closes within an hour of being lifted (its
+  deadline job waits out the suspension rather than being lost).
+- Mail that came due during the suspension (digests, reminders) is not sent afterwards.
+- A visitor can still cancel their own booking on a suspended page from their manage link, but
+  the cancellation mail and calendar clean-up for it are skipped and not replayed.
 
 To see what is currently suspended:
 
