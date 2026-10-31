@@ -94,6 +94,7 @@ func Recover(logger *slog.Logger) func(http.Handler) http.Handler {
 			defer func() {
 				if rec := recover(); rec != nil {
 					logger.Error("panic recovered",
+						"event", "http.panic",
 						"error", rec,
 						"stack", string(debug.Stack()),
 					)

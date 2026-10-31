@@ -50,7 +50,7 @@ func RateLimit(sqlDB *sql.DB, name string, limit int, window time.Duration, keyF
 			var resetAt time.Time
 			err := sqlDB.QueryRowContext(r.Context(), rateLimitSQL, key, window).Scan(&count, &resetAt)
 			if err != nil {
-				slog.Warn("rate limit store unavailable, failing open",
+				slog.Warn("rate limit store unavailable, failing open", "event", "ratelimit.fail_open",
 					"name", name, "error", err)
 				next.ServeHTTP(w, r)
 				return

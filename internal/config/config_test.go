@@ -274,3 +274,24 @@ func TestAppURLRequiresHost(t *testing.T) {
 		}
 	}
 }
+
+func TestLogFormat(t *testing.T) {
+	cfg, _, err := Load(valid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogFormat != "text" {
+		t.Errorf("LogFormat default = %q, want text", cfg.LogFormat)
+	}
+
+	env := valid()
+	env["LOG_FORMAT"] = "json"
+	if cfg, _, err = Load(env); err != nil || cfg.LogFormat != "json" {
+		t.Errorf("LOG_FORMAT=json: cfg=%v err=%v", cfg, err)
+	}
+
+	env["LOG_FORMAT"] = "xml"
+	if _, _, err = Load(env); err == nil || !strings.Contains(err.Error(), "LOG_FORMAT") {
+		t.Errorf("LOG_FORMAT=xml: err = %v, want a LOG_FORMAT error", err)
+	}
+}

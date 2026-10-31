@@ -247,6 +247,28 @@ func sweepDeadLetters(ctx context.Context, sqlDB *sql.DB) error {
 	return err
 }
 
+// housekeepingChains is every self-rescheduling housekeeping kind and its interval — the list
+// EnsureScheduled seeds and CheckHealth (health.go) watches for stalls.
+var housekeepingChains = []struct {
+	kind     string
+	interval time.Duration
+}{
+	{roomsPruneKind, roomsPruneInterval},
+	{presenceSweepKind, presenceSweepInterval},
+	{ratelimitSweepKind, ratelimitSweepInterval},
+	{deadletterSweepKind, deadletterSweepInterval},
+	{softdeletePurgeKind, softdeletePurgeInterval},
+}
+
+// housekeepingKinds is housekeepingChains' kinds alone, for a `kind = ANY($n)` parameter.
+func housekeepingKinds() []string {
+	kinds := make([]string, len(housekeepingChains))
+	for i, c := range housekeepingChains {
+		kinds[i] = c.kind
+	}
+	return kinds
+}
+
 // EnsureScheduled seeds all five housekeeping jobs to run shortly after boot, but only the
 // first time — a pre-existing job of that kind (from an earlier boot, still correctly scheduled
 // for the future, or mid-chain) is left completely alone. It is meant to be called once from
@@ -261,16 +283,7 @@ func sweepDeadLetters(ctx context.Context, sqlDB *sql.DB) error {
 // would clobber that back to "shortly after boot" on every restart — a restart-happy deploy, or a
 // crash loop, could then starve the chain of ever reaching a real run_at.
 func EnsureScheduled(ctx context.Context, sqlDB *sql.DB) error {
-	for _, s := range []struct {
-		kind     string
-		interval time.Duration
-	}{
-		{roomsPruneKind, roomsPruneInterval},
-		{presenceSweepKind, presenceSweepInterval},
-		{ratelimitSweepKind, ratelimitSweepInterval},
-		{deadletterSweepKind, deadletterSweepInterval},
-		{softdeletePurgeKind, softdeletePurgeInterval},
-	} {
+	for _, s := range housekeepingChains {
 		if err := seedHousekeeping(ctx, sqlDB, s.kind, s.interval); err != nil {
 			return err
 		}

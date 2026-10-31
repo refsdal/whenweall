@@ -68,6 +68,11 @@ func serve() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	// LOG_FORMAT=json (#43): one JSON object per line, so a log pipeline can count failures by
+	// their `event` attribute instead of pattern-matching prose. Set before anything else logs.
+	if cfg.LogFormat == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	}
 	for _, w := range warnings {
 		slog.Warn(w)
 	}

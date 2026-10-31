@@ -13,6 +13,7 @@ import (
 
 	"github.com/refsdal/whenweall/internal/auth"
 	"github.com/refsdal/whenweall/internal/config"
+	"github.com/refsdal/whenweall/internal/jobs"
 	"github.com/refsdal/whenweall/internal/routekey"
 )
 
@@ -108,6 +109,7 @@ func (s *Server) authRateLimitMiddleware(authHandler http.Handler) http.Handler 
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /healthz/jobs", s.handleHealthzJobs)
 	s.mux.HandleFunc("GET /robots.txt", handleRobotsTxt)
 
 	authHandler := s.authSvc.Handler()
@@ -183,6 +185,31 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleHealthzJobs is the background-work probe an external monitor alerts on (#43): 503 when a
+// job dead-lettered in the last 24 hours or a housekeeping chain has stalled (jobs.CheckHealth).
+// Deliberately NOT folded into /healthz: the container HEALTHCHECK polls that one, and a bounced
+// e-mail must never get the app restarted. Unauthenticated, so the body is counts and kind names
+// only — never a payload, id or error message.
+func (s *Server) handleHealthzJobs(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex")
+	h, err := jobs.CheckHealth(ctx, s.db)
+	if err != nil {
+		JSON(w, http.StatusServiceUnavailable, map[string]string{"status": "degraded"})
+		return
+	}
+	status, code := "ok", http.StatusOK
+	if !h.OK() {
+		status, code = "failing", http.StatusServiceUnavailable
+	}
+	JSON(w, code, struct {
+		Status string `json:"status"`
+		jobs.Health
+	}{status, h})
 }
 
 // APIOnly wraps mw so it only runs for requests whose path starts with "/api/" — every other
