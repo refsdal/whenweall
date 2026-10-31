@@ -9,7 +9,7 @@ import type { AdminUserDetail } from '#/api/types'
 // Real `api()` client against msw — the same pattern as api/__tests__/client.test.ts — so what is
 // under test is the whole wire contract (method, path, `{reason}` body), not a mocked module.
 const server = setupServer()
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))
 afterEach(() => {
   cleanup()
   server.resetHandlers()

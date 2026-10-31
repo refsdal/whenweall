@@ -6,7 +6,7 @@ import { EMPTY_STATS } from '#/lib/stats-types'
 
 const server = setupServer()
 
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))
 afterEach(() => server.resetHandlers())
 afterAll(() => server.close())
 

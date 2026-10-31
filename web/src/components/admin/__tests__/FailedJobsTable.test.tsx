@@ -7,7 +7,7 @@ import { FailedJobsTable } from '#/components/admin/FailedJobsTable'
 import type { FailedJobView } from '#/api/types'
 
 const server = setupServer()
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))
 afterEach(() => {
   cleanup()
   server.resetHandlers()
