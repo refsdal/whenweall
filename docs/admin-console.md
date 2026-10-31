@@ -113,8 +113,8 @@ The log has no mutator by design — nothing in the application can edit or dele
 Every background job — mail delivery (`mail:send` for sign-in/verification/reset/invite
 mail, `mail:poll` and `mail:booking` for notifications), poll deadlines and digests,
 booking reminders — is a row in `scheduled_jobs`, retried with
-backoff until its attempt budget is spent (10 for mail, 5 otherwise; the three
-`deadletter:sweep`/`rooms:prune`/`presence:sweep`/`ratelimit:sweep` housekeeping chains
+backoff until its attempt budget is spent (10 for mail, 5 otherwise; the
+`deadletter:sweep`/`rooms:prune`/`presence:sweep`/`ratelimit:sweep`/`softdelete:purge` housekeeping chains
 carry a far larger budget by design — see [Checking housekeeping is alive](#checking-housekeeping-is-alive)
 below — so they never dead-letter and never appear on this screen). A job that still
 fails then **parks as dead-lettered**: it stops retrying and appears at `/admin/jobs` with
@@ -160,23 +160,37 @@ does two things:
 Age is measured on the job's last scheduled run, so a job you retried that dies again gets
 a fresh 24 hours.
 
+### Deleted content retention
+
+Deleting a poll, sign-up sheet, booking page or comment in the app only marks it deleted
+(`deleted_at`); it vanishes from every screen and link at once. A housekeeping job
+(`softdelete:purge`, every six hours) then **hard-deletes** anything marked deleted more
+than **30 days** ago, and the database's foreign-key cascades take every participant,
+vote, comment and booking with it. The privacy policy (`privacy_retention_body`) states
+the 30 days, so change both together.
+
+Inside those 30 days there is no restore button, but the row is intact: clearing
+`deleted_at` by hand brings a poll or page back exactly as it was, if someone deleted the
+wrong one. After that it is gone, including from the database.
+
 ### Checking housekeeping is alive
 
-`deadletter:sweep` is the only thing enforcing the retention above, and because it shares
-the housekeeping chains' deliberately huge attempt budget (so a transient blip can never
-permanently kill a self-perpetuating chain — see `housekeepingMaxAttempts` in
-`internal/jobs/housekeeping.go`), it can never dead-letter and so never shows up on
-`/admin/jobs` even if it has stalled. There is no console signal for this — check it
-directly:
+`deadletter:sweep` and `softdelete:purge` are the only things enforcing the retention
+above, and because they share the housekeeping chains' deliberately huge attempt budget (so
+a transient blip can never permanently kill a self-perpetuating chain — see
+`housekeepingMaxAttempts` in `internal/jobs/housekeeping.go`), they can never dead-letter
+and so never show up on `/admin/jobs` even if they have stalled. There is no console signal
+for this — check them directly:
 
 ```bash
 docker compose exec db psql -U whenweall -d whenweall -c \
-  "select kind, run_at, attempts from scheduled_jobs where kind = 'deadletter:sweep'"
+  "select kind, run_at, attempts from scheduled_jobs where kind in ('deadletter:sweep', 'softdelete:purge')"
 ```
 
-One row, `run_at` no more than an hour or so in the future (it reschedules itself hourly on
-every successful run) and `attempts` at 0 — a healthy chain always completes and reschedules
-before it would ever need a retry. A `run_at` stuck in the past, or `attempts` climbing,
+One row each, `run_at` no more than an hour (`deadletter:sweep`) or six hours
+(`softdelete:purge`) in the future (each reschedules itself on every successful run) and
+`attempts` at 0 — a healthy chain always completes and reschedules before it would ever
+need a retry. A `run_at` stuck in the past, or `attempts` climbing,
 means the sweep itself is failing and needs investigating like any other stuck job — just
 without a console screen to notice it for you. The same query works for
 `rooms:prune`/`presence:sweep`/`ratelimit:sweep` by swapping the `kind`.
