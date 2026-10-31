@@ -12,7 +12,7 @@ import { errorCode } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { requireVerifiedSession } from '#/lib/session-guard'
 import { setHandle } from '#/api/bookings'
-import { deleteOwnAccount, myOrgRoles, updateProfile } from '#/api/auth'
+import { deleteOwnAccount, exportMyData, myOrgRoles, updateProfile } from '#/api/auth'
 
 export const Route = createFileRoute('/settings')({
   beforeLoad: ({ context }) => requireVerifiedSession(context, '/settings'),
@@ -57,8 +57,55 @@ function SettingsPage() {
 
       <Separator />
 
+      <DataExportSection />
+
+      <Separator />
+
       <DeleteAccountSection hasPassword={session.user.hasPassword} />
     </div>
+  )
+}
+
+/**
+ * "Download my data" (#50): fetches GET /api/v1/me/export and hands the browser the file. Fetched
+ * rather than linked so a refusal (the hourly limit) becomes a toast instead of a saved file full
+ * of an error message. Exported for `settings.test.tsx`.
+ */
+export function DataExportSection() {
+  const [busy, setBusy] = useState(false)
+
+  async function handleDownload() {
+    setBusy(true)
+    try {
+      const { blob, filename } = await exportMyData()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.append(link)
+      link.click()
+      link.remove()
+      // Revoked a tick later: some browsers cancel a download whose URL is revoked synchronously.
+      setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (error) {
+      toast.error(errorCode(error) === 'rate_limited' ? m.settings_export_rate_limited() : m.auth_error_generic())
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div>
+        <h2 className="text-sm font-semibold">{m.settings_export_title()}</h2>
+        <p className="text-sm text-muted-foreground">{m.settings_export_subtitle()}</p>
+      </div>
+      <div>
+        <Button type="button" variant="outline" disabled={busy} onClick={() => void handleDownload()}>
+          {busy ? m.settings_export_preparing() : m.settings_export_button()}
+        </Button>
+      </div>
+    </section>
   )
 }
 

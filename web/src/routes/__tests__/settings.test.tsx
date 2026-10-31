@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DeleteAccountSection } from '#/routes/settings'
+import { DataExportSection, DeleteAccountSection } from '#/routes/settings'
 import { ApiError } from '#/api/client'
-import { deleteOwnAccount } from '#/api/auth'
+import { deleteOwnAccount, exportMyData } from '#/api/auth'
 
 const invalidateMock = vi.fn().mockResolvedValue(undefined)
 const navigateMock = vi.fn()
@@ -16,6 +16,7 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('#/api/auth', () => ({
   deleteOwnAccount: vi.fn(),
+  exportMyData: vi.fn(),
   myOrgRoles: vi.fn(),
   updateProfile: vi.fn(),
 }))
@@ -68,5 +69,47 @@ describe('DeleteAccountSection', () => {
     expect(toastError).not.toHaveBeenCalled()
     expect(invalidateMock).toHaveBeenCalledOnce()
     expect(navigateMock).toHaveBeenCalledExactlyOnceWith({ to: '/' })
+  })
+})
+
+describe('DataExportSection', () => {
+  it('hands the browser the export as a file named by the server', async () => {
+    vi.mocked(exportMyData).mockResolvedValue({
+      blob: new Blob(['{}'], { type: 'application/json' }),
+      filename: 'whenweall-export-2026-10-31.json',
+    })
+    const createObjectURL = vi.fn(() => 'blob:export')
+    const revokeObjectURL = vi.fn()
+    Object.assign(URL, { createObjectURL, revokeObjectURL })
+    const clicked: HTMLAnchorElement[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this)
+    })
+    const user = userEvent.setup()
+
+    render(<DataExportSection />)
+    await user.click(screen.getByRole('button', { name: /download my data/i }))
+
+    expect(clicked).toHaveLength(1)
+    expect(clicked[0]?.download).toBe('whenweall-export-2026-10-31.json')
+    expect(clicked[0]?.getAttribute('href')).toBe('blob:export')
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:export'))
+    expect(toastError).not.toHaveBeenCalled()
+    click.mockRestore()
+  })
+
+  it('explains the hourly limit instead of saving an error as the file', async () => {
+    vi.mocked(exportMyData).mockRejectedValue(new ApiError('rate_limited', 'rate limited', 429))
+    const user = userEvent.setup()
+
+    render(<DataExportSection />)
+    await user.click(screen.getByRole('button', { name: /download my data/i }))
+
+    expect(toastError).toHaveBeenCalledWith(
+      expect.stringMatching(/several times in the last hour/i),
+    )
+    expect(screen.getByRole('button', { name: /download my data/i })).toBeEnabled()
   })
 })

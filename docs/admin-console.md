@@ -88,6 +88,10 @@ Notes on reading it:
   before the action runs at all. A job retry (`job.retry`) carries no reason (there's no one's rights to weigh against
   resuming work the system itself already scheduled). A *refused* retry — the job isn't
   actually dead-lettered, or its payload has expired (below) — leaves no row at all.
+- **The user can read the reason.** A lock or unlock on an account appears in that user's
+  own data export (Settings → Download my data) with its reason and time — not who did it.
+  Write reasons you would be comfortable showing them, and never put a reporter's name or
+  address in one.
 - **`actor_user_id` is null for a deleted admin, but `actor_email` survives.** The trail is
   designed to outlive the person it describes.
 - **`metadata` lists which fields an action touched, never their values.** An audit row
