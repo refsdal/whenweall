@@ -255,6 +255,22 @@ export type FailedJobView = {
   payloadExpired: boolean
 }
 
+/** GET /api/v1/admin/content's item (internal/admin/content.go's ContentItem): one poll, sign-up
+ * sheet or booking page, found from a pasted link or id, deleted and suspended ones included. */
+export type AdminContentItem = {
+  kind: 'poll' | 'booking-page'
+  id: string
+  title: string
+  pollType: string | null
+  organizationName: string
+  organizationSlug: string
+  creatorEmail: string | null
+  publicPath: string
+  createdAt: string
+  deletedAt: string | null
+  suspendedAt: string | null
+}
+
 // ---- config -------------------------------------------------------------------------------------
 
 /** GET /api/v1/config's response (internal/polls/handlers.go's publicConfigResponse). */

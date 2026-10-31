@@ -49,31 +49,39 @@ the rest of the account. A suspended item:
   owner's **account** (by them, or from the admin console) still removes it immediately, like
   everything else they own.
 
-The id is the one in the report's subject (the `<id>` in `/p/<id>`; for a booking page, the id in
-the report, not the slug in its URL).
+**In the admin console** (`/admin/content`): paste the link the reporter sent, or the id from a
+`Report: poll <id>` / `Report: booking page <id>` subject, press **Find**, check it is the right
+item, and press **Suspend**. The dialog asks for a reason, which goes in the audit log with your
+name. The item can be found and suspended even after its owner has deleted it, which keeps it
+from being purged.
 
-```bash
-# Suspend a poll or sign-up sheet
-docker compose exec db psql -U whenweall -d whenweall -c \
-  "update polls set suspended_at = now() where id = '<id>' and suspended_at is null"
-
-# Suspend a booking page
-docker compose exec db psql -U whenweall -d whenweall -c \
-  "update booking_pages set suspended_at = now() where id = '<id>' and suspended_at is null"
-```
-
-`UPDATE 1` means it worked; `UPDATE 0` means the id is wrong or it was already suspended. If
-the owner has already deleted it, the update still succeeds and keeps it from being purged —
-worth doing when the report may need evidence.
-
-To **undo** a suspension (the report was wrong, or the organiser fixed the problem), set the
-column back to `NULL` the same way. The content comes back as it was, with three things to know:
+To **undo** a suspension (the report was wrong, or the organiser fixed the problem), find it the
+same way and press **Lift suspension**, again with a reason. The content comes back as it was,
+with three things to know:
 
 - A poll whose deadline passed during the suspension closes within an hour of being lifted (its
   deadline job waits out the suspension rather than being lost).
 - Mail that came due during the suspension (digests, reminders) is not sent afterwards.
 - A visitor can still cancel their own booking on a suspended page from their manage link, but
   the cancellation mail and calendar clean-up for it are skipped and not replayed.
+
+Every suspension and lift is in the audit log (`/admin/audit`, actions `suspend-content` and
+`unsuspend-content`, target type `poll` or `booking-page`).
+
+### Without the console
+
+If the console is unavailable, the same change is one SQL statement, but it leaves **no audit
+row**, so note in the report's e-mail thread who did what and when:
+
+```bash
+# Suspend a poll or sign-up sheet (use booking_pages for a booking page)
+docker compose exec db psql -U whenweall -d whenweall -c \
+  "update polls set suspended_at = now() where id = '<id>' and suspended_at is null"
+
+# Lift it
+docker compose exec db psql -U whenweall -d whenweall -c \
+  "update polls set suspended_at = null where id = '<id>'"
+```
 
 To see what is currently suspended:
 
@@ -84,6 +92,3 @@ docker compose exec db psql -U whenweall -d whenweall -c \
    select 'booking page', id, title, suspended_at from booking_pages where suspended_at is not null
    order by suspended_at desc"
 ```
-
-There is no button for this in the admin console yet, and so no audit row: keep a line in the
-report's email thread saying who suspended what and when.

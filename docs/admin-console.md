@@ -51,7 +51,9 @@ List and search users; view an account with its organisations and content; **loc
 and view/retry failed background jobs. Lock, unlock and delete are buttons on the user's
 page (`/admin/users/<id>`) — each opens a dialog that requires a reason, which is what ends
 up in the audit log. Failed jobs have their own tab, `/admin/jobs` — see
-[Failed jobs](#failed-jobs) below.
+[Failed jobs](#failed-jobs) below. **Suspending** a single poll, sign-up sheet or booking page
+after an abuse report (and lifting it) is the `/admin/content` tab, also reason-required and
+audited — see [abuse-reports.md](./abuse-reports.md).
 
 **There is no impersonation and no direct password reset from the console.** Both were
 deliberate cuts versus the pre-rewrite TypeScript admin console — see

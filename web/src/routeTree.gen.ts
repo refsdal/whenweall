@@ -25,6 +25,7 @@ import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AcceptInvitationIdRouteImport } from './routes/accept-invitation/$id'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as AdminAuditRouteImport } from './routes/admin/audit'
+import { Route as AdminContentRouteImport } from './routes/admin/content'
 import { Route as AdminJobsRouteImport } from './routes/admin/jobs'
 import { Route as BookingsIndexRouteImport } from './routes/bookings/index'
 import { Route as BookingsNewRouteImport } from './routes/bookings/new'
@@ -117,6 +118,11 @@ const AdminAuditRoute = AdminAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminContentRoute = AdminContentRouteImport.update({
+  id: '/content',
+  path: '/content',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminJobsRoute = AdminJobsRouteImport.update({
   id: '/jobs',
   path: '/jobs',
@@ -189,6 +195,7 @@ export interface FileRoutesByFullPath {
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/content': typeof AdminContentRoute
   '/admin/jobs': typeof AdminJobsRoute
   '/bookings/new': typeof BookingsNewRoute
   '/admin/': typeof AdminIndexRoute
@@ -217,6 +224,7 @@ export interface FileRoutesByTo {
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/content': typeof AdminContentRoute
   '/admin/jobs': typeof AdminJobsRoute
   '/bookings/new': typeof BookingsNewRoute
   '/admin': typeof AdminIndexRoute
@@ -247,6 +255,7 @@ export interface FileRoutesById {
   '/verify-email': typeof VerifyEmailRoute
   '/accept-invitation/$id': typeof AcceptInvitationIdRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/content': typeof AdminContentRoute
   '/admin/jobs': typeof AdminJobsRoute
   '/bookings/new': typeof BookingsNewRoute
   '/admin/': typeof AdminIndexRoute
@@ -278,6 +287,7 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/accept-invitation/$id'
     | '/admin/audit'
+    | '/admin/content'
     | '/admin/jobs'
     | '/bookings/new'
     | '/admin/'
@@ -306,6 +316,7 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/accept-invitation/$id'
     | '/admin/audit'
+    | '/admin/content'
     | '/admin/jobs'
     | '/bookings/new'
     | '/admin'
@@ -335,6 +346,7 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/accept-invitation/$id'
     | '/admin/audit'
+    | '/admin/content'
     | '/admin/jobs'
     | '/bookings/new'
     | '/admin/'
@@ -488,6 +500,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/content': {
+      id: '/admin/content'
+      path: '/content'
+      fullPath: '/admin/content'
+      preLoaderRoute: typeof AdminContentRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/jobs': {
       id: '/admin/jobs'
       path: '/jobs'
@@ -570,6 +589,7 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteRouteChildren {
   AdminAuditRoute: typeof AdminAuditRoute
+  AdminContentRoute: typeof AdminContentRoute
   AdminJobsRoute: typeof AdminJobsRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminUsersIdRoute: typeof AdminUsersIdRoute
@@ -578,6 +598,7 @@ interface AdminRouteRouteChildren {
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminAuditRoute: AdminAuditRoute,
+  AdminContentRoute: AdminContentRoute,
   AdminJobsRoute: AdminJobsRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminUsersIdRoute: AdminUsersIdRoute,

@@ -200,6 +200,9 @@ var adminRoutes = []struct {
 	{http.MethodGet, "/api/v1/admin/audit"},
 	{http.MethodGet, "/api/v1/admin/jobs/failed"},
 	{http.MethodPost, "/api/v1/admin/jobs/1/retry"},
+	{http.MethodGet, "/api/v1/admin/content?q=x"},
+	{http.MethodPost, "/api/v1/admin/content/poll/x/suspend"},
+	{http.MethodPost, "/api/v1/admin/content/booking-page/x/unsuspend"},
 }
 
 func TestRequireStaff_RejectsNonStaffSessionOnEveryRoute(t *testing.T) {

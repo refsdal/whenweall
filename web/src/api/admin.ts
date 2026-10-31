@@ -1,5 +1,12 @@
 import { api, ApiError } from '#/api/client'
-import type { AdminStats, AdminUserDetail, AdminUserRow, AuditEntry, FailedJobView } from '#/api/types'
+import type {
+  AdminContentItem,
+  AdminStats,
+  AdminUserDetail,
+  AdminUserRow,
+  AuditEntry,
+  FailedJobView,
+} from '#/api/types'
 
 /**
  * The staff-only console's client, against internal/admin/handlers.go's REST surface. Shape
@@ -79,4 +86,25 @@ export function fetchFailedJobs(): Promise<FailedJobView[]> {
 
 export async function retryJob(jobId: string): Promise<void> {
   await api('POST', `/api/v1/admin/jobs/${jobId}/retry`)
+}
+
+/** `GET content?q=` — `null` when the link or id names nothing. */
+export async function lookupContent(q: string): Promise<AdminContentItem | null> {
+  try {
+    return await api<AdminContentItem>('GET', '/api/v1/admin/content', undefined, { query: { q } })
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'not_found') return null
+    throw err
+  }
+}
+
+/** Suspends (`suspend: true`) or lifts a suspension on one item; `409 conflict` if already so. */
+export async function setContentSuspended(
+  item: Pick<AdminContentItem, 'kind' | 'id'>,
+  suspend: boolean,
+  reason: string,
+): Promise<void> {
+  await api('POST', `/api/v1/admin/content/${item.kind}/${item.id}/${suspend ? 'suspend' : 'unsuspend'}`, {
+    reason,
+  })
 }
