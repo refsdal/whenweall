@@ -489,11 +489,30 @@ func (s *Service) handleGetView(a Auth) http.HandlerFunc {
 			return
 		}
 		if view == nil {
-			httpserver.Err(w, http.StatusNotFound, "not_found", "not found", nil)
+			s.writeMissingPoll(w, r, pollID)
 			return
 		}
 		httpserver.JSON(w, http.StatusOK, view)
 	}
+}
+
+// writeMissingPoll answers a public read of a poll GetView could not find: 410 "removed" when
+// staff have suspended it (#48), so the page can say it was taken down rather than that the link
+// is wrong, and the usual 404 otherwise.
+func (s *Service) writeMissingPoll(w http.ResponseWriter, r *http.Request, pollID string) {
+	suspended, err := s.q.PollSuspended(r.Context(), pollID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	// no-store on both answers: browsers cache a 404 or 410 heuristically, so without it a visitor
+	// who saw a takedown would keep seeing it after staff lift the suspension (or the reverse).
+	w.Header().Set("Cache-Control", "no-store")
+	if suspended {
+		httpserver.Err(w, http.StatusGone, "removed", "this poll has been removed", nil)
+		return
+	}
+	httpserver.Err(w, http.StatusNotFound, "not_found", "not found", nil)
 }
 
 func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request, sess *auth.Session) {

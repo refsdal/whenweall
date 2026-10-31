@@ -1,8 +1,13 @@
 -- name: GetPoll :one
-SELECT * FROM polls WHERE id = $1 AND deleted_at IS NULL;
+SELECT * FROM polls WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL;
 
 -- name: PollExists :one
-SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL);
+SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL);
+
+-- name: PollSuspended :one
+-- Whether id names a poll staff have suspended (#48) — the one read that still sees one, so the
+-- public page can say "removed" instead of "not found".
+SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NOT NULL);
 
 -- name: InsertPoll :exec
 INSERT INTO polls (
@@ -211,5 +216,5 @@ SELECT
   (SELECT count(*) FROM votes v JOIN participants pa ON pa.id = v.participant_id
      WHERE pa.poll_id = p.id AND v.answer = 'yes') AS claim_count
 FROM polls p
-WHERE p.organization_id = $1 AND p.deleted_at IS NULL
+WHERE p.organization_id = $1 AND p.deleted_at IS NULL AND p.suspended_at IS NULL
 ORDER BY p.created_at DESC;

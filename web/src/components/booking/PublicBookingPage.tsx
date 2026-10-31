@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { CalendarClock, Clock, MapPin, PauseCircle, User } from 'lucide-react'
 import { toast } from 'sonner'
+import { ReportLink } from '#/components/layout/ReportLink'
 import { BookingConfirmed } from '#/components/booking/BookingConfirmed'
 import { BookingForm, type BookingFormValues } from '#/components/booking/BookingForm'
 import { SlotPicker } from '#/components/booking/SlotPicker'
@@ -219,6 +220,12 @@ export function PublicBookingPage({
           </>
         )}
       </div>
+
+      <ReportLink
+        kind="booking page"
+        id={page.id}
+        url={`${typeof window === 'undefined' ? '' : window.location.origin}/book/${page.handle}/${page.slug}`}
+      />
 
       {picked && (
         <BookingForm

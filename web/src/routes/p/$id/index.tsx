@@ -1,5 +1,10 @@
 import { useCallback } from 'react'
-import { createFileRoute, useRouter } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  type NotFoundRouteProps,
+  notFound,
+  useRouter,
+} from '@tanstack/react-router'
 import * as z from 'zod'
 import { appConfig } from '#/app.config'
 import { NotFoundCard } from '#/components/layout/NotFoundCard'
@@ -7,6 +12,7 @@ import { PollPage } from '#/components/poll/PollPage'
 import { m } from '#/lib/i18n'
 import { type PollEvent, useLivePoll } from '#/lib/use-live-poll'
 import { getPoll } from '#/api/polls'
+import { errorCode, isRemovedNotFound, REMOVED_NOT_FOUND } from '#/lib/errors'
 
 /** `?created` is set by the creator right after a poll is made; it opens the share sheet once. */
 const searchSchema = z.object({
@@ -15,7 +21,18 @@ const searchSchema = z.object({
 
 export const Route = createFileRoute('/p/$id/')({
   validateSearch: searchSchema,
-  loader: ({ params }) => getPoll(params.id),
+  // A missing or deleted poll is a 404 and one staff took down (#48) a 410 `removed`; both render
+  // this route's own not-found card, with `removed` telling it which copy to show.
+  loader: async ({ params }) => {
+    try {
+      return await getPoll(params.id)
+    } catch (error) {
+      const code = errorCode(error)
+      if (code === 'not_found') throw notFound()
+      if (code === 'removed') throw notFound({ data: REMOVED_NOT_FOUND })
+      throw error
+    }
+  },
   head: ({ loaderData }) => ({
     meta: [
       { title: `${loaderData?.title ?? m.poll_not_found_title()} — ${appConfig.name}` },
@@ -72,11 +89,12 @@ function PollRoute() {
   )
 }
 
-function PollNotFound() {
+function PollNotFound({ data }: NotFoundRouteProps) {
+  const removed = isRemovedNotFound(data)
   return (
     <NotFoundCard
-      title={m.poll_not_found_title()}
-      body={m.poll_not_found_body()}
+      title={removed ? m.poll_removed_title() : m.poll_not_found_title()}
+      body={removed ? m.poll_removed_body() : m.poll_not_found_body()}
       ctaLabel={m.poll_not_found_cta()}
     />
   )

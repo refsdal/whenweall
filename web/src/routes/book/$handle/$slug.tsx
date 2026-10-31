@@ -1,5 +1,10 @@
 import { useCallback, useEffect } from 'react'
-import { createFileRoute, notFound, useRouter } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  type NotFoundRouteProps,
+  notFound,
+  useRouter,
+} from '@tanstack/react-router'
 import * as z from 'zod'
 import { appConfig } from '#/app.config'
 import { PublicBookingPage } from '#/components/booking/PublicBookingPage'
@@ -9,6 +14,7 @@ import {
   loadStoredTimeZone,
   storeTimeZone,
 } from '#/components/poll/TimezoneSwitch'
+import { errorCode, isRemovedNotFound, REMOVED_NOT_FOUND } from '#/lib/errors'
 import { m } from '#/lib/i18n'
 import { useLivePage } from '#/lib/use-live-page'
 import { getPublicAvailability } from '#/api/bookings'
@@ -71,12 +77,19 @@ export const Route = createFileRoute('/book/$handle/$slug')({
     // during the few hours a month where UTC and the organiser's zone straddle a month boundary.
     let month = deps.month ?? monthKeyIn(now, deps.tz ?? 'UTC')
 
-    const fetchMonth = (value: string) =>
-      getPublicAvailability({
-        handle: params.handle,
-        slug: params.slug,
-        ...monthWindow(value),
-      })
+    // A page staff took down (#48) answers 410 `removed`: the not-found card, with removed copy.
+    const fetchMonth = async (value: string) => {
+      try {
+        return await getPublicAvailability({
+          handle: params.handle,
+          slug: params.slug,
+          ...monthWindow(value),
+        })
+      } catch (error) {
+        if (errorCode(error) === 'removed') throw notFound({ data: REMOVED_NOT_FOUND })
+        throw error
+      }
+    }
 
     let result = await fetchMonth(month)
     if (!result) throw notFound()
@@ -176,11 +189,12 @@ function BookRoute() {
   )
 }
 
-function BookNotFound() {
+function BookNotFound({ data }: NotFoundRouteProps) {
+  const removed = isRemovedNotFound(data)
   return (
     <NotFoundCard
-      title={m.book_public_not_found_title()}
-      body={m.book_public_not_found_body()}
+      title={removed ? m.book_public_removed_title() : m.book_public_not_found_title()}
+      body={removed ? m.book_public_removed_body() : m.book_public_not_found_body()}
       ctaLabel={m.poll_not_found_cta()}
     />
   )

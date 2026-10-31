@@ -214,6 +214,10 @@ lands in Mailpit's own web UI at `http://localhost:8025` instead of a real inbox
   lookup, lock/unlock, delete, and an append-only audit log — see
   [`docs/admin-console.md`](./docs/admin-console.md). There is no impersonation and no
   in-console way to grant staff to anyone else — see [Admin bootstrap](#admin-bootstrap).
+- **Abuse reports and takedowns** — every public poll, sheet and booking page has a
+  *Report abuse* link to the support address, and one poll or page can be suspended
+  (hidden, reversible, kept as evidence) without touching the rest of the account — see
+  [`docs/abuse-reports.md`](./docs/abuse-reports.md).
 
 ## Architecture
 

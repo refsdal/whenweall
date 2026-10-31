@@ -22,6 +22,9 @@ export function Footer() {
           <Link to="/terms" className="hover:text-foreground">
             {m.footer_terms()}
           </Link>
+          <a href={`mailto:${appConfig.supportEmail}`} className="hover:text-foreground">
+            {m.footer_contact()}
+          </a>
           <LocaleSwitcher />
         </div>
       </div>

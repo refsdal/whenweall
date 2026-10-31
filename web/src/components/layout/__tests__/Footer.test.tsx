@@ -24,6 +24,15 @@ describe('Footer', () => {
     expect(termsLink).toHaveAttribute('href', '/terms')
   })
 
+  it('links to the support address so a contact is findable from every page', async () => {
+    await renderFooter()
+
+    expect(screen.getByRole('link', { name: 'Contact' })).toHaveAttribute(
+      'href',
+      'mailto:hello@whenweall.com',
+    )
+  })
+
   it('still shows the rights line and locale switcher', async () => {
     await renderFooter()
 
