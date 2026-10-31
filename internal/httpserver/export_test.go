@@ -66,7 +66,7 @@ func seedExportFixture(t *testing.T, d *sql.DB, email string) {
 	exec(`INSERT INTO comments (id, poll_id, author_name, participant_id, user_id, body, created_at)
 		VALUES ('dave-c', 'their-poll', 'Dave Signed In', 'dave', $1, 'Dave private remark', now())`, daveID)
 
-		// A booking our user made as a visitor on someone else's page...
+	// A booking our user made as a visitor on someone else's page...
 	exec(`INSERT INTO booking_pages (id, organization_id, slug, title, timezone, slot_duration_min,
 			buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, created_at, updated_at)
 		SELECT 'their-page', id, 'intro', 'Their intro call', 'UTC', 30, 0, 0, 0, 30, '{}'::jsonb, now(), now()
@@ -122,7 +122,7 @@ func TestExportMe(t *testing.T) {
 
 	for _, want := range []string{
 		email, "My team dinner", "Friday", // account, own poll and its options
-		"My office hours",                       // own booking page
+		"My office hours",                      // own booking page
 		"Book club", "Me As Guest", "ifneedbe", // own guest answer elsewhere, matched by e-mail
 		"My own remark",       // own comment
 		"My own booking note", // own booking as a visitor
