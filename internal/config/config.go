@@ -58,8 +58,9 @@ type Config struct {
 	OIDCName         string // default "sso"
 
 	EnableTestRoutes bool
-	TrustProxy       bool // default false — true only behind a reverse proxy that sets X-Forwarded-For
-	MigrateOnBoot    bool // default true
+	TrustProxy       bool   // default false — true only behind a reverse proxy that sets X-Forwarded-For
+	MigrateOnBoot    bool   // default true
+	LogFormat        string // text (default) | json — json for a log pipeline that queries attributes
 
 	Capabilities Capabilities
 	IsProduction bool
@@ -121,6 +122,13 @@ func Load(env map[string]string) (*Config, []string, error) {
 		EnableTestRoutes: boolEnv("ENABLE_TEST_ROUTES", false),
 		TrustProxy:       boolEnv("TRUST_PROXY", false),
 		MigrateOnBoot:    boolEnv("MIGRATE_ON_BOOT", true),
+		LogFormat:        strings.ToLower(get("LOG_FORMAT")),
+	}
+
+	if cfg.LogFormat == "" {
+		cfg.LogFormat = "text"
+	} else if cfg.LogFormat != "text" && cfg.LogFormat != "json" {
+		errs = append(errs, "LOG_FORMAT must be text or json")
 	}
 
 	if cfg.AppEnv == "" {

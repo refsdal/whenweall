@@ -318,6 +318,7 @@ near the actual typo, is worse than refusing to light up at all.
 | `OIDC_NAME`             | no       | `sso`                                | Label on the OIDC sign-in button.                                                                  |
 | `TRUST_PROXY`           | no       | `false`                              | Trust `X-Forwarded-*` from the reverse proxy in front of the app (client IPs for rate limiting). Set `true` only when — and because — a reverse proxy in front of the app sets these headers; otherwise a client can fabricate them and bypass every per-IP rate limit. |
 | `MIGRATE_ON_BOOT`       | no       | `true`                               | Escape hatch: set `false` to run `whenweall migrate` yourself instead — see [Ops](#ops).           |
+| `LOG_FORMAT`            | no       | `text`                               | `json` writes one JSON object per line, for a log pipeline that filters on the `event` attribute — see [Monitoring](#monitoring). |
 | `ENABLE_TEST_ROUTES`    | no       | `false`                              | Exposes the Playwright seed route. The server refuses to start if this is set alongside `APP_ENV=production` — never set it on a real instance. |
 
 **`AUTH_SECRET` rotation invalidates sessions and booking manage links.** Nothing about
@@ -402,6 +403,38 @@ exactly one to migrate)? Set `MIGRATE_ON_BOOT=false` and run them yourself first
 docker compose run --rm app /whenweall migrate
 docker compose up -d app
 ```
+
+### Monitoring
+
+Nothing alerts by itself. Point an **external** uptime monitor (one that does not run on the
+same host — it has to work when the host is the problem) at two URLs, both unauthenticated,
+`no-store` and cheap:
+
+| URL             | 503 means                                                                                             | Alert                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `/healthz`      | the database is unreachable (2s ping)                                                                 | page someone — the site is down        |
+| `/healthz/jobs` | a background job dead-lettered in the last 24 hours, or a housekeeping chain is overdue by 15 minutes | look at `/admin/jobs` the same day     |
+
+`/healthz/jobs` answers with counts and kind names only (`deadLetteredLast24h`,
+`stalledHousekeeping`), never a job's payload or error. A dead letter stops counting 24 hours
+after it died even if nobody retries it, so the alert clears by itself; the job stays on the
+admin console's failed-jobs screen (see [`docs/admin-console.md`](./docs/admin-console.md)). The
+container's own `HEALTHCHECK` uses `/healthz` only, so a bounced e-mail never restarts the app.
+
+**Logs** go to stderr and nowhere else. Whatever runs the container decides where they land
+and how long they stay — with the bundled `compose.yaml`, that is Docker's default `json-file`
+driver with no rotation, so set `logging.options.max-size` (or ship them to your log platform)
+before running it for long. Set `LOG_FORMAT=json` if a pipeline reads them. Failure paths carry a
+stable `event` attribute to filter on:
+
+| `event`                   | Meaning                                                              |
+| ------------------------- | -------------------------------------------------------------------- |
+| `job.retry_scheduled`     | a background job failed and will be retried (includes mail sends)    |
+| `job.dead_lettered`       | a job exhausted its attempts — the same thing `/healthz/jobs` counts |
+| `job.record_failure_failed`, `job.complete_failed`, `job.poll_failed` | the job queue itself could not reach the database |
+| `http.panic`              | a request handler panicked (stack in `stack`)                        |
+| `http.internal_error`     | a request failed with an unexpected error (a 500)                    |
+| `ratelimit.fail_open`     | the rate-limit store was unreachable, so limits were not enforced    |
 
 ## Admin bootstrap
 

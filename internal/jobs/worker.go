@@ -113,25 +113,25 @@ func (w *Worker) process(ctx context.Context, job Job) {
 	if err := w.invoke(jobCtx, job); err != nil {
 		willRetry, rowFound, ferr := fail(ctx, w.db, job.ID, err.Error())
 		if ferr != nil {
-			w.log.Error("jobs: failed to record job failure", "kind", job.Kind, "id", job.ID, "error", ferr)
+			w.log.Error("jobs: failed to record job failure", "event", "job.record_failure_failed", "kind", job.Kind, "id", job.ID, "error", ferr)
 			return
 		}
 		switch {
 		case willRetry:
-			w.log.Warn("job failed, will retry", "kind", job.Kind, "id", job.ID, "attempts", job.Attempts, "error", err)
+			w.log.Warn("job failed, will retry", "event", "job.retry_scheduled", "kind", job.Kind, "id", job.ID, "attempts", job.Attempts, "error", err)
 		case !rowFound:
 			// The row is gone, not exhausted: the handler errored after already completing or
 			// rescheduling itself under a fresh id (see fail's doc comment). Routine, not a
 			// dead-letter — no human needs to look, so this stays well below ERROR.
 			w.log.Debug("jobs: job row gone (completed or rescheduled elsewhere)", "kind", job.Kind, "id", job.ID, "error", err)
 		default:
-			w.log.Error("job dead-lettered: attempt budget exhausted", "kind", job.Kind, "id", job.ID, "attempts", job.Attempts, "error", err)
+			w.log.Error("job dead-lettered: attempt budget exhausted", "event", "job.dead_lettered", "kind", job.Kind, "id", job.ID, "attempts", job.Attempts, "error", err)
 		}
 		return
 	}
 
 	if err := Complete(ctx, w.db, job.ID); err != nil {
-		w.log.Error("jobs: failed to complete job", "kind", job.Kind, "id", job.ID, "error", err)
+		w.log.Error("jobs: failed to complete job", "event", "job.complete_failed", "kind", job.Kind, "id", job.ID, "error", err)
 	}
 }
 
@@ -169,7 +169,7 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if _, err := w.RunOnce(ctx); err != nil {
-				w.log.Error("jobs: poll failed", "error", err)
+				w.log.Error("jobs: poll failed", "event", "job.poll_failed", "error", err)
 			}
 		}
 	}

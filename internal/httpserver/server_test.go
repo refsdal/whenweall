@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -260,5 +261,52 @@ func TestHealthzDegradedWhenDBDown(t *testing.T) {
 	}
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control on the degraded path = %q, want no-store", got)
+	}
+}
+
+// TestHealthzJobs (#43): /healthz/jobs is what an uptime monitor alerts on for background work —
+// separate from /healthz, which the container HEALTHCHECK polls and which must never send the
+// app into a restart loop because one e-mail bounced.
+func TestHealthzJobs(t *testing.T) {
+	d := testdb.New(t)
+	cfg := testConfig()
+	srv := httpserver.New(cfg, d, testAuthService(t, cfg, d))
+
+	get := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/jobs", nil))
+		return rec
+	}
+
+	rec := get()
+	if rec.Code != 200 {
+		t.Fatalf("empty queue: status %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+
+	if _, err := d.ExecContext(context.Background(), `
+		INSERT INTO scheduled_jobs (id, kind, run_at, attempts, max_attempts, last_error)
+		VALUES ('dead-1', 'mail:send', now() - interval '1 hour', 10, 10, 'smtp: connection refused')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	rec = get()
+	if rec.Code != 503 {
+		t.Fatalf("with a fresh dead letter: status %d, want 503; body=%s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"deadLetteredLast24h":1`) {
+		t.Errorf("body = %s, want the dead-letter count", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "smtp") {
+		t.Errorf("body = %s leaks job errors on an unauthenticated route", rec.Body)
+	}
+
+	// /healthz itself is untouched by job failures.
+	plain := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(plain, httptest.NewRequest("GET", "/healthz", nil))
+	if plain.Code != 200 {
+		t.Errorf("/healthz with a dead letter: status %d, want 200", plain.Code)
 	}
 }

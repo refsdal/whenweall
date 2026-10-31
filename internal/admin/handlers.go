@@ -78,7 +78,7 @@ func Register(mux *http.ServeMux, a *auth.Service, sqlDB *sql.DB) {
 // infrastructure fault) and reports a generic 500, mirroring httpserver.WriteDomainError's own
 // log-and-500 fallback path.
 func writeInternalError(w http.ResponseWriter, err error) {
-	slog.Default().Error("admin: internal error", "error", err)
+	slog.Default().Error("admin: internal error", "event", "http.internal_error", "error", err)
 	httpserver.Err(w, http.StatusInternalServerError, "internal", "internal error", nil)
 }
 

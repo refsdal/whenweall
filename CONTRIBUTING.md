@@ -32,6 +32,14 @@ generated schema, hand-folded into a goose migration once, plus our own `staff_u
 appended at the end. Regenerating it (needed after a Limen upgrade, or a new plugin) has its
 own steps — see [`docs/limen-migrations.md`](./docs/limen-migrations.md).
 
+## Privacy policy changes
+
+The privacy policy is the `privacy_*` strings in `web/messages/en.json` and `nb.json`. The
+hosted instance also keeps a record of processing activities (GDPR Art. 30) outside this
+repository that has to say the same thing. If your change edits a `privacy_*` string — or
+changes what personal data is collected, how long it is kept, or who it goes to — say so in the
+pull request, so the record can be updated with it and `legal_updated` bumped once per release.
+
 ## Commit messages
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/)

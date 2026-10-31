@@ -146,7 +146,7 @@ func WriteDomainError(w http.ResponseWriter, err error, mapper DomainErrorMapper
 		Err(w, status, code, message, fields)
 		return
 	}
-	slog.Default().Error("httpserver: unhandled domain error", "error", err)
+	slog.Default().Error("httpserver: unhandled domain error", "event", "http.internal_error", "error", err)
 	Err(w, http.StatusInternalServerError, "internal", "internal error", nil)
 }
 
