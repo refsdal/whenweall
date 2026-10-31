@@ -71,6 +71,9 @@ type Querier interface {
 	// caller against polls.created_by — this query only ever answers the role question.)
 	MemberHasManagingRole(ctx context.Context, arg MemberHasManagingRoleParams) (bool, error)
 	PollExists(ctx context.Context, id string) (bool, error)
+	// Whether id names a poll staff have suspended (#48) — the one read that still sees one, so the
+	// public page can say "removed" instead of "not found".
+	PollSuspended(ctx context.Context, id string) (bool, error)
 	// $4 is NULL to clear an override back to the user's defaults (setScopeChannels's own doc
 	// comment in subscriptions.ts).
 	SetNotificationSubscriptionChannels(ctx context.Context, arg SetNotificationSubscriptionChannelsParams) error

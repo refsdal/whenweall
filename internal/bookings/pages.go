@@ -418,6 +418,20 @@ func (s *Service) PageExists(ctx context.Context, pageID string) (bool, error) {
 	return true, nil
 }
 
+// PageSuspended reports whether (orgSlug, pageSlug) names a live booking page staff have
+// suspended (#48) — the one lookup that still sees one, since GetPublicPage and every other read
+// treat it as gone.
+func (s *Service) PageSuspended(ctx context.Context, orgSlug, pageSlug string) (bool, error) {
+	org, err := s.q.GetOrganizationBySlug(ctx, orgSlug)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return s.q.BookingPageSuspended(ctx, queries.BookingPageSuspendedParams{OrganizationID: org.ID, Slug: pageSlug})
+}
+
 // GetPublicPage ports getPublicPage: a lookup for `/book/<handle>/<slug>`. Returns (nil, nil) — not
 // an error — for an unknown handle, unknown slug, or a soft-deleted page, matching the TS source
 // returning null. A PAUSED page IS still returned (with its "paused" status) so the route can show

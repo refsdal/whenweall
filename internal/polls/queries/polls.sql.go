@@ -243,7 +243,7 @@ func (q *Queries) GetParticipantForUpdate(ctx context.Context, id string) (Parti
 }
 
 const getPoll = `-- name: GetPoll :one
-SELECT id, organization_id, created_by, type, title, description, location, timezone, status, deadline_at, finalized_option_id, require_participant_email, allow_comments, allow_if_need_be, signup_max_claims, created_at, updated_at, deleted_at FROM polls WHERE id = $1 AND deleted_at IS NULL
+SELECT id, organization_id, created_by, type, title, description, location, timezone, status, deadline_at, finalized_option_id, require_participant_email, allow_comments, allow_if_need_be, signup_max_claims, created_at, updated_at, deleted_at, suspended_at FROM polls WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL
 `
 
 func (q *Queries) GetPoll(ctx context.Context, id string) (Poll, error) {
@@ -268,6 +268,7 @@ func (q *Queries) GetPoll(ctx context.Context, id string) (Poll, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
 }
@@ -634,7 +635,7 @@ SELECT
   (SELECT count(*) FROM votes v JOIN participants pa ON pa.id = v.participant_id
      WHERE pa.poll_id = p.id AND v.answer = 'yes') AS claim_count
 FROM polls p
-WHERE p.organization_id = $1 AND p.deleted_at IS NULL
+WHERE p.organization_id = $1 AND p.deleted_at IS NULL AND p.suspended_at IS NULL
 ORDER BY p.created_at DESC
 `
 
@@ -806,11 +807,24 @@ func (q *Queries) MemberHasManagingRole(ctx context.Context, arg MemberHasManagi
 }
 
 const pollExists = `-- name: PollExists :one
-SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL)
+SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL)
 `
 
 func (q *Queries) PollExists(ctx context.Context, id string) (bool, error) {
 	row := q.db.QueryRowContext(ctx, pollExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const pollSuspended = `-- name: PollSuspended :one
+SELECT EXISTS(SELECT 1 FROM polls WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NOT NULL)
+`
+
+// Whether id names a poll staff have suspended (#48) — the one read that still sees one, so the
+// public page can say "removed" instead of "not found".
+func (q *Queries) PollSuspended(ctx context.Context, id string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, pollSuspended, id)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

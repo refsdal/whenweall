@@ -472,9 +472,10 @@ func TestActiveOrgIDStaysOnItsCurrentOrgWhenMembershipIsStillValid(t *testing.T)
 // TestSessionSelfHealsAfterUserDeletesTheirOnlyOrganization covers the gap the fix round 1 review
 // found: Limen's DeleteOrganization (organizations.go in the plugin) has no last-owner guard —
 // unlike LeaveOrganization/RemoveMember, which call validateOwnerRoleCanBeRemoved — so a personal
-// org's owner (every user, by construction) can delete their own only organization through the
-// real route this test drives, DELETE /api/v1/auth/organizations/:id. That clears
-// sessions.active_organization_id and removes the organization_members row, leaving the user with
+// org's owner could once delete their own only organization through DELETE
+// /api/v1/auth/organizations/:id. AuthMountGuard refuses that route now (#64), but the self-heal
+// stays as the backstop for any other way the last membership disappears, so this test deletes
+// the organization directly. That removes the organization_members row, leaving the user with
 // ZERO memberships — but ensurePersonalOrgOnce already cached them as "done" on an earlier
 // request, and that cache is never re-checked otherwise, so without resolveSession's self-heal
 // (session.go: clear the cache entry and re-run ensurePersonalOrgOnce when oldestMembership finds
@@ -499,10 +500,11 @@ func TestSessionSelfHealsAfterUserDeletesTheirOnlyOrganization(t *testing.T) {
 		t.Fatal("active org id is empty before delete")
 	}
 
-	// The real route, driven as an authenticated HTTP request — not a direct DB delete — so this
-	// proves the production path (owner deletes their own org) actually reaches the zero-
-	// membership state the fix handles.
-	requireStatus2xx(t, ts.delete(t, "/api/v1/auth/organizations/"+originalOrgID), "delete own organization")
+	// Deleted in SQL, not through Limen's route: AuthMountGuard refuses that now (#64), so this
+	// stands in for anything else that removes a user's last membership behind the cache's back.
+	if _, err := ts.svc.db.ExecContext(ctx, `DELETE FROM organizations WHERE id = $1`, originalOrgID); err != nil {
+		t.Fatalf("delete own organization: %v", err)
+	}
 
 	if got := countOrganizations(t, ts, user); got != 0 {
 		t.Fatalf("organizations right after delete = %d, want 0", got)

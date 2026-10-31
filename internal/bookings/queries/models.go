@@ -78,6 +78,7 @@ type BookingPage struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       sql.NullTime
+	SuspendedAt     sql.NullTime
 }
 
 type Comment struct {
@@ -197,6 +198,7 @@ type Poll struct {
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
 	DeletedAt               sql.NullTime
+	SuspendedAt             sql.NullTime
 }
 
 type PollOption struct {

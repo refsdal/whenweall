@@ -31,7 +31,14 @@ import type { PollView } from '#/api/types'
 export const Route = createFileRoute('/p/$id/edit')({
   beforeLoad: ({ context, params }) => requireVerifiedSession(context, `/p/${params.id}/edit`),
   loader: async ({ params }) => {
-    const poll = await getPoll(params.id)
+    // Missing, deleted or taken down (#48): the poll page's own not-found card says which.
+    const poll = await getPoll(params.id).catch((error: unknown) => {
+      const code = errorCode(error)
+      if (code === 'not_found' || code === 'removed') {
+        throw redirect({ to: '/p/$id', params: { id: params.id } })
+      }
+      throw error
+    })
     if (!poll.isOwner) throw redirect({ to: '/p/$id', params: { id: params.id } })
     return poll
   },

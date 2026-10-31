@@ -14,6 +14,25 @@ import (
 	"github.com/sqlc-dev/pqtype"
 )
 
+const bookingPageSuspended = `-- name: BookingPageSuspended :one
+SELECT EXISTS(SELECT 1 FROM booking_pages
+  WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL AND suspended_at IS NOT NULL)
+`
+
+type BookingPageSuspendedParams struct {
+	OrganizationID int64
+	Slug           string
+}
+
+// Whether (organization_id, slug) names a booking page staff have suspended (#48) — the one read
+// that still sees one, so the public page can say "removed" instead of "not found".
+func (q *Queries) BookingPageSuspended(ctx context.Context, arg BookingPageSuspendedParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, bookingPageSuspended, arg.OrganizationID, arg.Slug)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const disableGoogleSyncForMember = `-- name: DisableGoogleSyncForMember :exec
 UPDATE booking_pages SET google_sync = false, updated_at = $2 WHERE member_user_id = $1
 `
@@ -89,7 +108,7 @@ func (q *Queries) GetBookingForUpdate(ctx context.Context, id string) (Booking, 
 }
 
 const getBookingPage = `-- name: GetBookingPage :one
-SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL
+SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at, suspended_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL
 `
 
 func (q *Queries) GetBookingPage(ctx context.Context, id string) (BookingPage, error) {
@@ -118,12 +137,13 @@ func (q *Queries) GetBookingPage(ctx context.Context, id string) (BookingPage, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
 }
 
 const getBookingPageByOrgSlug = `-- name: GetBookingPageByOrgSlug :one
-SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL
+SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at, suspended_at FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL AND suspended_at IS NULL
 `
 
 type GetBookingPageByOrgSlugParams struct {
@@ -157,13 +177,14 @@ func (q *Queries) GetBookingPageByOrgSlug(ctx context.Context, arg GetBookingPag
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
 }
 
 const getBookingPageByOrgSlugForUpdate = `-- name: GetBookingPageByOrgSlugForUpdate :one
 
-SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL FOR UPDATE
+SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at, suspended_at FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL AND suspended_at IS NULL FOR UPDATE
 `
 
 type GetBookingPageByOrgSlugForUpdateParams struct {
@@ -202,12 +223,13 @@ func (q *Queries) GetBookingPageByOrgSlugForUpdate(ctx context.Context, arg GetB
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
 }
 
 const getBookingPageForUpdate = `-- name: GetBookingPageForUpdate :one
-SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+SELECT id, organization_id, created_by, member_user_id, slug, title, description, location, timezone, slot_duration_min, buffer_before_min, buffer_after_min, min_notice_min, max_days_ahead, availability, date_overrides, google_sync, reminders, status, created_at, updated_at, deleted_at, suspended_at FROM booking_pages WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL FOR UPDATE
 `
 
 // Same lock as GetBookingPageByOrgSlugForUpdate, keyed by id instead of (org, slug) — used by
@@ -238,6 +260,7 @@ func (q *Queries) GetBookingPageForUpdate(ctx context.Context, id string) (Booki
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
 }
@@ -473,7 +496,7 @@ CROSS JOIN LATERAL (
   FROM bookings b
   WHERE b.page_id = bp.id AND b.status = 'confirmed' AND b.start_at >= $1
 ) c
-WHERE bp.organization_id = $2 AND bp.deleted_at IS NULL
+WHERE bp.organization_id = $2 AND bp.deleted_at IS NULL AND bp.suspended_at IS NULL
 ORDER BY bp.created_at DESC
 `
 

@@ -9,6 +9,9 @@ import (
 )
 
 type Querier interface {
+	// Whether (organization_id, slug) names a booking page staff have suspended (#48) — the one read
+	// that still sees one, so the public page can say "removed" instead of "not found".
+	BookingPageSuspended(ctx context.Context, arg BookingPageSuspendedParams) (bool, error)
 	// Ports disconnectGoogleSync (pages.ts): turns googleSync off on every booking page whose
 	// member_user_id is userId — the account row itself (accounts, Limen's) is left untouched; only
 	// this user's own pages stop trying to sync against it.

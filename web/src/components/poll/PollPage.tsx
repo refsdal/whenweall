@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, MapPin, Minus, Pencil, Share2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { ReportLink } from '#/components/layout/ReportLink'
 import { AddYourselfRow } from '#/components/poll/AddYourselfRow'
 import { AdminBar } from '#/components/poll/AdminBar'
 import { AnswerForm } from '#/components/poll/AnswerForm'
@@ -418,6 +419,8 @@ export function PollPage({
           onChanged={onChanged}
         />
       )}
+
+      {!poll.isOwner && <ReportLink kind="poll" id={poll.id} url={shareUrl} />}
 
       <ShareSheet url={shareUrl} open={shareOpen} onOpenChange={setShareOpen} />
     </div>

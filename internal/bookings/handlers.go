@@ -443,10 +443,29 @@ func (s *Service) handleGetPublicPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if page == nil {
-		httpserver.Err(w, http.StatusNotFound, "not_found", "not found", nil)
+		s.writeMissingPage(w, r, orgSlug, pageSlug)
 		return
 	}
 	httpserver.JSON(w, http.StatusOK, page)
+}
+
+// writeMissingPage answers a public read of a booking page GetPublicPage could not find: 410
+// "removed" when staff have suspended it (#48), so the page can say it was taken down rather than
+// that the link is wrong, and the usual 404 otherwise.
+func (s *Service) writeMissingPage(w http.ResponseWriter, r *http.Request, orgSlug, pageSlug string) {
+	suspended, err := s.PageSuspended(r.Context(), orgSlug, pageSlug)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	// no-store on both answers: browsers cache a 404 or 410 heuristically, so without it a visitor
+	// who saw a takedown would keep seeing it after staff lift the suspension (or the reverse).
+	w.Header().Set("Cache-Control", "no-store")
+	if suspended {
+		httpserver.Err(w, http.StatusGone, "removed", "this booking page has been removed", nil)
+		return
+	}
+	httpserver.Err(w, http.StatusNotFound, "not_found", "not found", nil)
 }
 
 // handlePublicAvailability ports the availability half of getPublicAvailability
@@ -470,7 +489,7 @@ func (s *Service) handlePublicAvailability(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if page == nil {
-		httpserver.Err(w, http.StatusNotFound, "not_found", "not found", nil)
+		s.writeMissingPage(w, r, orgSlug, pageSlug)
 		return
 	}
 

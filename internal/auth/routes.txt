@@ -49,7 +49,7 @@ POST   /api/v1/auth/organizations/                         protected
 GET    /api/v1/auth/organizations/                         protected
 POST   /api/v1/auth/organizations/check-slug                protected
 PATCH  /api/v1/auth/organizations/:id                       protected
-DELETE /api/v1/auth/organizations/:id                       protected
+DELETE /api/v1/auth/organizations/:id                       REFUSED (403 by AuthMountGuard — no last-owner guard, #64)
 GET    /api/v1/auth/organizations/members                   protected
 GET    /api/v1/auth/organizations/me                         protected
 GET    /api/v1/auth/organizations/active                     protected

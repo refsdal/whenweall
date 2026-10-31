@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/refsdal/whenweall/internal/routekey"
 	"github.com/thecodearcher/limen/plugins/organization"
@@ -151,23 +152,13 @@ func (s *Service) resolveSession(w http.ResponseWriter, r *http.Request) *Sessio
 			if !ok {
 				// Zero memberships: ensurePersonalOrgOnce's guarantee only holds up to the moment
 				// it cached this user as done — it is never re-checked after that for the rest of
-				// this process's life. Limen's DeleteOrganization (unlike LeaveOrganization/
-				// RemoveMember) has no last-owner guard, so a personal-org owner can delete their
-				// own only organization — which clears sessions.active_organization_id and leaves
-				// zero organization_members rows behind, with the cache still marking this user
-				// done. Without re-deriving here, that user would be stuck with no active
-				// organization forever. Clear the cache entry and re-run the same ensure path
-				// (self-healing, not a redesign of it) before giving up.
-				//
-				// This heals ONLY that one user's own now-org-less session — it is not a guard, and
-				// it does nothing about the missing check itself. The same missing last-owner guard
-				// also lets an owner of a MULTI-member organization call DeleteOrganization on it: a
-				// route the SPA never calls, with no confirmation and no audit row, that cascades to
-				// delete every poll and booking_page the organization owns (migrations/00003_polls.sql,
-				// migrations/00004_bookings.sql) out from under every other member. That exposure is
-				// pre-existing (inherited from Limen), is not touched by this self-heal, and whether
-				// to add a guard is a product decision left to docs/admin-console.md's operator note,
-				// not to this comment.
+				// this process's life. Limen's own DELETE /organizations/:id could once get a
+				// personal-org owner here (it has no last-owner guard); AuthMountGuard now refuses
+				// that route (isOrganizationDeleteRoute, #64), but anything else that removes a
+				// user's last membership behind this cache's back — a staff member's hand-written
+				// SQL, a future route — would leave them stuck with no active organization
+				// forever. Clear the cache entry and re-run the same ensure path (self-healing,
+				// not a redesign of it) before giving up.
 				s.personalOrgEnsured.Delete(fmt.Sprint(validated.User.ID))
 				s.ensurePersonalOrgOnce(r.Context(), validated.User)
 				org, ok = s.oldestMembership(r.Context(), validated.User)
@@ -261,7 +252,27 @@ var authMountUnverifiedAllowed = map[string]struct{}{
 	"POST /api/v1/auth/passwords/reset":         {},
 }
 
+// authMountOrgDeletePrefix is the route-key prefix of Limen's DELETE /organizations/:id.
+const authMountOrgDeletePrefix = "DELETE /api/v1/auth/organizations/"
+
+// isOrganizationDeleteRoute reports whether route (a routekey.Of key) is Limen's
+// DELETE /organizations/:id — exactly one segment after the prefix, so
+// DELETE /organizations/members/:id (removing a member, which keeps Limen's own last-owner
+// guard) is not caught.
+//
+// AuthMountGuard refuses this route for everyone (#64). Unlike leaving an organization or removing
+// a member it has no last-owner guard, so any owner of a shared organization could delete every
+// other member's polls and booking pages (both cascade from organizations) in one request, with
+// no confirmation and no audit row. Nothing legitimate needs it: the SPA never calls it, and the
+// only way an organization is ever deleted here is DeleteOwnAccount's cascade (cascade.go), which
+// deletes in SQL without going through Limen's route.
+func isOrganizationDeleteRoute(route string) bool {
+	id, ok := strings.CutPrefix(route, authMountOrgDeletePrefix)
+	return ok && id != "" && !strings.Contains(id, "/")
+}
+
 // AuthMountGuard wraps Limen's own handler — mounted at /api/v1/auth/ by internal/httpserver — and
+// refuses Limen's unguarded organization delete outright (isOrganizationDeleteRoute), then
 // applies the two per-user restrictions Limen itself knows nothing about, in this order:
 //
 //  1. Lock (locked_users): a locked user's otherwise-valid Limen session cannot reach any route
@@ -287,6 +298,10 @@ func (s *Service) AuthMountGuard(next http.Handler) http.Handler {
 		route := routekey.Of(r)
 		if route == authMountSignoutMethodAndPath {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if isOrganizationDeleteRoute(route) {
+			writeErrorEnvelope(w, http.StatusForbidden, "forbidden", "organizations cannot be deleted directly")
 			return
 		}
 

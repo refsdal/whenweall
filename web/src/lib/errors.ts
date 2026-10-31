@@ -31,6 +31,7 @@ export const ERROR_CODES = [
   'invalid_token',
   'rate_limited',
   'captcha_failed',
+  'removed',
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]
@@ -65,4 +66,15 @@ export function errorDetailMessage(error: unknown): string | null {
     default:
       return null
   }
+}
+
+/**
+ * The `data` a route's loader passes to `notFound()` for content staff took down (#48) — the
+ * backend's 410 `removed` — so its `notFoundComponent` can say "removed" rather than "we can't
+ * find it". Anything else (a plain `notFound()`, or no data) reads as an ordinary 404.
+ */
+export const REMOVED_NOT_FOUND = { removed: true } as const
+
+export function isRemovedNotFound(data: unknown): boolean {
+  return typeof data === 'object' && data !== null && 'removed' in data && data.removed === true
 }

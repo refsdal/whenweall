@@ -11,7 +11,7 @@ INSERT INTO booking_pages (
 );
 
 -- name: GetBookingPage :one
-SELECT * FROM booking_pages WHERE id = $1 AND deleted_at IS NULL;
+SELECT * FROM booking_pages WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL;
 
 -- name: ListBookingPageSummariesByOrg :many
 -- ListMyPages' one-query list (pages.go): each live page with its count of confirmed bookings
@@ -26,7 +26,7 @@ CROSS JOIN LATERAL (
   FROM bookings b
   WHERE b.page_id = bp.id AND b.status = 'confirmed' AND b.start_at >= sqlc.arg(start_at)
 ) c
-WHERE bp.organization_id = sqlc.arg(organization_id) AND bp.deleted_at IS NULL
+WHERE bp.organization_id = sqlc.arg(organization_id) AND bp.deleted_at IS NULL AND bp.suspended_at IS NULL
 ORDER BY bp.created_at DESC;
 
 -- name: UpdateBookingPage :exec
@@ -56,7 +56,13 @@ UPDATE booking_pages SET deleted_at = $2, updated_at = $2 WHERE id = $1;
 SELECT * FROM organizations WHERE slug = $1;
 
 -- name: GetBookingPageByOrgSlug :one
-SELECT * FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL;
+SELECT * FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL AND suspended_at IS NULL;
+
+-- name: BookingPageSuspended :one
+-- Whether (organization_id, slug) names a booking page staff have suspended (#48) — the one read
+-- that still sees one, so the public page can say "removed" instead of "not found".
+SELECT EXISTS(SELECT 1 FROM booking_pages
+  WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL AND suspended_at IS NOT NULL);
 
 -- name: UpdateOrganizationSlug :exec
 UPDATE organizations SET slug = $2, updated_at = now() WHERE id = $1;
@@ -68,12 +74,12 @@ UPDATE organizations SET slug = $2, updated_at = now() WHERE id = $1;
 -- invariant lock (see bookings.go's package doc comment): serializes every concurrent
 -- book/reschedule attempt against THIS page, so the "recompute busy intervals, then insert"
 -- sequence below can never interleave across transactions.
-SELECT * FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL FOR UPDATE;
+SELECT * FROM booking_pages WHERE organization_id = $1 AND slug = $2 AND deleted_at IS NULL AND suspended_at IS NULL FOR UPDATE;
 
 -- name: GetBookingPageForUpdate :one
 -- Same lock as GetBookingPageByOrgSlugForUpdate, keyed by id instead of (org, slug) — used by
 -- Reschedule, which already has the booking's page_id in hand.
-SELECT * FROM booking_pages WHERE id = $1 AND deleted_at IS NULL FOR UPDATE;
+SELECT * FROM booking_pages WHERE id = $1 AND deleted_at IS NULL AND suspended_at IS NULL FOR UPDATE;
 
 -- name: InsertBooking :exec
 INSERT INTO bookings (

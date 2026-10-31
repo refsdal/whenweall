@@ -25,6 +25,8 @@ const (
 	ratelimitSweepInterval  = time.Hour
 	deadletterSweepKind     = "deadletter:sweep"
 	deadletterSweepInterval = time.Hour
+	softdeletePurgeKind     = "softdelete:purge"
+	softdeletePurgeInterval = 6 * time.Hour
 )
 
 // Dead-letter retention, as Postgres interval literals spliced into sweepDeadLetters' SQL (fixed
@@ -53,6 +55,17 @@ const (
 // needing the attempt budget itself to be the safety net.
 const housekeepingMaxAttempts = 1_000_000
 
+// softdeleteGracePeriod is how long a soft-deleted poll, sign-up sheet, booking page or comment
+// is kept before purgeSoftDeleted hard-deletes it (#44), as a Postgres interval literal spliced
+// into its SQL (a fixed constant, never caller input). privacy_retention_body states this number
+// in both locales — change them together.
+const softdeleteGracePeriod = "interval '30 days'"
+
+// purgeBatchSize bounds each DELETE in purgeSoftDeleted, so a large backlog (the first run after
+// this shipped, against months of soft-deleted rows) never becomes one long transaction holding
+// locks across the whole cascade.
+const purgeBatchSize = 500
+
 // broadcastPresenceTotal is rooms.BroadcastPresenceTotal's exact signature, redeclared here (not
 // imported) so this package never depends on internal/rooms: that package already imports
 // internal/httpserver -> internal/auth -> internal/mailer -> internal/jobs, so the reverse edge
@@ -61,9 +74,10 @@ const housekeepingMaxAttempts = 1_000_000
 // this parameter — the two signatures match exactly, so no adapter is needed.
 type broadcastPresenceTotal func(ctx context.Context, sqlDB db.DBTX, roomKey string) error
 
-// RegisterHousekeeping wires the four self-rescheduling housekeeping jobs into w: pruning old
-// room_events rows, sweeping stale ws_presence rows, sweeping expired rate_limits rows, and
-// sweeping the dead-letter queue (sweepDeadLetters). Each handler deletes its rows and then
+// RegisterHousekeeping wires the five self-rescheduling housekeeping jobs into w: pruning old
+// room_events rows, sweeping stale ws_presence rows, sweeping expired rate_limits rows, sweeping
+// the dead-letter queue (sweepDeadLetters), and purging soft-deleted content past its grace
+// period (purgeSoftDeleted). Each handler deletes its rows and then
 // reschedules its own next run, so once EnsureScheduled has seeded the first run, the chain keeps
 // itself alive without a cron process or external scheduler.
 //
@@ -111,6 +125,62 @@ func RegisterHousekeeping(w *Worker, sqlDB *sql.DB, broadcastPresence broadcastP
 		}
 		return rescheduleHousekeeping(ctx, sqlDB, deadletterSweepKind, deadletterSweepInterval)
 	})
+
+	w.Register(softdeletePurgeKind, func(ctx context.Context, _ Job) error {
+		if err := purgeSoftDeleted(ctx, sqlDB); err != nil {
+			return err
+		}
+		return rescheduleHousekeeping(ctx, sqlDB, softdeletePurgeKind, softdeletePurgeInterval)
+	})
+}
+
+// purgeSoftDeleted hard-deletes every poll, booking page and comment whose deleted_at is older
+// than softdeleteGracePeriod (#44). Deleting from the UI only ever sets deleted_at, so until this
+// ran a "deleted" poll kept every participant's name, email, votes and comments forever, while
+// the privacy policy said deletion was genuine.
+//
+// Polls and booking pages take their personal data with them by FK cascade (participants, votes,
+// options and comments from polls; bookings — visitor name and address — from booking_pages; see
+// migrations/00003_polls.sql and 00004_bookings.sql). Comments soft-deleted on a poll that is
+// itself still live are the same problem one level down, so they get their own pass.
+//
+// Nothing else needs cleaning up alongside: Service.Delete/DeletePage already drop the
+// polymorphic notification_subscriptions and cancel the poll's timers in the same transaction as
+// the soft delete, and every job handler that might still name a purged id (poll digests, booking
+// reminders, mail:poll, mail:booking) already treats sql.ErrNoRows as "nothing to do".
+//
+// A poll or booking page staff have suspended (#48) is skipped even when its owner has deleted it:
+// suspension keeps it as evidence until staff lift it (docs/abuse-reports.md).
+//
+// Each table drains in purgeBatchSize batches until a pass deletes nothing.
+func purgeSoftDeleted(ctx context.Context, sqlDB *sql.DB) error {
+	for _, t := range []struct{ table, keep string }{
+		{"polls", "AND suspended_at IS NULL"},
+		{"booking_pages", "AND suspended_at IS NULL"},
+		// A comment on a suspended poll needs no rule of its own: the poll row is never purged
+		// while suspended, and a comment the author deleted before the report is not evidence.
+		{"comments", ""},
+	} {
+		for {
+			res, err := sqlDB.ExecContext(ctx, `
+				DELETE FROM `+t.table+` WHERE id IN (
+					SELECT id FROM `+t.table+`
+					WHERE deleted_at < now() - `+softdeleteGracePeriod+` `+t.keep+`
+					LIMIT $1
+				)`, purgeBatchSize)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // deleteStalePresenceRows deletes every ws_presence row whose heartbeat has lapsed past 90s and
@@ -177,7 +247,7 @@ func sweepDeadLetters(ctx context.Context, sqlDB *sql.DB) error {
 	return err
 }
 
-// EnsureScheduled seeds all four housekeeping jobs to run shortly after boot, but only the
+// EnsureScheduled seeds all five housekeeping jobs to run shortly after boot, but only the
 // first time — a pre-existing job of that kind (from an earlier boot, still correctly scheduled
 // for the future, or mid-chain) is left completely alone. It is meant to be called once from
 // serve() on every replica startup; that's safe with any number of concurrent callers because
@@ -199,6 +269,7 @@ func EnsureScheduled(ctx context.Context, sqlDB *sql.DB) error {
 		{presenceSweepKind, presenceSweepInterval},
 		{ratelimitSweepKind, ratelimitSweepInterval},
 		{deadletterSweepKind, deadletterSweepInterval},
+		{softdeletePurgeKind, softdeletePurgeInterval},
 	} {
 		if err := seedHousekeeping(ctx, sqlDB, s.kind, s.interval); err != nil {
 			return err

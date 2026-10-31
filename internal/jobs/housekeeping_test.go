@@ -458,7 +458,7 @@ func TestDeadletterSweepDeletesDeadRowsOlderThan30Days(t *testing.T) {
 	}
 }
 
-func TestEnsureScheduledSeedsAllFourSingletons(t *testing.T) {
+func TestEnsureScheduledSeedsAllFiveSingletons(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()
 
@@ -466,7 +466,7 @@ func TestEnsureScheduledSeedsAllFourSingletons(t *testing.T) {
 		t.Fatalf("EnsureScheduled: %v", err)
 	}
 
-	kinds := []string{"rooms:prune", "presence:sweep", "ratelimit:sweep", "deadletter:sweep"}
+	kinds := []string{"rooms:prune", "presence:sweep", "ratelimit:sweep", "deadletter:sweep", "softdelete:purge"}
 	firstRunAt := make(map[string]time.Time, len(kinds))
 	for _, kind := range kinds {
 		var count, maxAttempts int

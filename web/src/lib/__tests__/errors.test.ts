@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '#/api/client'
-import { errorCode } from '#/lib/errors'
+import { errorCode, isRemovedNotFound, REMOVED_NOT_FOUND } from '#/lib/errors'
 
 describe('errors', () => {
   it('reads the code off an ApiError', () => {
@@ -12,5 +12,12 @@ describe('errors', () => {
     expect(errorCode(new Error('boom'))).toBeNull()
     expect(errorCode('x')).toBeNull()
     expect(errorCode(null)).toBeNull()
+  })
+
+  it('tells a takedown apart from an ordinary not-found', () => {
+    expect(isRemovedNotFound(REMOVED_NOT_FOUND)).toBe(true)
+    expect(isRemovedNotFound(undefined)).toBe(false)
+    expect(isRemovedNotFound({})).toBe(false)
+    expect(isRemovedNotFound({ removed: 'yes' })).toBe(false)
   })
 })
