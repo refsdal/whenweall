@@ -62,22 +62,13 @@ if you need the history.
 with 400 before anything else runs — a staff member acting on themselves would revoke
 their own session mid-request with no recovery path short of another staff member's help.
 
-### A destructive route this console does not offer
+### Deleting an organization
 
-`DELETE /api/v1/auth/organizations/<id>` (from the underlying auth library, not this
-console) has no last-owner guard — unlike leaving an organization or removing a member,
-deleting one is not blocked just because the caller is its only owner. Any owner of an
-organization can call it directly, as an ordinary signed-in user, no staff session
-required. For an organization with more than one member, that one request deletes every
-poll and every booking page the organization owns (both cascade from `organizations` in
-the schema), with no confirmation prompt and no audit row anywhere — this console's own
-audit log only covers actions taken *through the console*.
-
-This is a known gap, inherited from the auth library, not something this admin console
-adds a guard for — whether to add one is a product decision, not an operational one, and
-is out of scope for this document. If you are investigating unexplained data loss for an
-organization, this route is one thing to rule out; there is nothing in the audit log that
-will show it happened.
+Limen's own `DELETE /api/v1/auth/organizations/<id>` has no last-owner guard, no
+confirmation and no audit row, and one request would delete every poll and booking page the
+organization owns. whenweall refuses it for everyone with `403` (`AuthMountGuard` in
+`internal/auth/session.go`). The only way an organization is deleted is with its last owner's
+account (Settings → Delete account), which hands ownership to another member if there is one.
 
 ## Reading the audit log
 
