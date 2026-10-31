@@ -146,3 +146,17 @@ export async function api<T>(method: string, path: string, body?: unknown, opts?
   if (text.length === 0) return undefined as T
   return JSON.parse(text) as T
 }
+
+/**
+ * GETs `path` as a file download: the response body as a `Blob` plus the filename from its
+ * `Content-Disposition`, or `fallbackName` when it carries none. Errors throw the same `ApiError`
+ * as `api()`, so a 429 surfaces as `rate_limited` instead of being saved to disk as if it were the
+ * file.
+ */
+export async function apiDownload(path: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(path, { method: 'GET', credentials: 'same-origin' })
+  if (!response.ok) throw await parseErrorBody(response)
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const match = /filename="([^"]+)"/.exec(disposition)
+  return { blob: await response.blob(), filename: match?.[1] ?? fallbackName }
+}

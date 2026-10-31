@@ -2,6 +2,7 @@ package httpserver_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 // routes) behind httptest, with one cookie-jar client.
 type accountHarness struct {
 	t       *testing.T
+	db      *sql.DB
 	authSvc *auth.Service
 	server  *httptest.Server
 	client  *http.Client
@@ -36,7 +38,7 @@ func newAccountHarness(t *testing.T) *accountHarness {
 	if err != nil {
 		t.Fatalf("cookiejar: %v", err)
 	}
-	return &accountHarness{t: t, authSvc: authSvc, server: ts, client: &http.Client{Jar: jar}}
+	return &accountHarness{t: t, db: d, authSvc: authSvc, server: ts, client: &http.Client{Jar: jar}}
 }
 
 func (h *accountHarness) do(method, path string, body any) *http.Response {

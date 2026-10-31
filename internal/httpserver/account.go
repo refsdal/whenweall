@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/refsdal/whenweall/internal/auth"
+	"github.com/refsdal/whenweall/internal/dataexport"
 )
 
 type updateMeRequest struct {
@@ -48,6 +49,56 @@ func (s *Server) registerAccountRoutes() {
 	s.mux.Handle("DELETE /api/v1/me", deleteMeRateLimit(s.authSvc.RequireSessionAllowUnverified(s.handleDeleteMe)))
 	s.mux.HandleFunc("GET /api/v1/me/organizations", s.authSvc.RequireSession(s.handleListMyOrganizations))
 	s.mux.HandleFunc("POST /api/v1/me/active-organization", s.authSvc.RequireSession(s.handleSwitchOrganization))
+
+	// GET /api/v1/me/export (#50) is the most expensive read in the app — every table the user
+	// touches, in one snapshot — so it gets its own budget, keyed by account rather than IP so a
+	// shared address cannot starve anyone else's. RequireSession (verified only, unlike PATCH and
+	// DELETE above) is load-bearing: the export matches guest answers and bookings by e-mail
+	// address, which must be one the caller has proven they own. Session middleware runs before
+	// the mux, so the key function can read the session.
+	exportRateLimit := RateLimit(s.db, "account.export", 5, time.Hour, func(r *http.Request) string {
+		if sess, ok := auth.FromContext(r.Context()); ok {
+			return sess.UserID
+		}
+		return ClientIP(r, s.cfg.TrustProxy)
+	})
+	s.mux.Handle("GET /api/v1/me/export", sameOriginOnly(exportRateLimit(s.authSvc.RequireSession(s.handleExportMe))))
+}
+
+// sameOriginOnly refuses a request the browser marks as coming from another site. CheckOrigin
+// (origin.go) only guards mutating methods, and the session cookie is SameSite=Lax, so a hostile
+// page can still send a signed-in visitor on a top-level GET. For the export that would drop
+// copies of their data into Downloads and burn their hourly budget (it sits outside the rate
+// limiter so refusals do not count). The SPA always fetches the export same-origin; a client that
+// sends no Sec-Fetch-Site header at all (curl, an older browser) is let through.
+func sameOriginOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+			Err(w, http.StatusForbidden, "forbidden", "cross-site request refused", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleExportMe serves the caller's personal data as one JSON download (internal/dataexport for
+// what is and is not in it). no-store: it is a full copy of someone's account, and must never sit
+// in a shared or browser cache.
+func (s *Server) handleExportMe(w http.ResponseWriter, r *http.Request) {
+	sess, _ := auth.FromContext(r.Context())
+	export, err := dataexport.Build(r.Context(), s.db, sess.UserID)
+	if errors.Is(err, dataexport.ErrNoSuchUser) {
+		Err(w, http.StatusNotFound, "not_found", "user not found", nil)
+		return
+	}
+	if err != nil {
+		WriteDomainError(w, err, mapAccountError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition",
+		`attachment; filename="whenweall-export-`+export.ExportedAt.Format("2006-01-02")+`.json"`)
+	JSON(w, http.StatusOK, export)
 }
 
 func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {

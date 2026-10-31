@@ -1,4 +1,4 @@
-import { api, ApiError } from '#/api/client'
+import { api, apiDownload, ApiError } from '#/api/client'
 import { appConfig, type AppLocale } from '#/app.config'
 import { getLocale, isAppLocale } from '#/lib/i18n'
 
@@ -238,6 +238,12 @@ export async function updateProfile(patch: { name?: string; locale?: string }): 
  * `password_required` / 403 `invalid_password` otherwise); an OAuth-only account sends nothing. */
 export async function deleteOwnAccount(password?: string): Promise<void> {
   await api('DELETE', '/api/v1/me', password ? { password } : {})
+}
+
+/** `GET /api/v1/me/export` — a copy of the caller's personal data as one JSON file
+ * (internal/dataexport). Rate limited per account (`rate_limited`). */
+export function exportMyData(): Promise<{ blob: Blob; filename: string }> {
+  return apiDownload('/api/v1/me/export', 'whenweall-export.json')
 }
 
 export type OrgSummary = { id: string; name: string; slug: string; active: boolean }
