@@ -7,8 +7,8 @@ require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/sqlc-dev/pqtype v0.3.0
-	github.com/testcontainers/testcontainers-go v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	github.com/testcontainers/testcontainers-go v0.45.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
 	github.com/thecodearcher/limen v0.2.3
 	github.com/thecodearcher/limen/adapters/sql v0.2.1
 	github.com/thecodearcher/limen/plugins/credential-password v0.2.2
@@ -17,8 +17,8 @@ require (
 	github.com/thecodearcher/limen/plugins/oauth-google v0.2.1
 	github.com/thecodearcher/limen/plugins/organization v0.1.1
 	github.com/wneessen/go-mail v0.8.1
-	golang.org/x/net v0.61.0
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/net v0.62.0
+	golang.org/x/oauth2 v0.38.0
 )
 
 require (
