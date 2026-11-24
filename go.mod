@@ -9,13 +9,13 @@ require (
 	github.com/sqlc-dev/pqtype v0.3.0
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
-	github.com/thecodearcher/limen v0.2.3
-	github.com/thecodearcher/limen/adapters/sql v0.2.1
-	github.com/thecodearcher/limen/plugins/credential-password v0.2.2
-	github.com/thecodearcher/limen/plugins/oauth v0.2.1
-	github.com/thecodearcher/limen/plugins/oauth-generic v0.2.1
-	github.com/thecodearcher/limen/plugins/oauth-google v0.2.1
-	github.com/thecodearcher/limen/plugins/organization v0.1.1
+	github.com/thecodearcher/limen v0.2.4
+	github.com/thecodearcher/limen/adapters/sql v0.2.2
+	github.com/thecodearcher/limen/plugins/credential-password v0.2.3
+	github.com/thecodearcher/limen/plugins/oauth v0.2.2
+	github.com/thecodearcher/limen/plugins/oauth-generic v0.2.3
+	github.com/thecodearcher/limen/plugins/oauth-google v0.2.3
+	github.com/thecodearcher/limen/plugins/organization v0.1.2
 	github.com/wneessen/go-mail v0.8.2
 	golang.org/x/net v0.63.0
 	golang.org/x/oauth2 v0.38.0
